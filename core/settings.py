@@ -47,10 +47,27 @@ class Settings(BaseSettings):
     # ── Embedding Model ──────────────────────────────────────────────────
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 
+    # ── LLM Providers ────────────────────────────────────────────────────
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OPENAI_API_KEY: str = ""
+    ANTHROPIC_API_KEY: str = ""
+    GROQ_API_KEY: str = ""
+    DEFAULT_LLM_PROVIDER: str = "ollama"
+    DEFAULT_LLM_MODEL: str = "gemma4:e4b"
+
+    # ── Image Pipeline ───────────────────────────────────────────────────
+    IMAGE_THUMBNAIL_SIZE: int = 256
+    IMAGE_MAX_UPLOAD_MB: int = 50
+    IMAGE_BATCH_MAX_COUNT: int = 100
+    CLIP_MODEL_NAME: str = "openai/clip-vit-base-patch32"
+    QDRANT_IMAGE_COLLECTION: str = "orchestraty_image_embeddings"
+    IMAGE_ALLOWED_EXTENSIONS: str = ".png,.jpg,.jpeg,.webp,.tiff,.tif,.bmp"
+
     # ── Initial Superuser (auto-created on first startup) ──────────────────
-    ADMIN_EMAIL: str = "admin@orchestraty.local"
+    ADMIN_EMAIL: str = "admin@orchestraty.com"
     ADMIN_PASSWORD: str = "Admin@12345"
     ADMIN_NAME: str = "System Admin"
+    ADMIN_EMAILS: str = "admin@orchestraty.com"  # comma-separated bootstrap admin emails
 
     # ── Runtime environment ───────────────────────────────────────────────
     ENVIRONMENT: Literal["development", "staging", "production"] = "development"

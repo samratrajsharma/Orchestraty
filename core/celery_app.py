@@ -36,5 +36,9 @@ app.conf.update(
         "data_intelligence.tasks.structuring_tasks",
         "data_intelligence.tasks.eda_tasks",
         "data_intelligence.tasks.labeling_tasks",
+        "data_intelligence.tasks.image_tasks",
+        "data_intelligence.tasks.ai_labeling_tasks",
+        "data_intelligence.tasks.review_tasks",
+        "data_intelligence.tasks.workflow_tasks",
     ],
 )

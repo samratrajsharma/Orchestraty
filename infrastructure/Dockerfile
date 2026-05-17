@@ -8,13 +8,14 @@ RUN apt-get update && \
         libpq-dev \
         gcc \
         curl \
+        libjpeg-dev \
+        libpng-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --default-timeout=120 --retries 3 -r requirements.txt
 
 COPY . .
 

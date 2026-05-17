@@ -20,10 +20,11 @@ from core.services.auth_service import (
     hash_password,
     verify_password,
 )
+from core.settings import settings
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
-# ── Pydantic schemas ─────────────────────────────────────────────────────
+# -- Pydantic schemas --
 
 
 class UserCreate(BaseModel):
@@ -55,7 +56,7 @@ class RegisterResponse(BaseModel):
     token: Token
 
 
-# ── Routes ────────────────────────────────────────────────────────────────
+# -- Routes --
 
 
 @router.post(
@@ -81,10 +82,17 @@ async def register(
             detail="A user with this email already exists",
         )
 
-    # Determine role — admin callers may set it; everyone else gets "viewer"
+    # Determine role
+    bootstrap_admins = {
+        e.strip().lower()
+        for e in settings.ADMIN_EMAILS.split(",")
+        if e.strip()
+    }
     role = "viewer"
     if body.role and current_user is not None and current_user.role == "admin":
         role = body.role
+    elif body.email.lower() in bootstrap_admins:
+        role = "admin"
 
     user = User(
         email=body.email,

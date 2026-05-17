@@ -108,11 +108,26 @@ services:
       - orchestraty-net
     restart: unless-stopped
 
+  # --- Phase 3: Ollama (Local LLM) — optional, comment out if not needed ---
+  ollama:
+    image: ollama/ollama:latest
+    container_name: orchestraty-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - orchestraty-net
+    restart: unless-stopped
+    profiles:
+      - llm
+
 volumes:
   postgres_data:
   minio_data:
   redis_data:
   qdrant_data:
+  ollama_data:
 
 networks:
   orchestraty-net:

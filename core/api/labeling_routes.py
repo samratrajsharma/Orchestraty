@@ -25,12 +25,7 @@ router = APIRouter(prefix="/api/v1/labeling", tags=["labeling"])
 # ── Schemas ──────────────────────────────────────────────────────────────
 
 # Derive operators from the engine's actual registry — single source of truth
-import sys
-from pathlib import Path as _Path
-
-_DIS_DIR = _Path(__file__).resolve().parent.parent.parent / "data-intelligence-system"
-if str(_DIS_DIR) not in sys.path:
-    sys.path.insert(0, str(_DIS_DIR))
+import core.paths  # noqa: F401
 
 from labeling.rule_engine import SUPPORTED_OPERATORS  # noqa: E402
 

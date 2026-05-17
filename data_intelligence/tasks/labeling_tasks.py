@@ -4,12 +4,8 @@ Applies labeling rules to datasets as a background job.
 """
 
 import logging
-import sys
-from pathlib import Path
 
-_PROJECT_ROOT = str(Path(__file__).parent.parent.parent)
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
+import core.paths  # noqa: F401
 
 from core.celery_app import app
 
@@ -50,7 +46,6 @@ def run_labeling_pipeline(
 
         # ── Step 2: Load or parse rules ──────────────────────────────────
         update_task_progress(db, celery_task_id, 0.25, "Loading labeling rules...")
-        sys.path.insert(0, str(Path(_PROJECT_ROOT) / "data-intelligence-system"))
         from labeling.rule_engine import RuleEngine
 
         engine = RuleEngine(conflict_strategy=conflict_strategy)

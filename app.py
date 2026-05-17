@@ -27,6 +27,11 @@ from core.api.structuring_routes import router as structuring_router  # noqa: E4
 from core.api.eda_routes import router as eda_router  # noqa: E402
 from core.api.labeling_routes import router as labeling_router  # noqa: E402
 from core.api.admin_routes import router as admin_router  # noqa: E402
+from core.api.llm_routes import router as llm_router  # noqa: E402
+from core.api.image_routes import router as image_router  # noqa: E402
+from core.api.ai_labeling_routes import router as ai_labeling_router  # noqa: E402
+from core.api.review_routes import router as review_router  # noqa: E402
+from core.api.workflow_routes import router as workflow_router  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +221,11 @@ app.include_router(structuring_router)
 app.include_router(eda_router)
 app.include_router(labeling_router)
 app.include_router(admin_router)
+app.include_router(llm_router)
+app.include_router(image_router)
+app.include_router(ai_labeling_router)
+app.include_router(review_router)
+app.include_router(workflow_router)
 
 
 # ── Root endpoints ───────────────────────────────────────────────────────

@@ -122,28 +122,26 @@ else {
 }
 Write-Host ""
 
-Write-Host "[6/6] Setup complete!" -ForegroundColor Yellow
+Write-Host "[6/6] Setup complete! Launching Orchestraty..." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  All Systems Ready!" -ForegroundColor Cyan
+Write-Host "  Orchestraty is running!" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Services:" -ForegroundColor White
-Write-Host "    API + Swagger UI:  http://localhost:8000/docs" -ForegroundColor Green
-Write-Host "    MinIO Console:     http://localhost:9001" -ForegroundColor Green
-Write-Host "    Qdrant Dashboard:  http://localhost:6333/dashboard" -ForegroundColor Green
+Write-Host "  App:          http://localhost:8501" -ForegroundColor Green
+Write-Host "  API Docs:     http://localhost:8000/docs" -ForegroundColor Green
+Write-Host "  MinIO:        http://localhost:9001" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Start the frontends:" -ForegroundColor White
-Write-Host "    Main App:    streamlit run frontend/app.py" -ForegroundColor Cyan
-Write-Host "    Admin Panel: streamlit run frontend/admin.py --server.port 8502" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "  Admin Credentials:" -ForegroundColor White
-Write-Host "    Email:    $adminEmail" -ForegroundColor Green
-Write-Host "    Password: $adminPass" -ForegroundColor Green
+Write-Host "  Admin:        $adminEmail / $adminPass" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Useful commands:" -ForegroundColor White
+Write-Host "    Quick start:  .\start.ps1" -ForegroundColor Gray
 Write-Host "    View logs:    docker compose -f $COMPOSE_FILE logs -f api" -ForegroundColor Gray
 Write-Host "    Stop all:     docker compose -f $COMPOSE_FILE down" -ForegroundColor Gray
 Write-Host "    Fresh reset:  .\setup.ps1 -Fresh" -ForegroundColor Gray
-Write-Host "    User mgmt:    docker exec -it orchestraty-api python manage.py --help" -ForegroundColor Gray
 Write-Host ""
+Write-Host "  Press Ctrl+C to stop Streamlit." -ForegroundColor Gray
+Write-Host ""
+
+# Launch Streamlit (blocking)
+streamlit run frontend/app.py

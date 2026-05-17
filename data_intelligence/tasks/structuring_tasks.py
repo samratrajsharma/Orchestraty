@@ -6,13 +6,8 @@ Runs schema detection, cleaning, and quality scoring as a background job.
 import io
 import json
 import logging
-import sys
-from pathlib import Path
 
-# Ensure project root is on path for imports
-_PROJECT_ROOT = str(Path(__file__).parent.parent.parent)
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
+import core.paths  # noqa: F401
 
 import pandas as pd
 from celery import current_task
@@ -27,14 +22,9 @@ logger = logging.getLogger(__name__)
 def _load_dataset_file(dataset_id: str, version_number: int) -> pd.DataFrame:
     """Download the dataset file from MinIO and load as DataFrame."""
     from core.settings import settings
-    from minio import Minio
+    from core.storage import get_minio_client
 
-    client = Minio(
-        settings.MINIO_ENDPOINT,
-        access_key=settings.MINIO_ACCESS_KEY,
-        secret_key=settings.MINIO_SECRET_KEY,
-        secure=settings.MINIO_USE_SSL,
-    )
+    client = get_minio_client()
 
     # Find the file in MinIO by listing objects with prefix
     prefix = f"datasets/{dataset_id}/v{version_number}/"
@@ -72,14 +62,9 @@ def _save_cleaned_file(
 ) -> str:
     """Upload cleaned DataFrame back to MinIO as a new file."""
     from core.settings import settings
-    from minio import Minio
+    from core.storage import get_minio_client
 
-    client = Minio(
-        settings.MINIO_ENDPOINT,
-        access_key=settings.MINIO_ACCESS_KEY,
-        secret_key=settings.MINIO_SECRET_KEY,
-        secure=settings.MINIO_USE_SSL,
-    )
+    client = get_minio_client()
 
     # Save as CSV
     buffer = io.BytesIO()
@@ -137,8 +122,7 @@ def run_structuring_pipeline(
         # ── Step 2: Schema detection ─────────────────────────────────────
         update_task_progress(db, celery_task_id, 0.3, "Detecting column types...")
 
-        # Import from the hyphenated directory
-        sys.path.insert(0, str(Path(_PROJECT_ROOT) / "data-intelligence-system"))
+        # Import from the hyphenated directory (path set up by core.paths)
         from structuring.schema_detector import detect_schema
         schema = detect_schema(df)
 
@@ -164,13 +148,8 @@ def run_structuring_pipeline(
 
         # Get original filename
         from core.settings import settings
-        from minio import Minio
-        client = Minio(
-            settings.MINIO_ENDPOINT,
-            access_key=settings.MINIO_ACCESS_KEY,
-            secret_key=settings.MINIO_SECRET_KEY,
-            secure=settings.MINIO_USE_SSL,
-        )
+        from core.storage import get_minio_client
+        client = get_minio_client()
         prefix = f"datasets/{dataset_id}/v{version_number}/"
         objects = list(client.list_objects(settings.MINIO_BUCKET_NAME, prefix=prefix))
         original_filename = objects[0].object_name.split("/")[-1] if objects else "data.csv"

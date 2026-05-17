@@ -12,6 +12,7 @@ from minio import Minio
 from minio.error import S3Error
 
 from core.settings import settings
+from core.storage import get_minio_client
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +21,7 @@ class MinIOStorage:
     """Thin wrapper around the MinIO Python client tailored for dataset storage."""
 
     def __init__(self) -> None:
-        self.client = Minio(
-            settings.MINIO_ENDPOINT,
-            access_key=settings.MINIO_ACCESS_KEY,
-            secret_key=settings.MINIO_SECRET_KEY,
-            secure=settings.MINIO_USE_SSL,
-        )
+        self.client = get_minio_client()
         self.bucket_name = settings.MINIO_BUCKET_NAME
 
     # ── Bucket management ─────────────────────────────────────────────────

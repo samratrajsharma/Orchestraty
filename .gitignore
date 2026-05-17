@@ -160,6 +160,12 @@ minio_data/
 qdrant_data/
 postgres_data/
 
+# --- CLIP / Transformers model cache ---
+.transformers_cache/
+models/
+*.safetensors
+*.bin
+
 # --- Misc ---
 *.bak
 *.tmp
