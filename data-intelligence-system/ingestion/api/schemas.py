@@ -1,0 +1,160 @@
+"""
+Pydantic schemas for the Data Ingestion API.
+
+Covers dataset CRUD, versioning, metadata, permissions, file upload
+responses, and validation results.
+"""
+
+from datetime import datetime
+from typing import Optional
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+
+# ---------------------------------------------------------------------------
+# Dataset
+# ---------------------------------------------------------------------------
+
+
+class DatasetCreate(BaseModel):
+    """Payload for creating a new dataset."""
+
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    source_type: str = Field(..., pattern="^(csv|json|api|database)$")
+
+
+class DatasetResponse(BaseModel):
+    """Read-only representation of a persisted dataset."""
+
+    id: UUID
+    name: str
+    description: Optional[str]
+    source_type: str
+    status: str
+    created_by: UUID
+    org_id: Optional[str]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
+class DatasetStatusUpdate(BaseModel):
+    """Payload for transitioning a dataset through its lifecycle."""
+
+    status: str = Field(..., pattern="^(raw|processed|labeled|reviewed|ready)$")
+
+
+class DatasetListResponse(BaseModel):
+    """Paginated list of datasets."""
+
+    datasets: list[DatasetResponse]
+    total: int
+    skip: int
+    limit: int
+
+
+# ---------------------------------------------------------------------------
+# Dataset versions
+# ---------------------------------------------------------------------------
+
+
+class DatasetVersionResponse(BaseModel):
+    """Read-only representation of a single dataset version."""
+
+    id: UUID
+    dataset_id: UUID
+    version_number: int
+    storage_path: str
+    file_name: str
+    file_size: Optional[int]
+    file_type: str
+    schema_hash: Optional[str]
+    row_count: Optional[int]
+    parent_version_id: Optional[UUID]
+    created_by: UUID
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Dataset metadata
+# ---------------------------------------------------------------------------
+
+
+class DatasetMetadataUpdate(BaseModel):
+    """Payload for adding or updating a metadata key-value pair."""
+
+    key: str = Field(..., min_length=1, max_length=255)
+    value: str
+
+
+class DatasetMetadataResponse(BaseModel):
+    """Read-only representation of a metadata entry."""
+
+    id: UUID
+    dataset_id: UUID
+    key: str
+    value: str
+    updated_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+
+class ValidationResultResponse(BaseModel):
+    """Result of validating an uploaded file."""
+
+    is_valid: bool
+    row_count: int
+    column_count: int
+    columns: list[str]
+    schema_hash: str
+    errors: list[str]
+    warnings: list[str]
+    sample_data: list[dict]
+
+
+# ---------------------------------------------------------------------------
+# Upload (composite)
+# ---------------------------------------------------------------------------
+
+
+class UploadResponse(BaseModel):
+    """Composite response returned after a successful file upload."""
+
+    dataset: DatasetResponse
+    version: DatasetVersionResponse
+    validation: ValidationResultResponse
+
+
+# ---------------------------------------------------------------------------
+# Permissions
+# ---------------------------------------------------------------------------
+
+
+class PermissionCreate(BaseModel):
+    """Payload for granting a permission on a dataset."""
+
+    user_id: UUID
+    permission_level: str = Field(..., pattern="^(owner|editor|viewer)$")
+
+
+class PermissionResponse(BaseModel):
+    """Read-only representation of a dataset permission."""
+
+    id: UUID
+    dataset_id: UUID
+    user_id: UUID
+    permission_level: str
+    granted_by: UUID
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
