@@ -34,9 +34,14 @@ export default function AILabeling() {
   }, []);
 
   useEffect(() => {
-    if (task?.status === "completed") { setRunning(false); loadResults(); }
+    if (task?.status === "completed") {
+      setRunning(false);
+      if (datasetId) {
+        aiLabelingApi.getPredictions(datasetId).then((r) => setResults(r.data)).catch(() => {});
+      }
+    }
     if (task?.status === "failed") setRunning(false);
-  }, [task?.status]);
+  }, [task?.status, datasetId]);
 
   const loadResults = () => {
     if (!datasetId) return;

@@ -58,7 +58,7 @@ export default function Labeling() {
   const removeRule = (i: number) => setRules(rules.filter((_, idx) => idx !== i));
   const updateRule = (i: number, field: keyof RuleDefinition, val: string | number) => {
     const updated = [...rules];
-    (updated[i] as Record<string, unknown>)[field] = val;
+    (updated[i] as unknown as Record<string, unknown>)[field] = val;
     setRules(updated);
   };
 

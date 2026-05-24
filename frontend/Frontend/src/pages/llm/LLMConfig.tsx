@@ -25,6 +25,7 @@ export default function LLMConfig() {
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState<unknown>(null);
   const [testing, setTesting] = useState(false);
+  const [modelWarning, setModelWarning] = useState<string | null>(null);
 
   useEffect(() => {
     llmApi.getProviders().then((r) => setProviders(r.data.providers || r.data || [])).catch(() => {});
@@ -39,10 +40,13 @@ export default function LLMConfig() {
     if (selProvider) {
       llmApi.getModels(selProvider).then((r) => {
         setModels(r.data.models || []);
+        setModelWarning(r.data.warning || null);
         if (r.data.models?.length) setModelName(r.data.models[0]);
-      }).catch(() => setModels([]));
+      }).catch(() => { setModels([]); setModelWarning(null); });
       const p = providers.find((p) => p.name === selProvider);
       if (p) setBaseUrl(p.default_base_url || "");
+    } else {
+      setModelWarning(null);
     }
   }, [selProvider, providers]);
 
@@ -142,6 +146,11 @@ export default function LLMConfig() {
               </select>
             ) : (
               <input value={modelName} onChange={(e) => setModelName(e.target.value)} placeholder="Model name" />
+            )}
+            {modelWarning && (
+              <div style={{marginTop: 6, fontSize: 12, color: "var(--dash-warning, #d97706)"}}>
+                {modelWarning}
+              </div>
             )}
           </div>
           <div className="input-group">

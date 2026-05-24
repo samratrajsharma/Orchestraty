@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { adminApi } from "../../api/admin";
 import { useAuth } from "../../context/AuthContext";
 
@@ -77,9 +78,9 @@ export default function SADashboard() {
           <div className="card">
             <div className="card-header"><h3>Quick Actions</h3></div>
             <div style={{ display: "flex", gap: 12, padding: "4px 0" }}>
-              <a href="/users" className="btn btn--primary">Manage Users</a>
-              <a href="/audit" className="btn btn--secondary">View Audit Logs</a>
-              <a href="/settings" className="btn btn--secondary">System Settings</a>
+              <Link to="/users" className="btn btn--primary">Manage Users</Link>
+              <Link to="/audit" className="btn btn--secondary">View Audit Logs</Link>
+              <Link to="/settings" className="btn btn--secondary">System Settings</Link>
               <a href="http://localhost:8000/docs" target="_blank" rel="noreferrer" className="btn btn--secondary">API Docs ↗</a>
             </div>
           </div>

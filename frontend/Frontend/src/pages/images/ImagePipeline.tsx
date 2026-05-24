@@ -123,7 +123,7 @@ export default function ImagePipeline() {
       setSearchResults(Array.isArray(res.data) ? res.data : []);
     } catch (err: unknown) {
       const msg = (err && typeof err === "object" && "response" in err)
-        ? ((err as Record<string, Record<string, string>>).response?.data?.detail || "Search failed")
+        ? ((err as { response?: { data?: { detail?: string } } }).response?.data?.detail || "Search failed")
         : "Search failed — make sure embeddings have been generated first";
       setSearchError(String(msg));
       setSearchResults([]);

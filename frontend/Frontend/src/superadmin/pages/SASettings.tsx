@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { useAuth } from "../../context/AuthContext";
 
 export default function SASettings() {
@@ -59,13 +60,13 @@ export default function SASettings() {
             ["API Docs", "http://localhost:8000/docs"],
             ["MinIO Console", "http://localhost:9001"],
           ].map(([label, url]) => (
-            <>
-              <span key={label} style={{ fontWeight: 600, color: "var(--dash-text-muted)", fontSize: 13 }}>{label}</span>
-              <a key={url} href={url} target="_blank" rel="noreferrer"
+            <Fragment key={label}>
+              <span style={{ fontWeight: 600, color: "var(--dash-text-muted)", fontSize: 13 }}>{label}</span>
+              <a href={url} target="_blank" rel="noreferrer"
                 style={{ color: "var(--dash-primary)", fontSize: 14, textDecoration: "none" }}>
                 {url} ↗
               </a>
-            </>
+            </Fragment>
           ))}
         </div>
       </div>

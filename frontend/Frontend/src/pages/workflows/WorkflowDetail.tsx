@@ -98,7 +98,7 @@ export default function WorkflowDetail() {
         </div>
       </div>
 
-      {workflow.result && (
+      {Boolean(workflow.result) && (
         <div className="card" style={{marginTop: 20}}>
           <div className="card-header"><h3>Result</h3></div>
           <pre style={{fontSize: 12, color: "var(--dash-text-secondary)", overflow: "auto", maxHeight: 300, whiteSpace: "pre-wrap"}}>

@@ -26,9 +26,16 @@ export default function ReviewPage() {
   }, []);
 
   useEffect(() => {
-    if (task?.status === "completed") { setRunning(false); loadResults(); }
+    if (task?.status === "completed") {
+      setRunning(false);
+      if (datasetId) {
+        reviewApi.getQuality(datasetId).then((r) => setQualityResult(r.data)).catch(() => {});
+        reviewApi.getStatus(datasetId).then((r) => setReviewStatus(r.data)).catch(() => {});
+        reviewApi.getExport(datasetId).then((r) => setExportResult(r.data)).catch(() => {});
+      }
+    }
     if (task?.status === "failed") setRunning(false);
-  }, [task?.status]);
+  }, [task?.status, datasetId]);
 
   const loadResults = () => {
     if (!datasetId) return;

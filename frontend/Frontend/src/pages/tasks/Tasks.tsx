@@ -37,8 +37,15 @@ export default function Tasks() {
   const statusColor = (s: string) => {
     if (s === "completed") return "badge--success";
     if (s === "failed") return "badge--danger";
-    if (s === "running" || s === "started") return "badge--warning";
+    if (s === "progress" || s === "running" || s === "started") return "badge--warning";
     return "badge--neutral";
+  };
+
+  const statusDot = (s: string) => {
+    if (s === "completed") return "success";
+    if (s === "failed") return "danger";
+    if (s === "progress" || s === "running" || s === "started") return "warning";
+    return "neutral";
   };
 
   return (
@@ -86,7 +93,7 @@ export default function Tasks() {
                     <td style={{color: "var(--dash-text)", fontWeight: 500}}>{t.task_type}</td>
                     <td>
                       <span className={`badge ${statusColor(t.status)}`}>
-                        <span className={`badge-dot badge-dot--${t.status === "completed" ? "success" : t.status === "failed" ? "danger" : "warning"}`} />
+                        <span className={`badge-dot badge-dot--${statusDot(t.status)}`} />
                         {t.status}
                       </span>
                     </td>
@@ -133,7 +140,7 @@ export default function Tasks() {
                 <pre style={{fontSize: 12, color: "var(--dash-danger)", marginTop: 4, whiteSpace: "pre-wrap"}}>{selected.error}</pre>
               </div>
             )}
-            {selected.result && (
+            {Boolean(selected.result) && (
               <div>
                 <strong style={{fontSize: 13, color: "var(--dash-text)"}}>Result:</strong>
                 <pre style={{fontSize: 12, color: "var(--dash-text-secondary)", marginTop: 4, overflow: "auto", maxHeight: 200, whiteSpace: "pre-wrap"}}>

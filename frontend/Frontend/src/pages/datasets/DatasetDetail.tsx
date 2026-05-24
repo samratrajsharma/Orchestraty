@@ -72,7 +72,7 @@ export default function DatasetDetail() {
         <div>
           <p style={{marginBottom: 4}}><Link to="/app/datasets" style={{color:"var(--dash-primary)", fontSize: 13}}>&#8592; All Datasets</Link></p>
           <h1>{String(dataset.name)}</h1>
-          {dataset.description && <p style={{color: "var(--dash-text-secondary)", maxWidth: 600}}>{String(dataset.description)}</p>}
+          {Boolean(dataset.description) && <p style={{color: "var(--dash-text-secondary)", maxWidth: 600}}>{String(dataset.description)}</p>}
         </div>
         <div style={{display: "flex", gap: 8}}>
           <button className="btn btn--primary" onClick={quickStart}>Quick Start Pipeline</button>
@@ -224,7 +224,7 @@ function PipelineStep({ name, done, result }: { name: string; done: boolean; res
       </div>
       {expanded && result && (
         <div className="dd-pipeline-step__body">
-          {result.completed_at && <p style={{fontSize: 12, color: "var(--dash-text-muted)", marginBottom: 8}}>Completed: {new Date(String(result.completed_at)).toLocaleString()}</p>}
+          {Boolean(result.completed_at) && <p style={{fontSize: 12, color: "var(--dash-text-muted)", marginBottom: 8}}>Completed: {new Date(String(result.completed_at)).toLocaleString()}</p>}
           <pre style={{fontSize: 11, color: "var(--dash-text-secondary)", overflow: "auto", maxHeight: 200, whiteSpace: "pre-wrap", background: "var(--dash-surface-hover)", padding: 10, borderRadius: 6}}>
             {JSON.stringify(result.result || result, null, 2)}
           </pre>
