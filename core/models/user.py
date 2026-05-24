@@ -20,7 +20,10 @@ class User(Base):
     hashed_password = Column(String(1024), nullable=False)
     full_name = Column(String(255), nullable=True)
     role = Column(
-        SAEnum("admin", "reviewer", "annotator", "viewer", name="user_role"),
+        SAEnum(
+            "superadmin", "admin", "reviewer", "annotator", "viewer",
+            name="user_role",
+        ),
         nullable=False,
         default="viewer",
         server_default="viewer",

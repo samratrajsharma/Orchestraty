@@ -217,7 +217,12 @@ class LLMService:
         provider = self.config.provider
 
         if provider == LLMProvider.OLLAMA:
-            params["api_base"] = self.config.base_url or "http://localhost:11434"
+            from core.settings import settings as _settings
+            params["api_base"] = (
+                self.config.base_url
+                or _settings.OLLAMA_BASE_URL
+                or "http://localhost:11434"
+            )
 
         elif provider == LLMProvider.OPENAI:
             if self.config.api_key:

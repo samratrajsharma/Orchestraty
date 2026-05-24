@@ -159,32 +159,65 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("MinIO not available — skipping bucket init: %s", exc)
 
-    # Auto-create initial superuser if it doesn't exist
+    # Auto-create SuperAdmin on first startup
     try:
-        from core.database import async_session_factory as async_session
-        from sqlalchemy import select as sa_select
+        from core.database import async_session_factory as async_session, engine
+        from sqlalchemy import select as sa_select, text as sa_text
         from core.models.user import User as UserModel
         from core.services.auth_service import hash_password as hp
 
-        async with async_session() as db:
-            result = await db.execute(
-                sa_select(UserModel).where(UserModel.email == settings.ADMIN_EMAIL)
+        # Ensure the 'superadmin' value exists in the PostgreSQL enum
+        # (create_all does NOT alter existing enums, so we must do it manually)
+        async with engine.begin() as conn:
+            existing_vals = await conn.execute(
+                sa_text("SELECT unnest(enum_range(NULL::user_role))::text")
             )
-            if result.scalars().first() is None:
-                admin = UserModel(
-                    email=settings.ADMIN_EMAIL,
-                    hashed_password=hp(settings.ADMIN_PASSWORD),
-                    full_name=settings.ADMIN_NAME,
-                    role="admin",
+            vals = {row[0] for row in existing_vals}
+            if "superadmin" not in vals:
+                await conn.execute(
+                    sa_text("ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'superadmin' BEFORE 'admin'")
+                )
+                logger.info("Added 'superadmin' to user_role enum")
+
+        async with async_session() as db:
+            # Create SuperAdmin if not exists
+            result = await db.execute(
+                sa_select(UserModel).where(
+                    UserModel.email == settings.SUPERADMIN_EMAIL
+                )
+            )
+            existing = result.scalars().first()
+            if existing is None:
+                superadmin = UserModel(
+                    email=settings.SUPERADMIN_EMAIL,
+                    hashed_password=hp(settings.SUPERADMIN_PASSWORD),
+                    full_name=settings.SUPERADMIN_NAME,
+                    role="superadmin",
                     is_active=True,
                 )
-                db.add(admin)
+                db.add(superadmin)
                 await db.commit()
-                logger.info("Initial superuser created: %s", settings.ADMIN_EMAIL)
+                logger.info(
+                    "SuperAdmin created: %s", settings.SUPERADMIN_EMAIL
+                )
+            elif existing.role != "superadmin":
+                # Upgrade existing user to superadmin if email matches
+                existing.role = "superadmin"
+                existing.hashed_password = hp(settings.SUPERADMIN_PASSWORD)
+                await db.commit()
+                logger.info(
+                    "Existing user upgraded to SuperAdmin: %s",
+                    settings.SUPERADMIN_EMAIL,
+                )
             else:
-                logger.info("Superuser already exists: %s", settings.ADMIN_EMAIL)
+                # Ensure password stays in sync with .env
+                existing.hashed_password = hp(settings.SUPERADMIN_PASSWORD)
+                await db.commit()
+                logger.info(
+                    "SuperAdmin already exists (password synced): %s", settings.SUPERADMIN_EMAIL
+                )
     except Exception as exc:
-        logger.warning("Could not auto-create superuser: %s", exc)
+        logger.warning("Could not auto-create SuperAdmin: %s", exc)
 
     yield
 

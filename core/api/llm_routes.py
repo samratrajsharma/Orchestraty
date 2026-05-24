@@ -115,7 +115,8 @@ async def list_models(
     default_models: list[str] = defaults.get("models", [])
 
     if llm_provider == LLMProvider.OLLAMA:
-        base_url = defaults.get("base_url", "http://localhost:11434")
+        from core.settings import settings as _settings
+        base_url = _settings.OLLAMA_BASE_URL or defaults.get("base_url", "http://localhost:11434")
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f"{base_url}/api/tags")

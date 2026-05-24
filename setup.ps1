@@ -100,16 +100,14 @@ Write-Host "[3/6] Database tables auto-created on API startup" -ForegroundColor 
 Write-Host "  (init_db runs via FastAPI lifespan)" -ForegroundColor Green
 Write-Host ""
 
-Write-Host "[4/6] Initial superuser auto-created on API startup" -ForegroundColor Yellow
-$adminEmail = "admin@orchestraty.local"
-$adminPass = "Admin@12345"
+Write-Host "[4/6] SuperAdmin auto-created on API startup" -ForegroundColor Yellow
+$saEmail = "admin@orchestraty.com"
 $envLines = Get-Content ".env" -ErrorAction SilentlyContinue
 foreach ($line in $envLines) {
-    if ($line -match "^ADMIN_EMAIL=(.+)$") { $adminEmail = $Matches[1] }
-    if ($line -match "^ADMIN_PASSWORD=(.+)$") { $adminPass = $Matches[1] }
+    if ($line -match "^SUPERADMIN_EMAIL=(.+)$") { $saEmail = $Matches[1] }
 }
-Write-Host "  Admin email:    $adminEmail" -ForegroundColor Green
-Write-Host "  Admin password: $adminPass" -ForegroundColor Green
+Write-Host "  SuperAdmin email: $saEmail" -ForegroundColor Magenta
+Write-Host "  (password configured in .env SUPERADMIN_PASSWORD)" -ForegroundColor Gray
 Write-Host ""
 
 Write-Host "[5/6] Checking Celery worker..." -ForegroundColor Yellow
@@ -123,16 +121,35 @@ else {
 Write-Host ""
 
 Write-Host "[6/6] Setup complete! Launching Orchestraty..." -ForegroundColor Yellow
+
+# Install frontend dependencies if needed
+$frontendDir = "frontend/Frontend"
+if (-not (Test-Path "$frontendDir/node_modules")) {
+    Write-Host "  Installing frontend dependencies..." -ForegroundColor Yellow
+    Push-Location $frontendDir
+    npm install
+    Pop-Location
+}
+
+# Launch SuperAdmin panel (:5174) in background
+Write-Host "  Starting SuperAdmin panel on :5174..." -ForegroundColor Gray
+$saJob = Start-Job -ScriptBlock {
+    param($dir)
+    Set-Location $dir
+    npx vite --config vite.superadmin.config.ts --host 0.0.0.0
+} -ArgumentList (Resolve-Path $frontendDir).Path
+
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Orchestraty is running!" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  App:          http://localhost:8501" -ForegroundColor Green
-Write-Host "  API Docs:     http://localhost:8000/docs" -ForegroundColor Green
-Write-Host "  MinIO:        http://localhost:9001" -ForegroundColor Green
+Write-Host "  Main App:         http://localhost:5173" -ForegroundColor Green
+Write-Host "  SuperAdmin Panel: http://localhost:5174" -ForegroundColor Green
+Write-Host "  API Docs:         http://localhost:8000/docs" -ForegroundColor Green
+Write-Host "  MinIO:            http://localhost:9001" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Admin:        $adminEmail / $adminPass" -ForegroundColor Green
+Write-Host "  SuperAdmin:  $saEmail" -ForegroundColor Magenta
 Write-Host ""
 Write-Host "  Useful commands:" -ForegroundColor White
 Write-Host "    Quick start:  .\start.ps1" -ForegroundColor Gray
@@ -140,8 +157,15 @@ Write-Host "    View logs:    docker compose -f $COMPOSE_FILE logs -f api" -Fore
 Write-Host "    Stop all:     docker compose -f $COMPOSE_FILE down" -ForegroundColor Gray
 Write-Host "    Fresh reset:  .\setup.ps1 -Fresh" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  Press Ctrl+C to stop Streamlit." -ForegroundColor Gray
+Write-Host "  Press Ctrl+C to stop." -ForegroundColor Gray
 Write-Host ""
 
-# Launch Streamlit (blocking)
-streamlit run frontend/app.py
+# Launch main React dev server (blocking — Ctrl+C to stop)
+Push-Location $frontendDir
+try {
+    npx vite --host 0.0.0.0 --open
+} finally {
+    Stop-Job $saJob -ErrorAction SilentlyContinue
+    Remove-Job $saJob -ErrorAction SilentlyContinue
+    Pop-Location
+}

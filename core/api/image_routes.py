@@ -16,9 +16,10 @@ from uuid import UUID
 import core.paths  # noqa: F401
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import StreamingResponse
 from minio import Minio
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select, func, case
+from sqlalchemy import select, func, case, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -148,6 +149,12 @@ def _presigned_url(mc: Minio, object_name: str) -> Optional[str]:
         return None
 
 
+def _proxy_url(dataset_id: UUID, asset_id: UUID, thumb: bool = False) -> str:
+    """Build a proxy URL that routes through the API server."""
+    base = f"/api/v1/images/{dataset_id}/{asset_id}/file"
+    return f"{base}?thumb=true" if thumb else base
+
+
 def _asset_to_response(asset: ImageAsset, mc: Minio) -> ImageAssetResponse:
     """Convert an ImageAsset ORM object to the response schema with URLs."""
     return ImageAssetResponse(
@@ -161,8 +168,8 @@ def _asset_to_response(asset: ImageAsset, mc: Minio) -> ImageAssetResponse:
         file_size=asset.file_size,
         has_exif=asset.has_exif,
         cluster_id=asset.cluster_id,
-        thumbnail_url=_presigned_url(mc, asset.thumbnail_path),
-        original_url=_presigned_url(mc, asset.original_path),
+        thumbnail_url=_proxy_url(asset.dataset_id, asset.id, thumb=True) if asset.thumbnail_path else None,
+        original_url=_proxy_url(asset.dataset_id, asset.id, thumb=False) if asset.original_path else None,
         created_at=asset.created_at,
     )
 
@@ -614,3 +621,77 @@ async def search_images(
             )
 
     return results
+
+
+# ── Proxy endpoint — serves images directly from MinIO ─────────────────
+
+
+@router.get("/{dataset_id}/{asset_id}/file")
+async def proxy_image_file(
+    dataset_id: UUID,
+    asset_id: UUID,
+    thumb: bool = Query(False),
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream an image file (original or thumbnail) from MinIO storage."""
+    stmt = select(ImageAsset).where(
+        ImageAsset.id == asset_id,
+        ImageAsset.dataset_id == dataset_id,
+    )
+    result = await db.execute(stmt)
+    asset = result.scalars().first()
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Image asset not found")
+
+    object_name = asset.thumbnail_path if thumb else asset.original_path
+    if not object_name:
+        raise HTTPException(status_code=404, detail="File not available")
+
+    mc = _get_minio_client()
+    try:
+        response = mc.get_object(settings.MINIO_BUCKET_NAME, object_name)
+        content_type = asset.mime_type or "image/jpeg"
+        return StreamingResponse(
+            response,
+            media_type=content_type,
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    except Exception as exc:
+        logger.error("Failed to proxy image '%s': %s", object_name, exc)
+        raise HTTPException(status_code=500, detail="Failed to retrieve image")
+
+
+# ── Delete endpoint ────────────────────────────────────────────────────
+
+
+@router.delete("/{dataset_id}/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_image(
+    dataset_id: UUID,
+    asset_id: UUID,
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete an image asset and its MinIO objects."""
+    stmt = select(ImageAsset).where(
+        ImageAsset.id == asset_id,
+        ImageAsset.dataset_id == dataset_id,
+    )
+    result = await db.execute(stmt)
+    asset = result.scalars().first()
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Image asset not found")
+
+    mc = _get_minio_client()
+    # Remove objects from MinIO
+    for path in [asset.original_path, asset.thumbnail_path]:
+        if path:
+            try:
+                mc.remove_object(settings.MINIO_BUCKET_NAME, path)
+            except Exception as exc:
+                logger.warning("Failed to remove MinIO object '%s': %s", path, exc)
+
+    await db.execute(
+        sa_delete(ImageAsset).where(ImageAsset.id == asset_id)
+    )
+    await db.commit()

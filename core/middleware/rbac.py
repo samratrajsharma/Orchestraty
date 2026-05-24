@@ -39,7 +39,8 @@ class RoleChecker:
 
 # ── Pre-built dependency instances ────────────────────────────────────────
 
-require_admin = RoleChecker(["admin"])
-require_reviewer = RoleChecker(["admin", "reviewer"])
-require_annotator = RoleChecker(["admin", "reviewer", "annotator"])
-require_viewer = RoleChecker(["admin", "reviewer", "annotator", "viewer"])
+require_superadmin = RoleChecker(["superadmin"])
+require_admin = RoleChecker(["superadmin", "admin"])
+require_reviewer = RoleChecker(["superadmin", "admin", "reviewer"])
+require_annotator = RoleChecker(["superadmin", "admin", "reviewer", "annotator"])
+require_viewer = RoleChecker(["superadmin", "admin", "reviewer", "annotator", "viewer"])

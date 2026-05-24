@@ -21,7 +21,7 @@ if ($Fresh) {
 }
 
 # ── Step 1: Start Docker services ────────────────────────────────────────
-Write-Host "[1/3] Starting Docker services..." -ForegroundColor Yellow
+Write-Host "[1/5] Starting Docker services..." -ForegroundColor Yellow
 
 # Build only if -Fresh or first time
 if ($Fresh) {
@@ -38,7 +38,7 @@ Write-Host "  Docker services started." -ForegroundColor Green
 Write-Host ""
 
 # ── Step 2: Wait for API to be ready ────────────────────────────────────
-Write-Host "[2/3] Waiting for API..." -ForegroundColor Yellow
+Write-Host "[2/5] Waiting for API..." -ForegroundColor Yellow
 
 $retry = 0
 $maxRetries = 40
@@ -62,25 +62,58 @@ if ($retry -ge $maxRetries) {
 }
 Write-Host ""
 
-# ── Step 3: Launch Streamlit ─────────────────────────────────────────────
-Write-Host "[3/3] Launching Orchestraty..." -ForegroundColor Yellow
+# ── Step 3: Install frontend dependencies if needed ─────────────────────
+Write-Host "[3/5] Checking frontend dependencies..." -ForegroundColor Yellow
+$frontendDir = "frontend/Frontend"
+
+if (-not (Test-Path "$frontendDir/node_modules")) {
+    Write-Host "  Installing npm dependencies..." -ForegroundColor Gray
+    Push-Location $frontendDir
+    npm install
+    Pop-Location
+}
+Write-Host "  Frontend ready." -ForegroundColor Green
+Write-Host ""
+
+# ── Step 4: Launch SuperAdmin panel (:5174) in background ───────────────
+Write-Host "[4/5] Launching SuperAdmin panel on :5174..." -ForegroundColor Yellow
+$saJob = Start-Job -ScriptBlock {
+    param($dir)
+    Set-Location $dir
+    npx vite --config vite.superadmin.config.ts --host 0.0.0.0
+} -ArgumentList (Resolve-Path $frontendDir).Path
+Write-Host "  SuperAdmin panel starting (background)." -ForegroundColor Green
+Write-Host ""
+
+# ── Step 5: Launch main webapp (:5173) ──────────────────────────────────
+Write-Host "[5/5] Launching Orchestraty..." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Orchestraty is running!" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  App:      http://localhost:8501" -ForegroundColor Green
-Write-Host "  API Docs: http://localhost:8000/docs" -ForegroundColor Green
-Write-Host "  MinIO:    http://localhost:9001" -ForegroundColor Green
+Write-Host "  Main App:         http://localhost:5173" -ForegroundColor Green
+Write-Host "  SuperAdmin Panel: http://localhost:5174" -ForegroundColor Green
+Write-Host "  API Docs:         http://localhost:8000/docs" -ForegroundColor Green
+Write-Host "  MinIO:            http://localhost:9001" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Admin:    admin@orchestraty.com / Admin@12345" -ForegroundColor Gray
+Write-Host "  SuperAdmin:  admin@orchestraty.com" -ForegroundColor Magenta
+Write-Host "  (password configured in .env SUPERADMIN_PASSWORD)" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  Press Ctrl+C to stop Streamlit." -ForegroundColor Gray
+Write-Host "  Press Ctrl+C to stop." -ForegroundColor Gray
 Write-Host ""
 
-# Launch Streamlit (blocking — Ctrl+C to stop)
-if ($NoBrowser) {
-    streamlit run frontend/app.py --server.headless true
-} else {
-    streamlit run frontend/app.py
+# Launch main Vite dev server (blocking — Ctrl+C to stop)
+Push-Location $frontendDir
+try {
+    if ($NoBrowser) {
+        npx vite --host 0.0.0.0
+    } else {
+        npx vite --host 0.0.0.0 --open
+    }
+} finally {
+    # Clean up SuperAdmin background job when main server stops
+    Stop-Job $saJob -ErrorAction SilentlyContinue
+    Remove-Job $saJob -ErrorAction SilentlyContinue
+    Pop-Location
 }

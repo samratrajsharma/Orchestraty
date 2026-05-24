@@ -174,7 +174,7 @@ def _validate_file_content(
 
 
 @router.post(
-    "/",
+    "",
     response_model=DatasetResponse,
     status_code=status.HTTP_201_CREATED,
 )
@@ -358,7 +358,7 @@ async def upload_file(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/", response_model=DatasetListResponse)
+@router.get("", response_model=DatasetListResponse)
 async def list_datasets(
     status_filter: Optional[str] = Query(
         None, alias="status", pattern="^(raw|processed|labeled|reviewed|ready)$"

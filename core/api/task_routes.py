@@ -50,7 +50,7 @@ class TaskListResponse(BaseModel):
 # ── Routes ───────────────────────────────────────────────────────────────
 
 
-@router.get("/", response_model=TaskListResponse)
+@router.get("", response_model=TaskListResponse)
 async def list_tasks(
     dataset_id: Optional[UUID] = Query(None),
     task_type: Optional[str] = Query(None),

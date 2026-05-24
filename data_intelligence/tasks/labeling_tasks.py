@@ -69,9 +69,40 @@ def run_labeling_pipeline(
         from data_intelligence.tasks.structuring_tasks import _save_cleaned_file
         labeled_path = _save_cleaned_file(labeled_df, dataset_id, version_number, "labeled_data.csv")
 
+        # ── Step 4b: Build per-row predictions list ──────────────────────
+        # Quality evaluation and export downstream tasks read individual
+        # predictions from `result["labeling"]["predictions"]`. We build that
+        # list here from the labeled DataFrame so they don't need to re-read
+        # the file from object storage.
+        predictions: list[dict] = []
+        label_col = "__label__"
+        if label_col in labeled_df.columns:
+            id_col = next(
+                (c for c in ("id", "Id", "ID", "item_id") if c in labeled_df.columns),
+                None,
+            )
+            for row_idx, row in labeled_df.iterrows():
+                label_val = row[label_col]
+                if label_val is None:
+                    continue
+                if id_col is not None:
+                    item_id = str(row[id_col])
+                else:
+                    item_id = str(row_idx)
+                predictions.append(
+                    {
+                        "item_id": item_id,
+                        "label": str(label_val),
+                        "confidence": 1.0,
+                    }
+                )
+
+        labeling_dict = labeling_report.to_dict()
+        labeling_dict["predictions"] = predictions
+
         # ── Done ─────────────────────────────────────────────────────────
         result = {
-            "labeling": labeling_report.to_dict(),
+            "labeling": labeling_dict,
             "labeled_file_path": labeled_path,
             "total_rows": len(labeled_df),
             "labeled_rows": labeling_report.labeled_count,

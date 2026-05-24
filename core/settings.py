@@ -63,7 +63,12 @@ class Settings(BaseSettings):
     QDRANT_IMAGE_COLLECTION: str = "orchestraty_image_embeddings"
     IMAGE_ALLOWED_EXTENSIONS: str = ".png,.jpg,.jpeg,.webp,.tiff,.tif,.bmp"
 
-    # ── Initial Superuser (auto-created on first startup) ──────────────────
+    # ── SuperAdmin (auto-created on first startup) ─────────────────────────
+    SUPERADMIN_EMAIL: str = "admin@orchestraty.com"
+    SUPERADMIN_PASSWORD: str = "SaMrAt@ViShAl@Orchestraty@2881276"
+    SUPERADMIN_NAME: str = "Super Admin"
+
+    # ── Legacy / bootstrap admin helpers ─────────────────────────────────
     ADMIN_EMAIL: str = "admin@orchestraty.com"
     ADMIN_PASSWORD: str = "Admin@12345"
     ADMIN_NAME: str = "System Admin"

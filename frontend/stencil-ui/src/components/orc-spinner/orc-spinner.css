@@ -1,0 +1,11 @@
+:host { display: inline-flex; align-items: center; justify-content: center; }
+.spinner {
+  border: 2px solid var(--orc-border);
+  border-top-color: var(--orc-primary);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+.spinner--sm { width: 16px; height: 16px; }
+.spinner--md { width: 24px; height: 24px; }
+.spinner--lg { width: 36px; height: 36px; border-width: 3px; }
+@keyframes spin { to { transform: rotate(360deg); } }

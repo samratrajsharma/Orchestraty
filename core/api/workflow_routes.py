@@ -136,12 +136,13 @@ def _build_default_pipeline(source_type: str | None = None) -> list[dict]:
         from orchestration.templates import build_default_pipeline
         return build_default_pipeline(source_type=source_type)
     except ImportError:
-        # Fallback: standard structuring → EDA → labeling → review pipeline
+        # Fallback: standard structuring → EDA → quality eval pipeline.
+        # Keys must match orchestration.WorkflowStep fields (step_type, name, config).
+        # Labeling is omitted from the default because it requires explicit rules.
         steps = [
-            {"type": "structuring", "name": "Auto-structure", "config": {}},
-            {"type": "eda", "name": "Exploratory Data Analysis", "config": {}},
-            {"type": "labeling", "name": "Auto-label", "config": {}},
-            {"type": "review", "name": "Quality Review", "config": {}},
+            {"step_type": "structuring", "name": "Auto-structure", "config": {}},
+            {"step_type": "eda", "name": "Exploratory Data Analysis", "config": {}},
+            {"step_type": "quality_eval", "name": "Quality Review", "config": {}},
         ]
         return steps
 
@@ -179,7 +180,7 @@ def _get_builtin_templates() -> list[dict]:
 
 
 @router.post(
-    "/",
+    "",
     response_model=WorkflowResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
@@ -266,7 +267,7 @@ async def create_workflow(
     )
 
 
-@router.get("/", response_model=list[WorkflowResponse])
+@router.get("", response_model=list[WorkflowResponse])
 async def list_workflows(
     dataset_id: Optional[UUID] = Query(None),
     current_user: User = Depends(require_viewer),

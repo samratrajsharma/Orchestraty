@@ -35,7 +35,7 @@ class AuditLogResponse(BaseModel):
 
 
 @router.get(
-    "/",
+    "",
     response_model=list[AuditLogResponse],
     dependencies=[Depends(require_admin)],
 )

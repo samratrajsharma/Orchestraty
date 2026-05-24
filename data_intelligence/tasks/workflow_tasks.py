@@ -17,24 +17,18 @@ logger = logging.getLogger(__name__)
 
 
 def _execute_step(step: dict, dataset_id: str, version_number: int) -> dict:
-    """Execute a single workflow step.
+    """Execute a single workflow step via the Celery-backed pipelines.
 
-    Delegates to the orchestration engine if available, otherwise runs
-    a built-in dispatcher based on step type.
+    Dispatches directly to the same Celery tasks the API uses
+    (run_structuring, run_eda, run_labeling, run_quality_evaluation, …).
+    The orchestration.workflow_engine module is not used here because
+    its `execute_step` signature requires a live db_session and minio_client
+    that aren't available inside a Celery worker context.
 
     Returns the step dict updated with status and result.
     """
-    try:
-        from orchestration.workflow_engine import execute_step, WorkflowStep
-
-        ws = WorkflowStep(**step)
-        return execute_step(ws, dataset_id=dataset_id, version_number=version_number)
-    except ImportError:
-        pass
-
-    # Fallback built-in dispatcher
-    step_type = step.get("type", "unknown")
-    step_config = step.get("config", {})
+    step_type = step.get("step_type") or step.get("type") or "unknown"
+    step_config = step.get("config", {}) or {}
 
     logger.info(
         "Executing step '%s' (type=%s) for dataset %s v%d",
@@ -48,57 +42,63 @@ def _execute_step(step: dict, dataset_id: str, version_number: int) -> dict:
 
     try:
         if step_type == "structuring":
-            from data_intelligence.tasks.structuring_tasks import run_structuring
-            run_structuring.apply(
+            from data_intelligence.tasks.structuring_tasks import run_structuring_pipeline
+            run_structuring_pipeline.apply(
                 kwargs={
                     "dataset_id": dataset_id,
                     "version_number": version_number,
                     **step_config,
                 },
-            ).get(timeout=3600)
+            ).get(timeout=3600, disable_sync_subtasks=False)
             result["message"] = "Structuring completed"
 
         elif step_type == "eda":
-            from data_intelligence.tasks.eda_tasks import run_eda
-            run_eda.apply(
+            from data_intelligence.tasks.eda_tasks import run_eda_pipeline
+            run_eda_pipeline.apply(
                 kwargs={
                     "dataset_id": dataset_id,
                     "version_number": version_number,
                     **step_config,
                 },
-            ).get(timeout=3600)
+            ).get(timeout=3600, disable_sync_subtasks=False)
             result["message"] = "EDA completed"
 
         elif step_type == "labeling":
-            from data_intelligence.tasks.labeling_tasks import run_labeling
-            run_labeling.apply(
-                kwargs={
-                    "dataset_id": dataset_id,
-                    "version_number": version_number,
-                    **step_config,
-                },
-            ).get(timeout=3600)
-            result["message"] = "Labeling completed"
+            from data_intelligence.tasks.labeling_tasks import run_labeling_pipeline
+            # Labeling needs rules — skip when caller didn't provide any
+            # rather than crashing the whole workflow.
+            if not step_config.get("rules") and not step_config.get("rule_set_id"):
+                result["status"] = "skipped"
+                result["message"] = "No rules/rule_set_id supplied — labeling step skipped"
+            else:
+                run_labeling_pipeline.apply(
+                    kwargs={
+                        "dataset_id": dataset_id,
+                        "version_number": version_number,
+                        **step_config,
+                    },
+                ).get(timeout=3600, disable_sync_subtasks=False)
+                result["message"] = "Labeling completed"
 
         elif step_type == "ai_labeling":
-            from data_intelligence.tasks.ai_labeling_tasks import run_ai_labeling
-            run_ai_labeling.apply(
+            from data_intelligence.tasks.ai_labeling_tasks import predict_labels
+            predict_labels.apply(
                 kwargs={
                     "dataset_id": dataset_id,
                     "version_number": version_number,
                     **step_config,
                 },
-            ).get(timeout=3600)
+            ).get(timeout=3600, disable_sync_subtasks=False)
             result["message"] = "AI labeling completed"
 
-        elif step_type == "review":
+        elif step_type in ("review", "quality_eval"):
             from data_intelligence.tasks.review_tasks import run_quality_evaluation
             run_quality_evaluation.apply(
                 kwargs={
                     "dataset_id": dataset_id,
                     **step_config,
                 },
-            ).get(timeout=3600)
+            ).get(timeout=3600, disable_sync_subtasks=False)
             result["message"] = "Quality review completed"
 
         elif step_type == "export":
@@ -109,8 +109,13 @@ def _execute_step(step: dict, dataset_id: str, version_number: int) -> dict:
                     "dataset_id": dataset_id,
                     "format": export_format,
                 },
-            ).get(timeout=3600)
+            ).get(timeout=3600, disable_sync_subtasks=False)
             result["message"] = f"Export ({export_format}) completed"
+
+        elif step_type in ("image_embeddings", "clustering"):
+            # Image pipeline steps are stubbed for tabular workflows.
+            result["status"] = "skipped"
+            result["message"] = f"Step '{step_type}' is not yet wired into the workflow runner — skipped"
 
         else:
             result["status"] = "skipped"
