@@ -4,7 +4,7 @@ import { auditApi } from "../../api/audit";
 interface AuditLog {
   id: string; user_id: string; user_email?: string; action: string;
   resource_type: string; resource_id?: string; details?: string;
-  created_at: string;
+  timestamp: string;
 }
 
 export default function AuditLogs() {
@@ -53,7 +53,7 @@ export default function AuditLogs() {
               <tbody>
                 {logs.map((l) => (
                   <tr key={l.id}>
-                    <td>{new Date(l.created_at).toLocaleString()}</td>
+                    <td>{new Date(l.timestamp).toLocaleString()}</td>
                     <td style={{color: "var(--dash-text)"}}>{l.user_email || l.user_id}</td>
                     <td><span className="badge badge--info">{l.action}</span></td>
                     <td>{l.resource_type}{l.resource_id ? ` / ${l.resource_id.slice(0, 8)}...` : ""}</td>

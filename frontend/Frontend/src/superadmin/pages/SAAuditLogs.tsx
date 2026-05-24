@@ -8,7 +8,7 @@ interface AuditEntry {
   resource_type: string;
   resource_id?: string;
   details?: Record<string, unknown>;
-  created_at: string;
+  timestamp: string;
 }
 
 export default function SAAuditLogs() {
@@ -61,7 +61,7 @@ export default function SAAuditLogs() {
                 {logs.map((log) => (
                   <tr key={log.id}>
                     <td style={{ whiteSpace: "nowrap", fontSize: 12 }}>
-                      {new Date(log.created_at).toLocaleString()}
+                      {new Date(log.timestamp).toLocaleString()}
                     </td>
                     <td>
                       <span className={`badge ${

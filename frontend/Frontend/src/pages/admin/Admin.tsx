@@ -23,20 +23,25 @@ export default function Admin() {
 
   useEffect(() => { load(); }, [load]);
 
+  const errDetail = (err: unknown): string => {
+    const d = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+    return typeof d === "string" ? d : d ? JSON.stringify(d) : String(err);
+  };
+
   const handleRoleChange = async (userId: string, newRole: string) => {
     try { await adminApi.updateRole(userId, newRole); load(); }
-    catch { alert("Failed"); }
+    catch (err) { alert(`Role update failed: ${errDetail(err)}`); }
   };
 
   const handleToggleActive = async (u: UserItem) => {
     try { await adminApi.updateStatus(u.id, !u.is_active); load(); }
-    catch { alert("Failed"); }
+    catch (err) { alert(`Status update failed: ${errDetail(err)}`); }
   };
 
   const handleDelete = async (u: UserItem) => {
     if (!confirm(`Delete user ${u.email}?`)) return;
     try { await adminApi.deleteUser(u.id); load(); }
-    catch { alert("Failed"); }
+    catch (err) { alert(`Delete failed: ${errDetail(err)}`); }
   };
 
   const isAdmin = user?.role === "admin" || user?.role === "superadmin";

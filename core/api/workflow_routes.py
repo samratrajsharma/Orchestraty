@@ -111,10 +111,17 @@ async def _get_latest_version(db: AsyncSession, dataset_id: UUID) -> DatasetVers
 
 
 def _validate_workflow_steps(steps: list[dict]) -> list[dict]:
-    """Validate workflow steps using the orchestration engine if available."""
+    """Validate workflow steps, raising HTTPException on failure.
+
+    Returns the same steps list when valid so callers can keep the
+    `steps = _validate_workflow_steps(steps)` pattern.
+    """
     try:
         from orchestration.workflow_engine import validate_workflow
-        return validate_workflow(steps)
+        is_valid, error_msg = validate_workflow(steps)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg or "Invalid workflow.")
+        return steps
     except ImportError:
         # Engine not yet implemented — do basic validation
         if not steps:
@@ -122,10 +129,10 @@ def _validate_workflow_steps(steps: list[dict]) -> list[dict]:
                 status_code=400, detail="Workflow must have at least one step."
             )
         for i, step in enumerate(steps):
-            if "type" not in step:
+            if "step_type" not in step and "type" not in step:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Step {i} missing required 'type' field.",
+                    detail=f"Step {i} missing required 'step_type' field.",
                 )
         return steps
 

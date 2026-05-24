@@ -37,9 +37,13 @@ export default function DatasetDetail() {
   const quickStart = async () => {
     if (!id) return;
     try {
-      await workflowApi.quickStart(id);
+      const sourceType = dataset?.source_type ? String(dataset.source_type) : undefined;
+      await workflowApi.quickStart(id, sourceType);
       alert("Workflow started! Check the Workflows page.");
-    } catch { alert("Failed to start workflow"); }
+    } catch (err) {
+      const d = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      alert(`Failed to start workflow: ${typeof d === "string" ? d : JSON.stringify(d ?? err)}`);
+    }
   };
 
   const formatSize = (bytes?: number) => {

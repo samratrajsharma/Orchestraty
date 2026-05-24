@@ -3,6 +3,7 @@ Celery tasks for Review & Export.
 Handles quality evaluation and dataset export to common ML formats.
 """
 
+import csv
 import io
 import json
 import logging
@@ -12,6 +13,7 @@ import core.paths  # noqa: F401
 from core.celery_app import app
 from core.database_sync import SyncSessionLocal
 from core.services.task_service import update_task_progress, complete_task
+from core.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -271,20 +273,25 @@ def run_export(
         # Step 2: Generate the export file
         update_task_progress(db, celery_task_id, 0.4, f"Generating {format} export...")
 
-        from quality.exporter import export_csv, export_json, export_coco, export_yolo
+        if format == "csv":
+            buf = io.StringIO()
+            fieldnames = ["item_id", "label", "confidence", "review_status"]
+            writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for item in labeled_items:
+                writer.writerow(item)
+            export_bytes = buf.getvalue().encode("utf-8")
+        elif format == "json":
+            export_bytes = json.dumps(labeled_items, indent=2, ensure_ascii=False).encode("utf-8")
+        elif format in ("coco", "yolo"):
+            raise ValueError(
+                f"Export format '{format}' requires image dataset support "
+                "that isn't wired into the tabular export task. Use 'csv' or 'json'."
+            )
+        else:
+            raise ValueError(f"Unsupported export format: {format!r}")
 
-        exporters = {
-            "csv": export_csv,
-            "json": export_json,
-            "coco": export_coco,
-            "yolo": export_yolo,
-        }
-
-        export_fn = exporters[format]
-        export_bytes: bytes = export_fn(labeled_items)
-
-        # Determine filename
-        ext_map = {"csv": "csv", "json": "json", "coco": "json", "yolo": "txt"}
+        ext_map = {"csv": "csv", "json": "json"}
         extension = ext_map.get(format, format)
         filename = f"export_{format}.{extension}"
 

@@ -56,7 +56,7 @@ export default function Tasks() {
               style={{padding: "6px 12px", background: "var(--dash-bg)", border: "1px solid var(--dash-border)", borderRadius: 8, color: "var(--dash-text)", fontSize: 13}}>
               <option value="">All status</option>
               <option value="pending">Pending</option>
-              <option value="running">Running</option>
+              <option value="progress">In progress</option>
               <option value="completed">Completed</option>
               <option value="failed">Failed</option>
             </select>

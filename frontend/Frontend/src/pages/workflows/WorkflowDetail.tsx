@@ -3,7 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { workflowApi } from "../../api/workflows";
 
 interface WorkflowStep {
-  name: string; type: string; status: string; result?: unknown;
+  name: string; step_type?: string; type?: string; status: string; result?: unknown;
 }
 
 export default function WorkflowDetail() {
@@ -13,12 +13,28 @@ export default function WorkflowDetail() {
 
   useEffect(() => {
     if (!id) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const poll = () => {
-      workflowApi.get(id).then((r) => { setWorkflow(r.data); setLoading(false); }).catch(() => setLoading(false));
+      workflowApi.get(id)
+        .then((r) => {
+          if (cancelled) return;
+          setWorkflow(r.data);
+          setLoading(false);
+          const s = String((r.data as { status?: string })?.status || "");
+          if (s !== "completed" && s !== "failed") {
+            timer = setTimeout(poll, 5000);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setLoading(false);
+        });
     };
     poll();
-    const timer = setInterval(poll, 5000);
-    return () => clearInterval(timer);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [id]);
 
   if (loading) return <div className="empty-state"><h3>Loading...</h3></div>;
@@ -72,8 +88,8 @@ export default function WorkflowDetail() {
                 {step.status === "completed" ? "\u2713" : i + 1}
               </div>
               <div style={{flex: 1}}>
-                <div style={{fontWeight: 600, fontSize: 14, color: "var(--dash-text)"}}>{step.name || step.type}</div>
-                <div style={{fontSize: 12, color: "var(--dash-text-muted)"}}>{step.type}</div>
+                <div style={{fontWeight: 600, fontSize: 14, color: "var(--dash-text)"}}>{step.name || step.step_type || step.type}</div>
+                <div style={{fontSize: 12, color: "var(--dash-text-muted)"}}>{step.step_type || step.type}</div>
               </div>
               <span className={`badge ${step.status === "completed" ? "badge--success" : step.status === "running" ? "badge--warning" :
                 step.status === "failed" ? "badge--danger" : "badge--neutral"}`}>{step.status}</span>
