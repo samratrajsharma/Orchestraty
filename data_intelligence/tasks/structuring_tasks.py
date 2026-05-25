@@ -6,10 +6,12 @@ Runs schema detection, cleaning, and quality scoring as a background job.
 import io
 import json
 import logging
+import math
 
 import core.paths  # noqa: F401
 
 import pandas as pd
+import numpy as np
 from celery import current_task
 
 from core.celery_app import app
@@ -17,6 +19,27 @@ from core.database_sync import SyncSessionLocal
 from core.services.task_service import update_task_progress, complete_task
 
 logger = logging.getLogger(__name__)
+
+
+def _json_safe(obj):
+    """Recursively convert a value into something PostgreSQL JSONB accepts.
+
+    Pandas/NumPy produce types (np.int64, np.float64, np.ndarray) and special
+    floats (NaN, inf) that ``json.dumps`` either cannot serialise or emits as
+    invalid JSON — PostgreSQL then rejects the insert and the task fails.
+    """
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return [_json_safe(v) for v in obj.tolist()]
+    if isinstance(obj, np.generic):
+        obj = obj.item()
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+    return obj
 
 
 def _load_dataset_file(dataset_id: str, version_number: int) -> pd.DataFrame:
@@ -169,14 +192,14 @@ def run_structuring_pipeline(
         db.commit()
 
         # ── Done ─────────────────────────────────────────────────────────
-        result = {
+        result = _json_safe({
             "schema": schema.to_dict(),
             "cleaning": cleaning_report.to_dict(),
             "quality": quality_report.to_dict(),
             "cleaned_file_path": cleaned_path,
             "original_rows": schema.row_count,
             "final_rows": cleaning_report.final_rows,
-        }
+        })
 
         complete_task(db, celery_task_id, result=result)
         logger.info(

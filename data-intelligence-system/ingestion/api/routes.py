@@ -77,6 +77,31 @@ def _get_extension(filename: str) -> str:
     return filename[idx:].lower() if idx != -1 else ""
 
 
+def _extract_columns(raw_bytes: bytes, file_name: str) -> list[str]:
+    """Best-effort extraction of column names from a dataset file's header."""
+    ext = _get_extension(file_name)
+    try:
+        if ext in (".csv", ".tsv"):
+            delimiter = "\t" if ext == ".tsv" else ","
+            text = raw_bytes.decode("utf-8", errors="replace")
+            first_line = text.split("\n", 1)[0]
+            reader = csv_mod.reader(io.StringIO(first_line), delimiter=delimiter)
+            return [c.strip() for c in next(reader, []) if c.strip()]
+        if ext in (".json", ".jsonl"):
+            text = raw_bytes.decode("utf-8", errors="replace").strip()
+            if ext == ".jsonl":
+                first = text.splitlines()[0] if text else "{}"
+                obj = json.loads(first)
+            else:
+                parsed = json.loads(text)
+                obj = parsed[0] if isinstance(parsed, list) and parsed else parsed
+            if isinstance(obj, dict):
+                return list(obj.keys())
+    except Exception:  # noqa: BLE001
+        return []
+    return []
+
+
 async def _get_dataset_or_404(
     db: AsyncSession, dataset_id: UUID
 ) -> Dataset:
@@ -457,6 +482,45 @@ async def list_versions(
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+# ---------------------------------------------------------------------------
+# GET /{dataset_id}/columns — Column names of the latest version
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{dataset_id}/columns")
+async def get_dataset_columns(
+    dataset_id: UUID,
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the column names of a dataset's latest version.
+
+    Powers the column dropdowns in the labeling UIs. Returns an empty list
+    (never an error) when columns cannot be determined.
+    """
+    await _get_dataset_or_404(db, dataset_id)
+
+    stmt = (
+        select(DatasetVersion)
+        .where(DatasetVersion.dataset_id == dataset_id)
+        .order_by(DatasetVersion.version_number.desc())
+        .limit(1)
+    )
+    version = (await db.execute(stmt)).scalars().first()
+    if version is None:
+        return {"columns": []}
+
+    try:
+        from ..storage.minio_client import minio_storage  # type: ignore[import-untyped]
+
+        raw_bytes = await minio_storage.download_file(version.storage_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not read file for columns (dataset %s): %s", dataset_id, exc)
+        return {"columns": []}
+
+    return {"columns": _extract_columns(raw_bytes, version.file_name or "data.csv")}
 
 
 # ---------------------------------------------------------------------------

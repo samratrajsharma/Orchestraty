@@ -47,6 +47,7 @@ def predict_labels(
     temperature: float = 0.7,
     max_tokens: int = 2048,
     examples: list = None,
+    instructions: str = None,
 ):
     """Predict labels for text items in a dataset using the configured LLM."""
     celery_task_id = self.request.id
@@ -85,7 +86,7 @@ def predict_labels(
 
         from labeling.ai_labeler import predict_text_labels
 
-        report = predict_text_labels(texts, labels, config, examples=examples)
+        report = predict_text_labels(texts, labels, config, examples=examples, instructions=instructions)
 
         # Step 4: Save results
         update_task_progress(db, celery_task_id, 0.9, "Saving prediction results...")

@@ -3,6 +3,7 @@ import { datasetApi } from "../../api/datasets";
 import { labelingApi } from "../../api/labeling";
 import type { RuleDefinition } from "../../api/labeling";
 import { useTaskPolling } from "../../hooks/usePolling";
+import TaskMonitor from "../../components/TaskMonitor/TaskMonitor";
 import "./Labeling.css";
 
 interface LabelingReport {
@@ -24,18 +25,19 @@ const RULE_TEMPLATES = [
 export default function Labeling() {
   const [datasets, setDatasets] = useState<Array<{id:string; name:string}>>([]);
   const [datasetId, setDatasetId] = useState("");
+  const [columns, setColumns] = useState<string[]>([]);
   const [operators, setOperators] = useState<string[]>([]);
   const [rules, setRules] = useState<RuleDefinition[]>([{ column: "", operator: "equals", value: "", label: "", priority: 0 }]);
   const [conflictStrategy, setConflictStrategy] = useState("first_match");
   const [taskId, setTaskId] = useState<string | null>(null);
-  const [results, setResults] = useState<{ result?: LabelingReport } | null>(null);
+  const [results, setResults] = useState<{ result?: { labeling?: LabelingReport } } | null>(null);
   const [running, setRunning] = useState(false);
   const [tab, setTab] = useState<"visual" | "rules-perf" | "raw">("visual");
-  const { task } = useTaskPolling(taskId);
+  const { task, steps, stuck, progressPct } = useTaskPolling(taskId);
 
   useEffect(() => {
     datasetApi.list({ limit: 100 }).then((r) => {
-      setDatasets(Array.isArray(r.data) ? r.data : r.data.datasets || []);
+      setDatasets((Array.isArray(r.data) ? r.data : r.data.datasets || []).filter((d: {source_type?: string}) => d.source_type !== "image"));
     }).catch(() => {});
     labelingApi.getOperators().then((r) => setOperators(r.data.operators || [])).catch(() => {});
   }, []);
@@ -48,10 +50,13 @@ export default function Labeling() {
     if (task?.status === "failed") setRunning(false);
   }, [task?.status, datasetId]);
 
-  // Auto-load existing results
+  // Auto-load existing results + the dataset's column list (for the dropdown)
   useEffect(() => {
-    if (!datasetId) return;
+    if (!datasetId) { setColumns([]); return; }
     labelingApi.getResults(datasetId).then((r) => setResults(r.data)).catch(() => {});
+    datasetApi.getColumns(datasetId)
+      .then((r) => setColumns(r.data.columns || []))
+      .catch(() => setColumns([]));
   }, [datasetId]);
 
   const addRule = () => setRules([...rules, { column: "", operator: "equals", value: "", label: "", priority: rules.length }]);
@@ -76,7 +81,9 @@ export default function Labeling() {
     } catch { setRunning(false); alert("Failed"); }
   };
 
-  const report: LabelingReport | null = results?.result as LabelingReport | null;
+  // The labeling Celery task stores { labeling, labeled_file_path, ... } — the
+  // report lives under result.labeling, NOT result itself.
+  const report: LabelingReport | null = results?.result?.labeling ?? null;
   const coveragePct = report ? Math.round((report.labeled_count / Math.max(report.total_rows, 1)) * 100) : 0;
 
   // Label distribution for chart
@@ -121,7 +128,15 @@ export default function Labeling() {
             <span className="label-rule-row__num">{i + 1}</span>
             <div className="input-group" style={{flex: 1, marginBottom: 0}}>
               {i === 0 && <label>Column</label>}
-              <input placeholder="column_name" value={rule.column} onChange={(e) => updateRule(i, "column", e.target.value)} />
+              {columns.length > 0 ? (
+                <select value={rule.column} onChange={(e) => updateRule(i, "column", e.target.value)}>
+                  <option value="">Select column</option>
+                  {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              ) : (
+                <input placeholder={datasetId ? "column_name" : "select a dataset first"}
+                  value={rule.column} onChange={(e) => updateRule(i, "column", e.target.value)} />
+              )}
             </div>
             <div className="input-group" style={{flex: 1, marginBottom: 0}}>
               {i === 0 && <label>Operator</label>}
@@ -157,12 +172,7 @@ export default function Labeling() {
           </button>
         </div>
 
-        {task && running && (
-          <div style={{marginTop: 16}}>
-            <div className="progress-bar"><div className="progress-bar__fill" style={{width: `${task.progress || 0}%`}} /></div>
-            <p style={{fontSize: 12, color: "var(--dash-text-muted)", marginTop: 4}}>{task.progress_message || "Processing..."}</p>
-          </div>
-        )}
+        <TaskMonitor task={task} steps={steps} stuck={stuck} progressPct={progressPct} running={running} />
       </div>
 
       {/* ── Results ── */}

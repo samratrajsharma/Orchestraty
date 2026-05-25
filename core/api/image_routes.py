@@ -15,7 +15,7 @@ from uuid import UUID
 
 import core.paths  # noqa: F401
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from minio import Minio
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,7 +27,7 @@ from core.middleware.rbac import require_viewer
 from core.models.dataset import Dataset, DatasetVersion
 from core.models.image_asset import ImageAsset
 from core.models.user import User
-from core.services.auth_service import get_current_user
+from core.services.auth_service import get_current_user, decode_access_token
 from core.services.task_service import create_task_record
 from core.settings import settings
 from core.storage import get_minio_client as _get_minio_client
@@ -172,6 +172,53 @@ def _asset_to_response(asset: ImageAsset, mc: Minio) -> ImageAssetResponse:
         original_url=_proxy_url(asset.dataset_id, asset.id, thumb=False) if asset.original_path else None,
         created_at=asset.created_at,
     )
+
+
+async def _user_from_header_or_query(
+    request: Request,
+    token: Optional[str] = Query(
+        None, description="JWT — lets browser <img>/<a> tags authenticate the image proxy"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Resolve the current user from the Authorization header OR a ``?token=``
+    query parameter.
+
+    The image proxy endpoint is loaded by browser ``<img>`` tags, which cannot
+    attach an ``Authorization`` header. Accepting the JWT as a query parameter
+    lets those tags authenticate so uploaded images actually render.
+    """
+    raw: Optional[str] = None
+    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        raw = auth_header[7:].strip()
+    elif token:
+        raw = token.strip()
+
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    payload = decode_access_token(raw)
+    email = payload.get("sub")
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalars().first()
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive",
+        )
+    return user
 
 
 async def _validate_dataset(db: AsyncSession, dataset_id: UUID) -> Dataset:
@@ -631,10 +678,14 @@ async def proxy_image_file(
     dataset_id: UUID,
     asset_id: UUID,
     thumb: bool = Query(False),
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(_user_from_header_or_query),
     db: AsyncSession = Depends(get_db),
 ):
-    """Stream an image file (original or thumbnail) from MinIO storage."""
+    """Stream an image file (original or thumbnail) from MinIO storage.
+
+    Authenticated via the Authorization header *or* a ``?token=`` query
+    parameter so browser ``<img>`` tags can load proxied images.
+    """
     stmt = select(ImageAsset).where(
         ImageAsset.id == asset_id,
         ImageAsset.dataset_id == dataset_id,

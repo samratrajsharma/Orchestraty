@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { datasetApi } from "../../api/datasets";
 import { structuringApi } from "../../api/structuring";
 import { useTaskPolling } from "../../hooks/usePolling";
+import TaskMonitor from "../../components/TaskMonitor/TaskMonitor";
 import "./Structuring.css";
 
 interface CleaningStep {
@@ -13,6 +14,16 @@ interface CleaningReport {
   original_rows: number; original_columns: number; final_rows: number;
   final_columns: number; steps: CleaningStep[]; total_rows_removed: number;
   total_nulls_filled: number;
+}
+
+/** Shape of the `result` JSON stored by the structuring Celery task. */
+interface StructuringResult {
+  cleaning?: CleaningReport;
+  quality?: { overall_score?: number; grade?: string };
+  schema?: { row_count?: number; column_count?: number };
+  cleaned_file_path?: string;
+  original_rows?: number;
+  final_rows?: number;
 }
 
 const NULL_STRATEGIES = [
@@ -30,14 +41,14 @@ export default function Structuring() {
   const [removeDups, setRemoveDups] = useState(true);
   const [handleOutliers, setHandleOutliers] = useState(false);
   const [taskId, setTaskId] = useState<string | null>(null);
-  const [results, setResults] = useState<{result?: CleaningReport} | null>(null);
+  const [results, setResults] = useState<{result?: StructuringResult} | null>(null);
   const [running, setRunning] = useState(false);
   const [tab, setTab] = useState<"visual" | "steps" | "raw">("visual");
-  const { task } = useTaskPolling(taskId);
+  const { task, steps, stuck, progressPct } = useTaskPolling(taskId);
 
   useEffect(() => {
     datasetApi.list({ limit: 100 }).then((r) => {
-      setDatasets(Array.isArray(r.data) ? r.data : r.data.datasets || []);
+      setDatasets((Array.isArray(r.data) ? r.data : r.data.datasets || []).filter((d: {source_type?: string}) => d.source_type !== "image"));
     }).catch(() => {});
   }, []);
 
@@ -67,7 +78,10 @@ export default function Structuring() {
     } catch { setRunning(false); alert("Failed to start"); }
   };
 
-  const report: CleaningReport | null = results?.result as CleaningReport | null;
+  // The Celery task stores { schema, cleaning, quality, ... } — the cleaning
+  // report (with steps/totals) lives under `result.cleaning`, NOT `result`.
+  const report: CleaningReport | null = results?.result?.cleaning ?? null;
+  const quality = results?.result?.quality ?? null;
   const retentionPct = report ? Math.round((report.final_rows / Math.max(report.original_rows, 1)) * 100) : 0;
 
   return (
@@ -118,12 +132,7 @@ export default function Structuring() {
             {running ? "Processing..." : "Run Structuring"}
           </button>
 
-          {task && running && (
-            <div style={{marginTop: 16}}>
-              <div className="progress-bar"><div className="progress-bar__fill" style={{width: `${task.progress || 0}%`}} /></div>
-              <p style={{fontSize: 12, color: "var(--dash-text-muted)", marginTop: 6}}>{task.progress_message || "Processing..."}</p>
-            </div>
-          )}
+          <TaskMonitor task={task} steps={steps} stuck={stuck} progressPct={progressPct} running={running} />
         </div>
 
         {/* ── Results Panel ── */}
@@ -141,6 +150,19 @@ export default function Structuring() {
               {/* ── Visual Tab ── */}
               {tab === "visual" && (
                 <div className="struct-visual">
+                  {/* Quality score banner */}
+                  {quality && typeof quality.overall_score === "number" && (
+                    <div style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      padding: "12px 16px", marginBottom: 16, borderRadius: 12,
+                      background: "var(--dash-primary-dim)", border: "1px solid var(--dash-border)",
+                    }}>
+                      <span style={{fontSize: 13, fontWeight: 600, color: "var(--dash-text)"}}>Data Quality Score</span>
+                      <span style={{fontSize: 15, fontWeight: 800, color: "var(--dash-primary)"}}>
+                        {quality.overall_score}{quality.grade ? ` · Grade ${quality.grade}` : ""}
+                      </span>
+                    </div>
+                  )}
                   {/* Summary stat cards */}
                   <div className="struct-stats-grid">
                     <div className="struct-stat-card">
@@ -180,10 +202,10 @@ export default function Structuring() {
                   </div>
 
                   {/* Steps timeline */}
-                  {report.steps.length > 0 && (
+                  {(report.steps?.length ?? 0) > 0 && (
                     <div className="struct-timeline">
                       <h4>Cleaning Pipeline</h4>
-                      {report.steps.map((step, i) => (
+                      {(report.steps ?? []).map((step, i) => (
                         <div key={i} className="struct-timeline__step">
                           <div className="struct-timeline__dot" />
                           <div className="struct-timeline__content">
@@ -212,7 +234,7 @@ export default function Structuring() {
                       <tr><th>Step</th><th>Description</th><th>Before</th><th>After</th><th>Affected</th><th>Columns</th></tr>
                     </thead>
                     <tbody>
-                      {report.steps.map((step, i) => (
+                      {(report.steps ?? []).map((step, i) => (
                         <tr key={i}>
                           <td style={{fontWeight: 600, color: "var(--dash-text)"}}>{step.step.replace(/_/g, " ")}</td>
                           <td>{step.description}</td>

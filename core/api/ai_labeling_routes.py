@@ -3,6 +3,7 @@ AI-Powered Labeling API — trigger AI label prediction, synthetic generation,
 similarity propagation, aggregation, and active learning.
 """
 
+import asyncio
 from typing import Optional
 from uuid import UUID
 
@@ -32,6 +33,7 @@ class AILabelRequest(BaseModel):
     version_number: Optional[int] = None
     text_column: str = "text"
     examples: Optional[list[dict]] = None
+    instructions: Optional[str] = None
     provider: Optional[str] = None
     model_name: Optional[str] = None
 
@@ -68,6 +70,18 @@ class AggregateRequest(BaseModel):
 class ActiveLearningRequest(BaseModel):
     dataset_id: UUID
     top_n: int = 20
+
+
+class PreviewRequest(BaseModel):
+    dataset_id: UUID
+    labels: list[str]
+    version_number: Optional[int] = None
+    text_column: str = "text"
+    examples: Optional[list[dict]] = None
+    instructions: Optional[str] = None
+    provider: Optional[str] = None
+    model_name: Optional[str] = None
+    sample_size: int = Field(default=5, ge=1, le=10)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -205,6 +219,7 @@ async def predict_labels(
             "temperature": llm_config.temperature,
             "max_tokens": llm_config.max_tokens,
             "examples": payload.examples,
+            "instructions": payload.instructions,
         },
         task_id=celery_task_id,
     )
@@ -214,6 +229,76 @@ async def predict_labels(
         celery_task_id=celery_task_id,
         message=f"AI label prediction started for dataset {dataset.name} v{version.version_number}",
     )
+
+
+@router.post("/preview")
+async def preview_predictions(
+    payload: PreviewRequest,
+    current_user: User = Depends(require_annotator),
+    db: AsyncSession = Depends(get_db),
+):
+    """Classify the first few rows of a dataset synchronously.
+
+    Lets the user sanity-check their labels, few-shot examples and custom
+    instructions before launching a full prediction run.
+    """
+    if not payload.labels:
+        raise HTTPException(status_code=400, detail="Provide at least one label.")
+
+    _dataset, version = await _resolve_dataset_version(
+        db, payload.dataset_id, payload.version_number
+    )
+    llm_config = await _get_user_llm_config(
+        db, current_user.id, payload.provider, payload.model_name
+    )
+
+    # Load the dataset file off the event loop (blocking download + parse).
+    from data_intelligence.tasks.structuring_tasks import _load_dataset_file
+
+    try:
+        df = await asyncio.to_thread(
+            _load_dataset_file, str(payload.dataset_id), version.version_number
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not read dataset file: {exc}")
+
+    if payload.text_column not in df.columns:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Column '{payload.text_column}' not found. Available: {list(df.columns)}",
+        )
+
+    texts = (
+        df[payload.text_column].dropna().astype(str).head(payload.sample_size).tolist()
+    )
+    if not texts:
+        raise HTTPException(status_code=400, detail="No text rows found to preview.")
+
+    from core.llm.service import LLMService
+
+    service = LLMService(llm_config)
+    results = await asyncio.gather(
+        *[
+            service.classify(t, payload.labels, payload.examples, payload.instructions)
+            for t in texts
+        ]
+    )
+
+    predictions = [
+        {
+            "text": t,
+            "label": r.get("label"),
+            "confidence": round(float(r.get("confidence", 0.0)), 3),
+            "reasoning": r.get("reasoning", ""),
+        }
+        for t, r in zip(texts, results)
+    ]
+    return {
+        "predictions": predictions,
+        "model": llm_config.model_name,
+        "provider": llm_config.provider.value,
+        "sample_size": len(predictions),
+    }
 
 
 @router.post("/predict-images", response_model=AILabelResponse, status_code=status.HTTP_202_ACCEPTED)

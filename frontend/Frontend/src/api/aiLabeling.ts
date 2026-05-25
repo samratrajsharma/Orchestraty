@@ -1,10 +1,19 @@
 import api from "./client";
 
+export interface AIExample { text: string; label: string }
+
 export const aiLabelingApi = {
   predict: (data: {
     dataset_id: string; labels: string[]; text_column?: string;
-    provider?: string; model_name?: string; examples?: Record<string, string>[];
+    provider?: string; model_name?: string;
+    examples?: AIExample[]; instructions?: string;
   }) => api.post("/labeling/ai/predict", data),
+
+  preview: (data: {
+    dataset_id: string; labels: string[]; text_column?: string;
+    provider?: string; model_name?: string;
+    examples?: AIExample[]; instructions?: string; sample_size?: number;
+  }) => api.post("/labeling/ai/preview", data),
 
   predictImages: (data: {
     dataset_id: string; labels: string[];

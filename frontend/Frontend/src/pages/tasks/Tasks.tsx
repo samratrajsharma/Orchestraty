@@ -100,9 +100,9 @@ export default function Tasks() {
                     <td>
                       <div style={{display:"flex", alignItems:"center", gap: 8}}>
                         <div className="progress-bar" style={{flex: 1, maxWidth: 100}}>
-                          <div className="progress-bar__fill" style={{width: `${t.progress}%`}} />
+                          <div className="progress-bar__fill" style={{width: `${Math.round((t.progress || 0) * 100)}%`}} />
                         </div>
-                        <span style={{fontSize: 12, color: "var(--dash-text-muted)"}}>{t.progress}%</span>
+                        <span style={{fontSize: 12, color: "var(--dash-text-muted)"}}>{Math.round((t.progress || 0) * 100)}%</span>
                       </div>
                     </td>
                     <td>{new Date(t.created_at).toLocaleString()}</td>

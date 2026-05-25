@@ -29,7 +29,7 @@ export default function Workflows() {
     Promise.all([
       workflowApi.list().then((r) => setWorkflows(Array.isArray(r.data) ? r.data : [])),
       workflowApi.getTemplates().then((r) => setTemplates(Array.isArray(r.data) ? r.data : [])),
-      datasetApi.list({ limit: 100 }).then((r) => setDatasets(Array.isArray(r.data) ? r.data : r.data.datasets || [])),
+      datasetApi.list({ limit: 100 }).then((r) => setDatasets((Array.isArray(r.data) ? r.data : r.data.datasets || []).filter((d: {source_type?: string}) => d.source_type !== "image"))),
     ]).catch(() => {}).finally(() => setLoading(false));
   }, []);
 

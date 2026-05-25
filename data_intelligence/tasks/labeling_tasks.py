@@ -110,7 +110,9 @@ def run_labeling_pipeline(
         }
 
         update_task_progress(db, celery_task_id, 0.95, "Finalizing labeling results...")
-        complete_task(db, celery_task_id, result=result)
+        # Sanitize numpy / NaN values so PostgreSQL JSONB accepts the result.
+        from data_intelligence.tasks.structuring_tasks import _json_safe
+        complete_task(db, celery_task_id, result=_json_safe(result))
         logger.info("Labeling complete for dataset %s: %d/%d labeled",
                      dataset_id, labeling_report.labeled_count, len(labeled_df))
         return result

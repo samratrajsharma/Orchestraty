@@ -36,10 +36,10 @@ export default function Login() {
     <div className="auth-page">
       <div className="auth-bg" />
       <div className="auth-card">
-        <div className="auth-logo">
+        <Link to="/" className="auth-logo">
           <OrchestrateIcon size={36} />
           <span>Orchestraty</span>
-        </div>
+        </Link>
         <h1>Welcome back</h1>
         <p className="auth-subtitle">Sign in to your workspace</p>
 

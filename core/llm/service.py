@@ -77,11 +77,18 @@ class LLMService:
         text: str,
         labels: list[str],
         examples: list[dict] | None = None,
+        instructions: str | None = None,
     ) -> dict:
-        """Classify *text* into one of *labels* using the LLM."""
+        """Classify *text* into one of *labels* using the LLM.
+
+        *instructions* is an optional plain-English description of how to decide
+        the label; it is injected into the prompt ahead of any examples.
+        """
         examples_block = ""
+        if instructions and instructions.strip():
+            examples_block += f"Task instructions: {instructions.strip()}\n\n"
         if examples:
-            examples_block = "Examples:\n"
+            examples_block += "Examples:\n"
             for ex in examples:
                 examples_block += f'  - Text: "{ex.get("text", "")}" -> Label: "{ex.get("label", "")}"\n'
             examples_block += "\n"

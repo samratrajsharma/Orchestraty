@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { datasetApi } from "../../api/datasets";
 import { edaApi } from "../../api/eda";
 import { useTaskPolling } from "../../hooks/usePolling";
+import TaskMonitor from "../../components/TaskMonitor/TaskMonitor";
 import "./EDA.css";
 
 /* ── Types ── */
@@ -205,11 +206,11 @@ export default function EDA() {
   const [profileData, setProfileData] = useState<ProfileData | null>(null);
   const [running, setRunning] = useState(false);
   const [tab, setTab] = useState<"overview" | "columns" | "correlations" | "distributions" | "raw">("overview");
-  const { task } = useTaskPolling(taskId);
+  const { task, steps, stuck, progressPct } = useTaskPolling(taskId);
 
   useEffect(() => {
     datasetApi.list({ limit: 100 }).then((r) => {
-      setDatasets(Array.isArray(r.data) ? r.data : r.data.datasets || []);
+      setDatasets((Array.isArray(r.data) ? r.data : r.data.datasets || []).filter((d: {source_type?: string}) => d.source_type !== "image"));
     }).catch(() => {});
   }, []);
 
@@ -287,12 +288,7 @@ export default function EDA() {
           <button className="btn btn--primary" onClick={handleRun} disabled={!datasetId || running}>
             {running ? "Running..." : "Run EDA"}
           </button>
-          {task && running && (
-            <div style={{marginTop: 16}}>
-              <div className="progress-bar"><div className="progress-bar__fill" style={{width: `${task.progress || 0}%`}} /></div>
-              <p style={{fontSize: 12, color: "var(--dash-text-muted)", marginTop: 6}}>{task.progress_message || "Processing..."}</p>
-            </div>
-          )}
+          <TaskMonitor task={task} steps={steps} stuck={stuck} progressPct={progressPct} running={running} />
 
           {/* Summary stats when profile loaded */}
           {profileData && (

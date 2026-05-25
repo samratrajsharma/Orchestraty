@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { datasetApi } from "../../api/datasets";
 import { imageApi } from "../../api/images";
 import { useTaskPolling } from "../../hooks/usePolling";
+import TaskMonitor from "../../components/TaskMonitor/TaskMonitor";
 import "./ImagePipeline.css";
 
 interface ImageAsset {
@@ -13,7 +15,7 @@ interface ImageAsset {
 const PAGE_SIZE = 50;
 
 export default function ImagePipeline() {
-  const [datasets, setDatasets] = useState<Array<{id:string; name:string}>>([]);
+  const [datasets, setDatasets] = useState<Array<{id:string; name:string; source_type?:string}>>([]);
   const [datasetId, setDatasetId] = useState("");
   const [tab, setTab] = useState<"gallery" | "clusters" | "search">("gallery");
   const [gallery, setGallery] = useState<ImageAsset[]>([]);
@@ -25,18 +27,17 @@ export default function ImagePipeline() {
   const [searchTopK, setSearchTopK] = useState(20);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [selectedImage, setSelectedImage] = useState<ImageAsset | null>(null);
-  const [dragOver, setDragOver] = useState(false);
   const [searchError, setSearchError] = useState("");
   const [clusterFilter, setClusterFilter] = useState<number | null>(null);
-  const { task } = useTaskPolling(taskId);
-  const folderInputRef = useRef<HTMLInputElement>(null);
-  const dropRef = useRef<HTMLDivElement>(null);
+  const { task, steps, stuck, progressPct } = useTaskPolling(taskId);
 
   useEffect(() => {
+    // Only image-type datasets are usable here — they are created and
+    // populated on the Datasets page.
     datasetApi.list({ limit: 100 }).then((r) => {
-      setDatasets(Array.isArray(r.data) ? r.data : r.data.datasets || []);
+      const all = Array.isArray(r.data) ? r.data : r.data.datasets || [];
+      setDatasets(all.filter((d: {source_type?: string}) => d.source_type === "image"));
     }).catch(() => {});
   }, []);
 
@@ -57,39 +58,12 @@ export default function ImagePipeline() {
     if (task?.status === "failed") setRunning(false);
   }, [task?.status, loadGallery]);
 
-  const uploadFiles = async (files: File[]) => {
-    if (!datasetId || files.length === 0) return;
-    const imageFiles = files.filter(f => f.type.startsWith("image/"));
-    if (imageFiles.length === 0) { alert("No image files found"); return; }
-    setUploading(true);
-    try {
-      if (imageFiles.length === 1) {
-        await imageApi.upload(datasetId, imageFiles[0]);
-      } else {
-        // Upload in batches of 20
-        for (let i = 0; i < imageFiles.length; i += 20) {
-          const batch = imageFiles.slice(i, i + 20);
-          await imageApi.uploadBatch(datasetId, batch);
-        }
-      }
-      setPage(0);
-      loadGallery();
-    } catch { alert("Upload failed"); }
-    finally { setUploading(false); }
-  };
-
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.length) return;
-    uploadFiles(Array.from(e.target.files));
-    e.target.value = "";
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    if (!datasetId) { alert("Select a dataset first"); return; }
-    const files = Array.from(e.dataTransfer.files);
-    uploadFiles(files);
+  // Proxied image URLs are loaded by <img> tags, which cannot send an
+  // Authorization header — append the JWT as a query param so they resolve.
+  const withToken = (url?: string | null): string => {
+    if (!url) return "";
+    const token = localStorage.getItem("orc_token") || "";
+    return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
   };
 
   const runEmbeddings = async () => {
@@ -157,40 +131,18 @@ export default function ImagePipeline() {
     <div>
       <div className="page-header">
         <h1>Image Pipeline</h1>
-        <p>Upload, embed, cluster, and search images with CLIP</p>
+        <p>Select an image dataset to embed, cluster, and search its images with CLIP</p>
       </div>
 
       {/* Controls */}
       <div className="card" style={{marginBottom: 20}}>
         <div style={{display:"flex", gap: 12, alignItems:"center", flexWrap: "wrap"}}>
-          <div className="input-group" style={{marginBottom: 0, minWidth: 200}}>
+          <div className="input-group" style={{marginBottom: 0, minWidth: 240}}>
             <select value={datasetId} onChange={(e) => { setDatasetId(e.target.value); setPage(0); setClusterFilter(null); }}>
-              <option value="">Select dataset</option>
+              <option value="">Select image dataset</option>
               {datasets.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
           </div>
-
-          {/* File upload */}
-          <label className="btn btn--secondary" style={{position:"relative"}}>
-            {uploading ? "Uploading..." : "Upload Images"}
-            <input type="file" accept="image/*" multiple onChange={handleUpload}
-              style={{position:"absolute", opacity: 0, width: "100%", height: "100%", top: 0, left: 0, cursor:"pointer"}} />
-          </label>
-
-          {/* Folder upload */}
-          <button className="btn btn--secondary" onClick={() => folderInputRef.current?.click()} disabled={!datasetId || uploading}>
-            Upload Folder
-          </button>
-          <input
-            ref={folderInputRef}
-            type="file"
-            /* @ts-expect-error webkitdirectory is valid but not in TS types */
-            webkitdirectory=""
-            directory=""
-            multiple
-            onChange={handleUpload}
-            style={{display: "none"}}
-          />
 
           <button className="btn btn--primary" onClick={runEmbeddings} disabled={!datasetId || running}>
             Generate Embeddings
@@ -202,12 +154,18 @@ export default function ImagePipeline() {
             Load Clusters
           </button>
         </div>
-        {task && running && (
-          <div style={{marginTop: 12}}>
-            <div className="progress-bar"><div className="progress-bar__fill" style={{width: `${task.progress || 0}%`}} /></div>
-            <p style={{fontSize: 12, color: "var(--dash-text-muted)", marginTop: 4}}>{task.progress_message || "Processing..."}</p>
-          </div>
+
+        {/* Image datasets are created & populated on the Datasets page */}
+        {!datasetId && (
+          <p style={{marginTop: 12, fontSize: 13, color: "var(--dash-text-muted)"}}>
+            {datasets.length === 0
+              ? <>No image datasets yet. Create one on the{" "}
+                  <Link to="/app/datasets" style={{color:"var(--dash-primary)", fontWeight:600}}>Datasets page</Link>
+                  {" "}— choose &quot;Image dataset&quot; and upload your images there.</>
+              : "Select an image dataset above to view, embed, cluster and search its images."}
+          </p>
         )}
+        <TaskMonitor task={task} steps={steps} stuck={stuck} progressPct={progressPct} running={running} />
       </div>
 
       {/* Tabs */}
@@ -219,19 +177,7 @@ export default function ImagePipeline() {
 
       {/* ── Gallery Tab ── */}
       {tab === "gallery" && (
-        <div
-          ref={dropRef}
-          className={`img-drop-zone ${dragOver ? "img-drop-zone--active" : ""}`}
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={handleDrop}
-        >
-          {dragOver && (
-            <div className="img-drop-overlay">
-              <span>Drop images here to upload</span>
-            </div>
-          )}
-
+        <div>
           {/* Cluster filter bar */}
           {clusterIds.length > 0 && (
             <div className="cluster-filter-bar">
@@ -254,7 +200,7 @@ export default function ImagePipeline() {
                   <div key={img.id} className="image-card" onClick={() => setSelectedImage(img)}>
                     <div className="image-card__img">
                       {img.thumbnail_url ? (
-                        <img src={img.thumbnail_url} alt={img.file_name} loading="lazy" />
+                        <img src={withToken(img.thumbnail_url)} alt={img.file_name} loading="lazy" />
                       ) : (
                         <div className="image-card__placeholder">No preview</div>
                       )}
@@ -287,8 +233,8 @@ export default function ImagePipeline() {
             </>
           ) : (
             <div className="empty-state">
-              <h3>No images</h3>
-              <p>Upload images or drag &amp; drop files here to get started</p>
+              <h3>No images in this dataset</h3>
+              <p>Images are added when the dataset is created on the Datasets page</p>
             </div>
           )}
         </div>
@@ -325,7 +271,7 @@ export default function ImagePipeline() {
                   {assets.slice(0, 8).map((img) => (
                     <div key={img.id} className="image-card" onClick={() => setSelectedImage(img)}>
                       <div className="image-card__img">
-                        {img.thumbnail_url ? <img src={img.thumbnail_url} alt={img.file_name} loading="lazy" /> :
+                        {img.thumbnail_url ? <img src={withToken(img.thumbnail_url)} alt={img.file_name} loading="lazy" /> :
                           <div className="image-card__placeholder">No preview</div>}
                       </div>
                       <div className="image-card__info">
@@ -378,7 +324,7 @@ export default function ImagePipeline() {
               {searchResults.map((r) => (
                 <div key={r.asset.id} className="image-card" onClick={() => setSelectedImage(r.asset)}>
                   <div className="image-card__img">
-                    {r.asset.thumbnail_url ? <img src={r.asset.thumbnail_url} alt={r.asset.file_name} loading="lazy" /> :
+                    {r.asset.thumbnail_url ? <img src={withToken(r.asset.thumbnail_url)} alt={r.asset.file_name} loading="lazy" /> :
                       <div className="image-card__placeholder">No preview</div>}
                   </div>
                   <div className="image-card__info">
@@ -398,7 +344,7 @@ export default function ImagePipeline() {
           <div className="img-modal" onClick={(e) => e.stopPropagation()}>
             <button className="img-modal__close" onClick={() => setSelectedImage(null)}>&times;</button>
             <div className="img-modal__image">
-              <img src={selectedImage.original_url || selectedImage.thumbnail_url || ""} alt={selectedImage.file_name} />
+              <img src={withToken(selectedImage.original_url || selectedImage.thumbnail_url)} alt={selectedImage.file_name} />
             </div>
             <div className="img-modal__details">
               <h3>{selectedImage.file_name}</h3>
@@ -430,7 +376,7 @@ export default function ImagePipeline() {
               </div>
               <div style={{display: "flex", gap: 8, marginTop: 16}}>
                 {selectedImage.original_url && (
-                  <a href={selectedImage.original_url} target="_blank" rel="noopener noreferrer" className="btn btn--sm btn--primary">
+                  <a href={withToken(selectedImage.original_url)} target="_blank" rel="noopener noreferrer" className="btn btn--sm btn--primary">
                     View Full Size
                   </a>
                 )}

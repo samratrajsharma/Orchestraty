@@ -159,10 +159,18 @@
   color: var(--color-text-secondary);
 }
 
+.pricing__billing-note {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--color-primary);
+  margin-top: -2px;
+}
+
 .pricing__plan-desc {
   font-size: 14px;
   color: var(--color-text-secondary);
   line-height: 1.5;
+  margin-top: 4px;
 }
 
 /* CTA */

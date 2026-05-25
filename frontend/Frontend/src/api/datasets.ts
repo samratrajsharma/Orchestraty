@@ -20,6 +20,7 @@ export const datasetApi = {
   },
   getVersions: (id: string) => api.get(`/datasets/${id}/versions`),
   getPermissions: (id: string) => api.get(`/datasets/${id}/permissions`),
+  getColumns: (id: string) => api.get<{ columns: string[] }>(`/datasets/${id}/columns`),
 };
 
 export function inferSourceTypeFromFile(file: File): DatasetCreatePayload["source_type"] {

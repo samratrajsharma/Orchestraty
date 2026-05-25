@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Link, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import OrchestrateIcon from "../components/Logo/AntigravityLogo";
 import "./DashboardLayout.css";
@@ -57,10 +57,10 @@ export default function DashboardLayout() {
     <div className={`dash ${collapsed ? "dash--collapsed" : ""}`}>
       <aside className="dash__sidebar">
         <div className="dash__sidebar-header">
-          <div className="dash__logo">
+          <Link to="/" className="dash__logo" title="Go to Orchestraty home">
             <OrchestrateIcon size={28} />
             {!collapsed && <span className="dash__brand">Orchestraty</span>}
-          </div>
+          </Link>
           <button className="dash__toggle" onClick={() => setCollapsed(!collapsed)}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               {collapsed ? <path d="M9 18l6-6-6-6"/> : <path d="M15 18l-6-6 6-6"/>}

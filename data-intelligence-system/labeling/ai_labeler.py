@@ -66,6 +66,7 @@ def predict_text_labels(
     config: LLMConfig,
     batch_size: int = 10,
     examples: list[dict] | None = None,
+    instructions: str | None = None,
 ) -> AILabelingReport:
     """Predict labels for a list of text items using the configured LLM.
 
@@ -75,6 +76,7 @@ def predict_text_labels(
         config: LLM provider configuration.
         batch_size: Number of texts to process before yielding control (for logging).
         examples: Optional few-shot examples as ``[{"text": ..., "label": ...}]``.
+        instructions: Optional plain-English guidance on how to assign labels.
 
     Returns:
         An :class:`AILabelingReport` with all predictions.
@@ -101,7 +103,7 @@ def predict_text_labels(
         nonlocal total_confidence
         for idx, text in enumerate(texts):
             try:
-                result = await service.classify(text, labels, examples)
+                result = await service.classify(text, labels, examples, instructions)
                 predicted_label = result.get("label") or ""
                 confidence = float(result.get("confidence", 0.0))
                 reasoning = result.get("reasoning", "")

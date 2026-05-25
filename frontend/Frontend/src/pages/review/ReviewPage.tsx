@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { datasetApi } from "../../api/datasets";
 import { reviewApi } from "../../api/review";
 import { useTaskPolling } from "../../hooks/usePolling";
+import TaskMonitor from "../../components/TaskMonitor/TaskMonitor";
 
 export default function ReviewPage() {
   const [datasets, setDatasets] = useState<Array<{id:string; name:string}>>([]);
@@ -17,11 +18,11 @@ export default function ReviewPage() {
   const [reviewActions, setReviewActions] = useState<Array<{item_id: string; action: string; new_label?: string}>>([]);
   const [newAction, setNewAction] = useState({item_id: "", action: "approve", new_label: ""});
   const [datasetStatus, setDatasetStatus] = useState("");
-  const { task } = useTaskPolling(taskId);
+  const { task, steps, stuck, progressPct } = useTaskPolling(taskId);
 
   useEffect(() => {
     datasetApi.list({ limit: 100 }).then((r) => {
-      setDatasets(Array.isArray(r.data) ? r.data : r.data.datasets || []);
+      setDatasets((Array.isArray(r.data) ? r.data : r.data.datasets || []).filter((d: {source_type?: string}) => d.source_type !== "image"));
     }).catch(() => {});
   }, []);
 
@@ -132,11 +133,7 @@ export default function ReviewPage() {
             <button className="btn btn--primary" onClick={runQuality} disabled={!datasetId || running}>
               {running ? "Evaluating..." : "Evaluate Quality"}
             </button>
-            {task && running && (
-              <div style={{marginTop: 12}}>
-                <div className="progress-bar"><div className="progress-bar__fill" style={{width: `${task.progress || 0}%`}} /></div>
-              </div>
-            )}
+            <TaskMonitor task={task} steps={steps} stuck={stuck} progressPct={progressPct} running={running} />
           </div>
           <div className="card">
             <div className="card-header"><h3>Quality Results</h3></div>
