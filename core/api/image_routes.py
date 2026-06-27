@@ -23,11 +23,9 @@ from sqlalchemy import select, func, case, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from core.middleware.rbac import require_viewer
 from core.models.dataset import Dataset, DatasetVersion
 from core.models.image_asset import ImageAsset
-from core.models.user import User
-from core.services.auth_service import get_current_user, decode_access_token
+from core.services.auth_service import User, get_current_user
 from core.services.task_service import create_task_record
 from core.settings import settings
 from core.storage import get_minio_client as _get_minio_client
@@ -86,6 +84,7 @@ class ImageBatchResponse(BaseModel):
 class GalleryResponse(BaseModel):
     images: list[ImageAssetResponse]
     total: int
+    embedded_count: int = 0
 
 
 class ImageTaskResponse(BaseModel):
@@ -177,48 +176,21 @@ def _asset_to_response(asset: ImageAsset, mc: Minio) -> ImageAssetResponse:
 async def _user_from_header_or_query(
     request: Request,
     token: Optional[str] = Query(
-        None, description="JWT — lets browser <img>/<a> tags authenticate the image proxy"
+        None, description="Legacy — ignored in single-user mode."
     ),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Resolve the current user from the Authorization header OR a ``?token=``
-    query parameter.
+    """Image-proxy auth dependency.
 
-    The image proxy endpoint is loaded by browser ``<img>`` tags, which cannot
-    attach an ``Authorization`` header. Accepting the JWT as a query parameter
-    lets those tags authenticate so uploaded images actually render.
+    Phase D — auth is gone. This used to decode a token from the
+    ``Authorization`` header or a ``?token=`` query parameter, because
+    browser ``<img>`` tags can't attach headers. With token validation
+    gone, it simply delegates to :func:`get_current_user`, which returns
+    the local user. The ``request`` and ``token`` parameters are kept so
+    existing call sites and URL shapes (``?token=…``) don't break.
     """
-    raw: Optional[str] = None
-    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
-    if auth_header and auth_header.lower().startswith("bearer "):
-        raw = auth_header[7:].strip()
-    elif token:
-        raw = token.strip()
-
-    if not raw:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    payload = decode_access_token(raw)
-    email = payload.get("sub")
-    if not email:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalars().first()
-    if user is None or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found or inactive",
-        )
-    return user
+    _ = request, token  # explicitly unused in single-user mode
+    return await get_current_user()
 
 
 async def _validate_dataset(db: AsyncSession, dataset_id: UUID) -> Dataset:
@@ -337,7 +309,7 @@ async def _process_single_upload(
 async def upload_single_image(
     dataset_id: UUID,
     file: UploadFile = File(...),
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a single image to a dataset."""
@@ -361,7 +333,7 @@ async def upload_single_image(
 async def upload_batch_images(
     dataset_id: UUID,
     files: list[UploadFile] = File(...),
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload multiple images to a dataset in a single request."""
@@ -400,13 +372,69 @@ async def upload_batch_images(
     )
 
 
+class ModelStatusResponse(BaseModel):
+    model: str
+    ready: bool
+    loaded: bool
+
+
+@router.get("/model/status", response_model=ModelStatusResponse)
+async def clip_model_status(current_user: User = Depends(get_current_user)):
+    """Whether the CLIP model is available locally (no download needed).
+
+    Declared before the /{dataset_id}/{asset_id} route so the literal "model"
+    segment is not parsed as a dataset UUID.
+    """
+    from image_pipeline.clip_embedder import clip_model_ready, clip_model_loaded
+    name = settings.CLIP_MODEL_NAME
+    return ModelStatusResponse(
+        model=name,
+        ready=clip_model_ready(name),
+        loaded=clip_model_loaded(name),
+    )
+
+
+@router.post(
+    "/model/prepare",
+    response_model=ImageTaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def clip_model_prepare(
+    dataset_id: UUID = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Start a tracked, one-time CLIP model download/load so the UI can show
+    live progress (reuses the background-task progress bar)."""
+    await _validate_dataset(db, dataset_id)
+    celery_task_id = str(_uuid.uuid4())
+    task_record = await create_task_record(
+        db=db,
+        celery_task_id=celery_task_id,
+        task_type="image_model_prepare",
+        dataset_id=dataset_id,
+        parameters={"model": settings.CLIP_MODEL_NAME},
+    )
+    await db.commit()
+    from data_intelligence.tasks.image_tasks import prepare_clip_model
+    prepare_clip_model.apply_async(
+        kwargs={"dataset_id": str(dataset_id)},
+        task_id=celery_task_id,
+    )
+    return ImageTaskResponse(
+        task_id=task_record.id,
+        celery_task_id=celery_task_id,
+        message="Model preparation started",
+    )
+
+
 @router.get("/{dataset_id}/gallery", response_model=GalleryResponse)
 async def get_gallery(
     dataset_id: UUID,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     cluster_id: Optional[int] = Query(None),
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Return paginated image gallery with presigned thumbnail URLs."""
@@ -420,6 +448,14 @@ async def get_gallery(
     # Total count
     count_stmt = select(func.count(ImageAsset.id)).where(*where_clauses)
     total = (await db.execute(count_stmt)).scalar() or 0
+
+    # How many images in this dataset already have an embedding (drives the
+    # "embeddings done — clustering/search unlocked" state in the UI).
+    embedded_stmt = select(func.count(ImageAsset.id)).where(
+        ImageAsset.dataset_id == dataset_id,
+        ImageAsset.embedding_id.is_not(None),
+    )
+    embedded_count = (await db.execute(embedded_stmt)).scalar() or 0
 
     # Paginated query
     stmt = (
@@ -436,6 +472,7 @@ async def get_gallery(
     return GalleryResponse(
         images=[_asset_to_response(a, mc) for a in rows],
         total=total,
+        embedded_count=embedded_count,
     )
 
 
@@ -443,7 +480,7 @@ async def get_gallery(
 async def get_image_detail(
     dataset_id: UUID,
     asset_id: UUID,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Return full metadata and presigned URLs for a single image asset."""
@@ -468,7 +505,7 @@ async def get_image_detail(
 )
 async def trigger_embeddings(
     dataset_id: UUID,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger async CLIP embedding generation for all images in a dataset."""
@@ -481,7 +518,6 @@ async def trigger_embeddings(
         celery_task_id=celery_task_id,
         task_type="image_embeddings",
         dataset_id=dataset_id,
-        created_by=current_user.id,
         parameters={"model": settings.CLIP_MODEL_NAME},
     )
 
@@ -510,7 +546,7 @@ async def trigger_embeddings(
 async def trigger_clustering(
     dataset_id: UUID,
     payload: ClusterRequest = ClusterRequest(),
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger async image clustering based on CLIP embeddings."""
@@ -523,7 +559,6 @@ async def trigger_clustering(
         celery_task_id=celery_task_id,
         task_type="image_clustering",
         dataset_id=dataset_id,
-        created_by=current_user.id,
         parameters={"min_cluster_size": payload.min_cluster_size},
     )
 
@@ -549,7 +584,7 @@ async def trigger_clustering(
 @router.get("/{dataset_id}/clusters")
 async def get_clusters(
     dataset_id: UUID,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Return clustering results: cluster sizes and assets per cluster."""
@@ -608,7 +643,7 @@ async def get_clusters(
 async def search_images(
     dataset_id: UUID,
     payload: SearchRequest,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Text-to-image similarity search using CLIP embeddings and Qdrant."""
@@ -720,7 +755,7 @@ async def proxy_image_file(
 async def delete_image(
     dataset_id: UUID,
     asset_id: UUID,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete an image asset and its MinIO objects."""

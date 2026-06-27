@@ -95,6 +95,7 @@ test_data/
 
 # --- Node / Frontend ---
 node_modules/
+dist-website/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -102,7 +103,6 @@ yarn-error.log*
 out/
 .nuxt/
 .cache/
-package-lock.json
 yarn.lock
 
 # --- Alembic ---

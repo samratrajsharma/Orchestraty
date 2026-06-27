@@ -41,10 +41,6 @@ class Dataset(Base):
         default="raw",
         server_default="raw",
     )
-    created_by = Column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-    org_id = Column(String(255), nullable=True)
     created_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -62,7 +58,6 @@ class Dataset(Base):
     metadata_entries = relationship(
         "DatasetMetadata", back_populates="dataset", cascade="all, delete-orphan"
     )
-    creator = relationship("User", foreign_keys=[created_by])
 
     def __repr__(self) -> str:
         return f"<Dataset {self.name} ({self.status})>"
@@ -90,9 +85,6 @@ class DatasetVersion(Base):
         ForeignKey("dataset_versions.id", ondelete="SET NULL"),
         nullable=True,
     )
-    created_by = Column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
     created_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -100,7 +92,6 @@ class DatasetVersion(Base):
     # ── Relationships ─────────────────────────────────────────────────────
     dataset = relationship("Dataset", back_populates="versions")
     parent_version = relationship("DatasetVersion", remote_side=[id])
-    creator = relationship("User", foreign_keys=[created_by])
 
     def __repr__(self) -> str:
         return f"<DatasetVersion {self.dataset_id} v{self.version_number}>"

@@ -1,0 +1,384 @@
+/* ── Features section shell ─────────────────────────────────────── */
+.features {
+  background: #000000;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  padding: 120px 0 130px;
+}
+.features__header {
+  text-align: center;
+  max-width: 720px;
+  margin: 0 auto 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.features__eyebrow {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-primary);
+}
+.features__title {
+  font-size: clamp(32px, 4.6vw, 50px);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  color: var(--color-text);
+}
+.features__subtitle {
+  font-size: 17px;
+  color: var(--color-text-secondary);
+  line-height: 1.65;
+}
+
+/* ── Pillar buttons ─────────────────────────────────────────────── */
+.features__pills {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 22px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+.features__pill {
+  position: relative;
+  background: var(--color-surface, #181818);
+  border: 1px solid var(--color-border);
+  border-radius: 24px;
+  padding: 30px 30px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform 0.28s ease, box-shadow 0.28s ease, border-color 0.28s ease;
+  min-height: 290px;
+  overflow: hidden;
+}
+.features__pill::before {
+  /* Subtle brand sheen visible on hover for the primary pill. */
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at top right, rgba(29, 185, 84, 0.08), transparent 60%),
+              linear-gradient(135deg, rgba(29, 185, 84, 0.06), rgba(29, 185, 84, 0.04));
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
+}
+.features__pill > * { position: relative; z-index: 1; }
+
+/* ── Top row: number + kicker/badge ── */
+.features__pill-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.features__pill-index {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--color-text-secondary);
+  opacity: 0.6;
+}
+.features__pill-kicker {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 5px 11px;
+  border-radius: 100px;
+  background: linear-gradient(135deg, rgba(29, 185, 84, 0.08), rgba(29, 185, 84, 0.08));
+  color: var(--color-primary);
+}
+
+/* ── Body: title + subtitle ── */
+.features__pill-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+}
+.features__pill-label {
+  font-size: clamp(24px, 2.2vw, 28px);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  color: var(--color-text);
+}
+.features__pill-sub {
+  font-size: 14.5px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+/* ── Foot: meta + arrow ── */
+.features__pill-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #242424;
+}
+.features__pill-count {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--color-text-secondary);
+}
+.features__pill-arrow {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  font-size: 17px;
+  font-weight: 700;
+  transition: transform 0.28s ease, background 0.28s ease, color 0.28s ease;
+}
+
+/* ── Primary (clickable) pill ── */
+.features__pill--primary {
+  background: linear-gradient(180deg, #181818 0%, #141414 100%);
+  border-color: rgba(29, 185, 84, 0.22);
+}
+.features__pill--primary:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.18);
+  border-color: var(--color-primary);
+}
+.features__pill--primary:hover::before { opacity: 1; }
+.features__pill--primary:hover .features__pill-arrow {
+  background: var(--color-primary);
+  color: #fff;
+  transform: translateX(3px);
+}
+.features__pill--primary:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+/* ── "Coming soon" pill — identical scheme to the primary, differs only in content ── */
+.features__pill--soon {
+  cursor: pointer;
+  background: linear-gradient(180deg, #181818 0%, #141414 100%);
+  border-color: rgba(29, 185, 84, 0.22);
+}
+.features__pill--soon:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.18);
+  border-color: var(--color-primary);
+}
+.features__pill--soon:hover::before { opacity: 1; }
+.features__pill--soon:hover .features__pill-arrow {
+  background: var(--color-primary);
+  color: #fff;
+  transform: translateX(3px);
+}
+.features__pill--soon:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+/* Top-right status pill — same style as the primary's kicker. */
+.features__pill-badge {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 5px 11px;
+  border-radius: 100px;
+  background: linear-gradient(135deg, rgba(29, 185, 84, 0.08), rgba(29, 185, 84, 0.08));
+  color: var(--color-primary);
+}
+
+@media (max-width: 1024px) {
+  .features__pills { grid-template-columns: 1fr; max-width: 540px; }
+  .features__pill { min-height: 220px; }
+}
+
+/* ── Modal ──────────────────────────────────────────────────────── */
+.features-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(15, 15, 16, 0.55);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  animation: feat-modal-in 0.22s ease;
+}
+@keyframes feat-modal-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.features-modal__dialog {
+  background: var(--color-surface, #181818);
+  border-radius: 24px;
+  width: 100%;
+  max-width: 1080px;
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.25);
+  padding: 32px 32px 36px;
+  animation: feat-dialog-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+@keyframes feat-dialog-in {
+  from { opacity: 0; transform: scale(0.96) translateY(12px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.features-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+.features-modal__eyebrow {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-primary);
+  margin-bottom: 8px;
+}
+.features-modal__title {
+  font-size: clamp(22px, 2.6vw, 28px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+  margin-bottom: 6px;
+}
+.features-modal__subtitle {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+.features-modal__close {
+  background: #242424;
+  border: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.features-modal__close:hover {
+  background: #2a2a2a;
+  color: var(--color-text);
+}
+
+/* ── Feature tiles (bold title + hover-reveal description) ──────── */
+.features-modal__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+.feat-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  height: 200px;
+  padding: 24px;
+  border-radius: 18px;
+  background: var(--color-surface, #181818);
+  border: 1px solid var(--color-border);
+  text-decoration: none;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+  --tile-accent: #1DB954;
+}
+.feat-tile::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--tile-accent);
+  opacity: 0.55;
+  transition: opacity 0.25s ease, height 0.25s ease;
+}
+.feat-tile:hover {
+  transform: translateY(-3px);
+  border-color: var(--tile-accent);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.09);
+}
+.feat-tile:hover::before { opacity: 1; height: 4px; }
+.feat-tile__tag {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tile-accent);
+  margin-bottom: 12px;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.feat-tile__title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+  line-height: 1.25;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.feat-tile__overlay {
+  position: absolute;
+  inset: 0;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+  background: linear-gradient(180deg, rgba(20, 20, 20, 0.96) 0%, #181818 100%);
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity 0.28s ease, transform 0.28s ease;
+  pointer-events: none;
+  text-align: left;
+}
+.feat-tile:hover .feat-tile__overlay {
+  opacity: 1;
+  transform: translateY(0);
+}
+.feat-tile:hover .feat-tile__title { opacity: 0; transform: translateY(-8px); }
+.feat-tile:hover .feat-tile__tag { opacity: 0; transform: translateY(-6px); }
+.feat-tile__desc {
+  font-size: 13.5px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+.feat-tile__cta {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tile-accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 900px) {
+  .features-modal__grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 560px) {
+  .features-modal__grid { grid-template-columns: 1fr; }
+  .features-modal__dialog { padding: 24px 20px 28px; border-radius: 18px; }
+  .feat-tile { height: auto; min-height: 180px; }
+}

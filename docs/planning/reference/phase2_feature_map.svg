@@ -1,0 +1,113 @@
+<svg viewBox="0 0 700 520" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>Orchestraty Phase 2 Feature Map</title>
+  <desc>Phase 2 adds AI-powered EDA, rule-based labeling, and the Data Structuring Agent on top of Phase 1 infrastructure.</desc>
+  <style>
+    text { font-family: system-ui, -apple-system, sans-serif; }
+    .title { font-size: 15px; font-weight: 700; fill: #1a1a1a; }
+    .subtitle { font-size: 10px; fill: #6b7280; }
+    .box-label { font-size: 11px; font-weight: 600; fill: white; }
+    .box-sub { font-size: 9px; fill: rgba(255,255,255,0.85); }
+    .detail { font-size: 9.5px; fill: #1a1a1a; }
+    .detail-bold { font-size: 9.5px; font-weight: 600; fill: #1a1a1a; }
+    .phase-label { font-size: 10px; font-weight: 700; fill: #6b7280; letter-spacing: 1px; }
+    .arrow { stroke: #d1d5db; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead); }
+    .divider { stroke: #d1d5db; stroke-width: 1; stroke-dasharray: 4,3; }
+  </style>
+  <defs>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#d1d5db"/>
+    </marker>
+  </defs>
+
+  <text x="350" y="28" text-anchor="middle" class="title">Phase 2 — What Gets Built</text>
+  <text x="350" y="43" text-anchor="middle" class="subtitle">3 major features turning raw data into structured, analyzed datasets</text>
+
+  <text x="20" y="490" class="phase-label">PHASE 1 (DONE)</text>
+  <rect x="20" y="496" width="660" height="20" rx="4" fill="#d1d5db" opacity="0.3"/>
+  <text x="350" y="510" text-anchor="middle" class="subtitle">Auth + RBAC + Dataset CRUD + File Upload + MinIO + Audit Logs + PostgreSQL + Redis</text>
+
+  <line x1="20" y1="475" x2="680" y2="475" class="divider"/>
+  <text x="20" y="468" class="phase-label">PHASE 2 (NEW)</text>
+
+  <rect x="20" y="60" width="210" height="40" rx="6" fill="#1B4F72"/>
+  <text x="125" y="76" text-anchor="middle" class="box-label">Data Structuring Agent</text>
+  <text x="125" y="90" text-anchor="middle" class="box-sub">Feature 3 from build order</text>
+
+  <rect x="20" y="108" width="210" height="155" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+  <text x="32" y="126" class="detail-bold">Schema Detection</text>
+  <text x="32" y="140" class="detail">Auto-detect column types (email, date,</text>
+  <text x="32" y="152" class="detail">currency, categorical) from actual data</text>
+  <text x="32" y="170" class="detail-bold">Data Cleaning Pipelines</text>
+  <text x="32" y="184" class="detail">Nulls, duplicates, format normalization,</text>
+  <text x="32" y="196" class="detail">encoding fixes, outlier flagging</text>
+  <text x="32" y="214" class="detail-bold">Quality Scoring</text>
+  <text x="32" y="228" class="detail">Completeness + uniqueness + consistency</text>
+  <text x="32" y="242" class="detail">+ validity → single quality score (0-100)</text>
+  <text x="32" y="256" class="detail-bold">Auto status: raw → processed</text>
+
+  <rect x="245" y="60" width="210" height="40" rx="6" fill="#2E86C1"/>
+  <text x="350" y="76" text-anchor="middle" class="box-label">AI-Powered EDA</text>
+  <text x="350" y="90" text-anchor="middle" class="box-sub">Feature 3 from build order</text>
+
+  <rect x="245" y="108" width="210" height="155" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+  <text x="257" y="126" class="detail-bold">Text Embeddings</text>
+  <text x="257" y="140" class="detail">sentence-transformers → vector</text>
+  <text x="257" y="152" class="detail">representations of text columns</text>
+  <text x="257" y="170" class="detail-bold">Clustering</text>
+  <text x="257" y="184" class="detail">HDBSCAN / KMeans to discover</text>
+  <text x="257" y="196" class="detail">natural groupings in your data</text>
+  <text x="257" y="214" class="detail-bold">Statistical Profiling</text>
+  <text x="257" y="228" class="detail">Distributions, correlations, top values,</text>
+  <text x="257" y="242" class="detail">missing patterns per column</text>
+  <text x="257" y="256" class="detail-bold">LLM Category Suggestions</text>
+
+  <rect x="470" y="60" width="210" height="40" rx="6" fill="#1E8449"/>
+  <text x="575" y="76" text-anchor="middle" class="box-label">Rule-Based Labeling</text>
+  <text x="575" y="90" text-anchor="middle" class="box-sub">Feature 4 from build order</text>
+
+  <rect x="470" y="108" width="210" height="155" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+  <text x="482" y="126" class="detail-bold">Deterministic Label Engine</text>
+  <text x="482" y="140" class="detail">Regex patterns, keyword matching,</text>
+  <text x="482" y="152" class="detail">value ranges → automatic labels</text>
+  <text x="482" y="170" class="detail-bold">Rule Management API</text>
+  <text x="482" y="184" class="detail">Create, test, enable/disable rules</text>
+  <text x="482" y="196" class="detail">per dataset with priority ordering</text>
+  <text x="482" y="214" class="detail-bold">Batch Processing</text>
+  <text x="482" y="228" class="detail">Apply rules to entire datasets via</text>
+  <text x="482" y="242" class="detail">Celery async tasks (Redis queue)</text>
+  <text x="482" y="256" class="detail-bold">Label confidence scores</text>
+
+  <rect x="20" y="290" width="660" height="40" rx="6" fill="#E67E22"/>
+  <text x="350" y="306" text-anchor="middle" class="box-label">New Infrastructure: Celery Workers + Vector DB (Qdrant) + Background Tasks</text>
+  <text x="350" y="320" text-anchor="middle" class="box-sub">Async processing for heavy compute — cleaning, embedding, clustering, labeling</text>
+
+  <rect x="20" y="345" width="660" height="110" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+  <text x="350" y="363" text-anchor="middle" class="detail-bold">Phase 2 Data Flow</text>
+
+  <rect x="35" y="378" width="100" height="32" rx="4" fill="#1B4F72"/>
+  <text x="85" y="398" text-anchor="middle" class="box-sub">Raw Dataset</text>
+
+  <rect x="165" y="378" width="110" height="32" rx="4" fill="#1B4F72"/>
+  <text x="220" y="398" text-anchor="middle" class="box-sub">Schema Detect</text>
+
+  <rect x="305" y="378" width="90" height="32" rx="4" fill="#1B4F72"/>
+  <text x="350" y="398" text-anchor="middle" class="box-sub">Clean Data</text>
+
+  <rect x="425" y="378" width="80" height="32" rx="4" fill="#2E86C1"/>
+  <text x="465" y="398" text-anchor="middle" class="box-sub">EDA + Embed</text>
+
+  <rect x="535" y="378" width="90" height="32" rx="4" fill="#1E8449"/>
+  <text x="580" y="398" text-anchor="middle" class="box-sub">Rule Labels</text>
+
+  <line x1="135" y1="394" x2="163" y2="394" class="arrow"/>
+  <line x1="275" y1="394" x2="303" y2="394" class="arrow"/>
+  <line x1="395" y1="394" x2="423" y2="394" class="arrow"/>
+  <line x1="505" y1="394" x2="533" y2="394" class="arrow"/>
+
+  <text x="85" y="428" text-anchor="middle" class="subtitle">status: raw</text>
+  <text x="280" y="428" text-anchor="middle" class="subtitle">status: processed</text>
+  <text x="465" y="428" text-anchor="middle" class="subtitle">status: analyzed</text>
+  <text x="580" y="428" text-anchor="middle" class="subtitle">status: labeled</text>
+
+  <text x="350" y="448" text-anchor="middle" class="detail">All heavy operations run as background Celery tasks — non-blocking API</text>
+</svg>

@@ -42,3 +42,21 @@ app.conf.update(
         "data_intelligence.tasks.workflow_tasks",
     ],
 )
+
+
+# Optionally warm the CLIP model when each worker process boots, so the first
+# embedding request doesn't pay the model-load cost. Off by default so that
+# tabular-only users don't load a vision model into RAM (set CLIP_PRELOAD=true).
+from celery.signals import worker_process_init  # noqa: E402
+
+
+@worker_process_init.connect
+def _warm_image_models(**_kwargs):
+    try:
+        if not settings.CLIP_PRELOAD:
+            return
+        from image_pipeline.clip_embedder import load_clip_model
+        load_clip_model(settings.CLIP_MODEL_NAME)
+    except Exception as exc:  # pragma: no cover - best-effort warmup
+        import logging
+        logging.getLogger(__name__).warning("CLIP warmup skipped: %s", exc)

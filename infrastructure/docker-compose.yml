@@ -4,12 +4,28 @@ services:
       context: ..
       dockerfile: infrastructure/Dockerfile
     container_name: orchestraty-api
+    # Override the Dockerfile CMD to enable --reload so code changes on
+    # the host (bind-mounted at /app) are picked up automatically without
+    # restarting the container. This eliminates the "did -Refresh work?"
+    # confusion entirely for the API.
+    command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app
     ports:
       - "8000:8000"
     env_file:
       - ../.env
     volumes:
       - ..:/app
+      - hf_cache:/opt/hf-cache
+    environment:
+      HF_HOME: /opt/hf-cache
+      TRANSFORMERS_CACHE: /opt/hf-cache
+      SENTENCE_TRANSFORMERS_HOME: /opt/hf-cache/sentence-transformers
+    # Add host.docker.internal so the container can reach services running
+    # on the host machine (e.g. Ollama at host.docker.internal:11434).
+    # Docker Desktop on Windows/Mac sets this automatically; explicit
+    # extra_hosts ensures it works on Linux too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,6 +100,14 @@ services:
       - ../.env
     volumes:
       - ..:/app
+      - hf_cache:/opt/hf-cache
+    environment:
+      HF_HOME: /opt/hf-cache
+      TRANSFORMERS_CACHE: /opt/hf-cache
+      SENTENCE_TRANSFORMERS_HOME: /opt/hf-cache/sentence-transformers
+    # AI labeling tasks run here and need to reach Ollama on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -128,6 +152,7 @@ volumes:
   redis_data:
   qdrant_data:
   ollama_data:
+  hf_cache:
 
 networks:
   orchestraty-net:

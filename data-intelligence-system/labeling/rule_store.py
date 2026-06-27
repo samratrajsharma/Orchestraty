@@ -48,8 +48,7 @@ def save_rule_set(
         status="completed",
         progress=1.0,
         progress_message=description,
-        dataset_id=_nil_uuid(),
-        created_by=uuid.UUID(created_by) if created_by else None,
+        dataset_id=None,
         parameters={"name": name, "description": description},
         result={"name": name, "description": description, "rules": rules},
         created_at=datetime.utcnow(),
@@ -143,8 +142,7 @@ async def async_save_rule_set(
         status="completed",
         progress=1.0,
         progress_message=description,
-        dataset_id=_nil_uuid(),
-        created_by=uuid.UUID(created_by) if created_by else None,
+        dataset_id=None,
         parameters={"name": name, "description": description},
         result={"name": name, "description": description, "rules": rules},
         created_at=datetime.utcnow(),
@@ -155,6 +153,77 @@ async def async_save_rule_set(
     await db.refresh(record)
     logger.info("Async saved rule set '%s' with id %s (%d rules).", name, record.id, len(rules))
     return {"id": str(record.id), "name": name}
+
+
+async def async_load_rule_set(db, rule_set_id: str) -> dict:
+    """Load a full rule set by id (async).
+
+    Returns ``{"id", "name", "description", "rules", "created_at"}``.
+    Raises ``ValueError`` if not found.
+    """
+    record = await db.get(BackgroundTask, uuid.UUID(rule_set_id))
+    if record is None or record.task_type != TASK_TYPE:
+        raise ValueError(f"Rule set '{rule_set_id}' not found.")
+    params = record.parameters or {}
+    result_data = record.result or {}
+    return {
+        "id": str(record.id),
+        "name": params.get("name", ""),
+        "description": params.get("description", ""),
+        "rules": result_data.get("rules", []),
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+    }
+
+
+async def async_update_rule_set(
+    db,
+    rule_set_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    rules: list[dict] | None = None,
+) -> dict:
+    """Update a saved rule set's name / description / rules.
+
+    Only the supplied fields are changed. Raises ``ValueError`` if not found.
+    """
+    record = await db.get(BackgroundTask, uuid.UUID(rule_set_id))
+    if record is None or record.task_type != TASK_TYPE:
+        raise ValueError(f"Rule set '{rule_set_id}' not found.")
+    params = dict(record.parameters or {})
+    result_data = dict(record.result or {})
+    if name is not None:
+        params["name"] = name
+        result_data["name"] = name
+    if description is not None:
+        params["description"] = description
+        result_data["description"] = description
+        record.progress_message = description
+    if rules is not None:
+        result_data["rules"] = rules
+    # SQLAlchemy needs new dict refs to detect JSONB changes
+    record.parameters = params
+    record.result = result_data
+    await db.commit()
+    await db.refresh(record)
+    logger.info("Updated rule set %s", rule_set_id)
+    return {
+        "id": str(record.id),
+        "name": params.get("name", ""),
+        "description": params.get("description", ""),
+        "rules": result_data.get("rules", []),
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+    }
+
+
+async def async_delete_rule_set(db, rule_set_id: str) -> bool:
+    """Delete a saved rule set. Returns ``True`` on success."""
+    record = await db.get(BackgroundTask, uuid.UUID(rule_set_id))
+    if record is None or record.task_type != TASK_TYPE:
+        return False
+    await db.delete(record)
+    await db.commit()
+    logger.info("Deleted rule set %s", rule_set_id)
+    return True
 
 
 async def async_list_rule_sets(db) -> list[dict]:

@@ -24,6 +24,7 @@ SUPPORTED_OPERATORS = frozenset({
     "less_than",
     "greater_equal",
     "less_equal",
+    "between",
     "regex_match",
     "in_list",
     "is_null",
@@ -34,13 +35,49 @@ SUPPORTED_OPERATORS = frozenset({
 # ── Data classes ────────────────────────────────────────────────────────
 
 @dataclass
-class LabelingRule:
-    """A single labeling rule definition."""
+class RuleCondition:
+    """A single boolean condition (column, operator, value).
+
+    Multiple conditions can be combined via ``LabelingRule.logic``.
+    """
     column: str
     operator: str
     value: Any
+
+
+@dataclass
+class LabelingRule:
+    """A labeling rule.
+
+    Two shapes are accepted at load time:
+
+    1. **Compound (preferred)** — one or more :class:`RuleCondition` combined
+       with ``logic`` (``"and"`` / ``"or"``).
+    2. **Legacy flat** — top-level ``column`` / ``operator`` / ``value``
+       fields (kept for backwards compatibility with already-saved rule sets).
+       Legacy rules are normalised to a single-condition compound rule on
+       load.
+
+    The dataclass below uses the compound shape internally; ``column`` /
+    ``operator`` / ``value`` are kept as convenience properties for code
+    that still reads them.
+    """
     label: str
     priority: int = 0
+    logic: str = "and"  # "and" | "or" — irrelevant for single-condition rules
+    conditions: list[RuleCondition] = field(default_factory=list)
+
+    @property
+    def column(self) -> str:
+        return self.conditions[0].column if self.conditions else ""
+
+    @property
+    def operator(self) -> str:
+        return self.conditions[0].operator if self.conditions else ""
+
+    @property
+    def value(self) -> Any:
+        return self.conditions[0].value if self.conditions else None
 
 
 @dataclass
@@ -85,32 +122,98 @@ class RuleEngine:
     def load_rules(self, rule_defs: list[dict]) -> None:
         """Parse a list of plain dicts into :class:`LabelingRule` objects.
 
-        Raises ``ValueError`` if any rule uses an unsupported operator.
+        Accepts both shapes:
+
+        Legacy flat::
+
+            {"column": "x", "operator": "equals", "value": "y",
+             "label": "L", "priority": 0}
+
+        Compound::
+
+            {"label": "L", "priority": 0, "logic": "and",
+             "conditions": [
+                {"column": "x", "operator": "equals", "value": "y"},
+                {"column": "z", "operator": "greater_than", "value": 30},
+             ]}
+
+        Raises ``ValueError`` if any condition uses an unsupported operator
+        or if a rule has no conditions.
         """
         self.rules = []
         for idx, rd in enumerate(rule_defs):
-            operator = rd.get("operator", "")
-            if operator not in SUPPORTED_OPERATORS:
-                raise ValueError(
-                    f"Rule {idx}: unsupported operator '{operator}'. "
-                    f"Supported: {sorted(SUPPORTED_OPERATORS)}"
-                )
-            self.rules.append(
-                LabelingRule(
-                    column=rd["column"],
+            # Detect shape: compound rules have a "conditions" key.
+            raw_conditions = rd.get("conditions")
+            if raw_conditions is None:
+                # Treat as legacy flat — wrap into a single condition.
+                raw_conditions = [{
+                    "column": rd.get("column", ""),
+                    "operator": rd.get("operator", ""),
+                    "value": rd.get("value"),
+                }]
+
+            if not isinstance(raw_conditions, list) or len(raw_conditions) == 0:
+                raise ValueError(f"Rule {idx}: at least one condition is required.")
+
+            conditions: list[RuleCondition] = []
+            for cidx, cd in enumerate(raw_conditions):
+                operator = cd.get("operator", "")
+                if operator not in SUPPORTED_OPERATORS:
+                    raise ValueError(
+                        f"Rule {idx}, condition {cidx}: unsupported operator '{operator}'. "
+                        f"Supported: {sorted(SUPPORTED_OPERATORS)}"
+                    )
+                conditions.append(RuleCondition(
+                    column=cd.get("column", ""),
                     operator=operator,
-                    value=rd.get("value"),
-                    label=rd["label"],
-                    priority=rd.get("priority", 0),
-                )
-            )
+                    value=cd.get("value"),
+                ))
+
+            logic = (rd.get("logic") or "and").lower()
+            if logic not in ("and", "or"):
+                raise ValueError(f"Rule {idx}: 'logic' must be 'and' or 'or', got {logic!r}.")
+
+            self.rules.append(LabelingRule(
+                label=rd["label"],
+                priority=rd.get("priority", 0),
+                logic=logic,
+                conditions=conditions,
+            ))
         logger.info("Loaded %d labeling rules.", len(self.rules))
 
-    # ── Single-rule evaluation ──────────────────────────────────────────
+    # ── Compound-rule evaluation ────────────────────────────────────────
 
     @staticmethod
-    def _evaluate_rule(rule: LabelingRule, value: Any) -> bool:  # noqa: C901
-        """Return *True* if *value* satisfies the rule's operator + value."""
+    def _evaluate_rule(rule: LabelingRule, df: pd.DataFrame, row_idx: int) -> bool:
+        """Return *True* if *row_idx* in *df* satisfies the compound rule.
+
+        Evaluates every :class:`RuleCondition` against the relevant cell and
+        combines results via the rule's ``logic`` (``and`` / ``or``).
+        Conditions targeting missing columns are skipped (treated as False
+        for that condition).
+        """
+        if not rule.conditions:
+            return False
+        cols = df.columns
+        results: list[bool] = []
+        for cond in rule.conditions:
+            if cond.column not in cols:
+                results.append(False)
+                continue
+            try:
+                cell = df.iat[row_idx, df.columns.get_loc(cond.column)]
+                results.append(RuleEngine._evaluate_condition(cond, cell))
+            except Exception:  # noqa: BLE001
+                results.append(False)
+        if rule.logic == "or":
+            return any(results)
+        return all(results)
+
+    # ── Single-condition evaluation ─────────────────────────────────────
+
+    @staticmethod
+    def _evaluate_condition(rule: RuleCondition, value: Any) -> bool:  # noqa: C901
+        """Return *True* if *value* satisfies the condition's operator + value."""
         op = rule.operator
         target = rule.value
 
@@ -185,6 +288,21 @@ class RuleEngine:
             if op == "less_equal":
                 return num_val <= num_target
 
+        # --- between (inclusive range, numeric) ---
+        # Accepts either a list/tuple [low, high] or a comma string "low,high".
+        if op == "between":
+            low, high = _parse_range(target)
+            if low is None or high is None:
+                logger.debug("between: invalid target %r", target)
+                return False
+            try:
+                num_val = _coerce_numeric(value)
+            except (TypeError, ValueError):
+                return False
+            if low > high:
+                low, high = high, low
+            return low <= num_val <= high
+
         return False
 
     # ── Apply all rules to a DataFrame ──────────────────────────────────
@@ -223,23 +341,33 @@ class RuleEngine:
 
         out = df.copy()
 
-        # Pre-check which rules target valid columns
+        # Pre-check which rules have at least one valid column to target.
+        # A compound rule is considered "evaluatable" if AT LEAST one of its
+        # conditions references a real column — individual missing-column
+        # conditions just evaluate to False (handled in _evaluate_rule).
         valid_columns = set(df.columns)
         rule_column_valid = []
         _column_warnings: list[str] = []
         for idx, rule in enumerate(self.rules):
-            if rule.column not in valid_columns:
+            referenced = [c.column for c in rule.conditions]
+            missing = [c for c in referenced if c not in valid_columns]
+            any_valid = any(c in valid_columns for c in referenced)
+            if not any_valid:
                 logger.warning(
-                    "Rule %d targets column '%s' which does not exist — skipping.",
-                    idx, rule.column,
+                    "Rule %d targets only missing columns %s — skipping.",
+                    idx, missing,
                 )
                 rule_column_valid.append(False)
                 _column_warnings.append(
-                    f"Rule {idx} targets column '{rule.column}' which does not exist in the dataset. "
+                    f"Rule {idx} targets columns {sorted(set(missing))} which do not exist in the dataset. "
                     f"Available columns: {sorted(valid_columns)}"
                 )
             else:
                 rule_column_valid.append(True)
+                if missing:
+                    _column_warnings.append(
+                        f"Rule {idx}: some conditions reference missing columns {sorted(set(missing))} — those conditions will not match."
+                    )
 
         # Per-rule match counters
         per_rule_matches: list[int] = [0] * len(self.rules)
@@ -252,9 +380,8 @@ class RuleEngine:
             for rule_idx, rule in enumerate(self.rules):
                 if not rule_column_valid[rule_idx]:
                     continue
-                cell_value = df.iat[row_idx, df.columns.get_loc(rule.column)]
                 try:
-                    if self._evaluate_rule(rule, cell_value):
+                    if self._evaluate_rule(rule, df, row_idx):
                         matched_rules.append((rule_idx, rule))
                         per_rule_matches[rule_idx] += 1
                 except Exception:
@@ -323,3 +450,23 @@ def _coerce_numeric(val: Any) -> float:
     if isinstance(val, (int, float)):
         return float(val)
     return float(val)
+
+
+def _parse_range(target: Any) -> tuple[float | None, float | None]:
+    """Parse a between-operator value into a ``(low, high)`` tuple.
+
+    Accepts a list/tuple of two numbers, or a comma/dash-separated string like
+    ``"5,10"`` or ``"5 - 10"``. Returns ``(None, None)`` on parse failure.
+    """
+    try:
+        if isinstance(target, (list, tuple)) and len(target) == 2:
+            return float(target[0]), float(target[1])
+        if isinstance(target, str):
+            # Split on comma first, then dash (allow values like "5,10" / "5 - 10")
+            parts = target.split(",") if "," in target else target.split("-")
+            parts = [p.strip() for p in parts if p.strip()]
+            if len(parts) == 2:
+                return float(parts[0]), float(parts[1])
+    except (TypeError, ValueError):
+        pass
+    return None, None

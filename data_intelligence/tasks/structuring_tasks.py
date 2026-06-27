@@ -42,39 +42,225 @@ def _json_safe(obj):
     return obj
 
 
+def _detect_encoding(raw_bytes: bytes) -> str:
+    """Best-effort encoding detection — matches the ingestion-side helper."""
+    if raw_bytes.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-sig"
+    if raw_bytes[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return "utf-16"
+    try:
+        raw_bytes.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError:
+        pass
+    try:
+        from charset_normalizer import from_bytes as _cn_from_bytes  # type: ignore
+        result = _cn_from_bytes(raw_bytes[:65536]).best()
+        if result is not None and result.encoding:
+            return result.encoding
+    except ImportError:
+        pass
+    return "cp1252"
+
+
+def _find_data_start_line(raw_bytes: bytes, delim: str, encoding: str) -> int:
+    """Find the line index where the real tabular data starts.
+
+    Some real-world CSVs (UCI ML repository style, BI exports, kaggle
+    datasets bundled with a README) have several lines of free-text
+    metadata before the actual header row. pandas chokes on these with
+    "Expected N fields in line K, saw M". We detect this shape by finding
+    the most common *multi-field* line count — if that shape covers at
+    least a handful of lines, we treat its first occurrence as the real
+    header and skip everything above it.
+
+    NB: we deliberately ignore the modal count when it's 1, because a long
+    descriptive prelude can outnumber the actual data rows; we want the
+    most popular tabular shape, not just the popular shape overall.
+
+    Returns 0 (no skip) when the file looks normal.
+    """
+    try:
+        text = raw_bytes[:65536].decode(encoding, errors="replace")
+    except Exception:  # noqa: BLE001
+        return 0
+    lines = text.splitlines()[:200]
+    if len(lines) < 3:
+        return 0
+    counts = [(i, line.count(delim) + 1) for i, line in enumerate(lines) if line.strip()]
+    if not counts:
+        return 0
+    from collections import Counter
+    # Only consider multi-field shapes — single-field lines are almost
+    # always metadata when we have a real CSV.
+    multi_field = [c for _, c in counts if c >= 2]
+    if not multi_field:
+        return 0
+    target_count, target_freq = Counter(multi_field).most_common(1)[0]
+    # The target shape needs at least 3 occurrences to be trusted as the
+    # real table, otherwise we might be looking at a one-off bad line.
+    if target_freq < 3:
+        return 0
+    # If the very first non-empty line already matches the target, no skip.
+    if counts[0][1] == target_count:
+        return 0
+    # Find the first line whose field count matches the target shape.
+    for idx, cnt in counts:
+        if cnt == target_count:
+            return idx
+    return 0
+
+
+def _sniff_csv_delimiter(raw_bytes: bytes, ext: str) -> str:
+    """Detect the most likely CSV delimiter for the given file bytes.
+
+    Mirrors the ingestion-side sniffer (kept in two places because Celery
+    workers don't import the FastAPI ingestion module). Tries
+    :class:`csv.Sniffer` first, then falls back to "whichever delimiter
+    splits the header into the most fields", preferring comma if no
+    candidate clearly wins.
+    """
+    import csv as _csv
+    default = "\t" if ext == ".tsv" else ","
+    try:
+        enc = _detect_encoding(raw_bytes[:16384])
+        text = raw_bytes[:16384].decode(enc, errors="replace")
+    except Exception:  # noqa: BLE001
+        return default
+    if not text:
+        return default
+    # Trim to a complete line boundary so partial-line snippets don't fool
+    # the sniffer.
+    last_nl = text.rfind("\n")
+    sample = text[:last_nl] if last_nl > 200 else text
+    candidates = (",", ";", "\t", "|")
+    try:
+        dialect = _csv.Sniffer().sniff(sample, delimiters="".join(candidates))
+        if dialect.delimiter in candidates:
+            return dialect.delimiter
+    except Exception:  # noqa: BLE001
+        pass
+    first_line = sample.split("\n", 1)[0]
+    best_delim, best_count = default, first_line.count(default) + 1
+    for cand in candidates:
+        cnt = first_line.count(cand) + 1
+        if cnt > best_count and cnt >= 2:
+            best_count, best_delim = cnt, cand
+    return best_delim
+
+
 def _load_dataset_file(dataset_id: str, version_number: int) -> pd.DataFrame:
-    """Download the dataset file from MinIO and load as DataFrame."""
+    """Download the dataset file from MinIO and load as DataFrame.
+
+    Auto-detects the field delimiter for CSV-style files so semicolon-
+    delimited / pipe-delimited files load as proper multi-column tables
+    instead of one giant text column.
+    """
     from core.settings import settings
     from core.storage import get_minio_client
 
     client = get_minio_client()
 
-    # Find the file in MinIO by listing objects with prefix
-    prefix = f"datasets/{dataset_id}/v{version_number}/"
-    objects = list(client.list_objects(settings.MINIO_BUCKET_NAME, prefix=prefix))
+    # Prefer the DB-recorded storage_path (the canonical original file) so
+    # we never accidentally pick up a `cleaned_*.csv` that a previous run
+    # wrote into the same prefix. Falls back to listing objects only when
+    # the version row can't be read.
+    object_name = None
+    try:
+        from core.database_sync import SyncSessionLocal
+        from core.models.dataset import DatasetVersion
+        from sqlalchemy import select as _sa_select
+        import uuid as _uuid
 
-    if not objects:
-        raise FileNotFoundError(f"No files found at {prefix}")
+        with SyncSessionLocal() as _db:
+            row = _db.execute(
+                _sa_select(DatasetVersion.storage_path)
+                .where(
+                    DatasetVersion.dataset_id == _uuid.UUID(dataset_id),
+                    DatasetVersion.version_number == version_number,
+                )
+                .limit(1)
+            ).first()
+            if row and row[0]:
+                object_name = row[0]
+    except Exception:  # noqa: BLE001
+        pass  # fall back to listing
 
-    obj = objects[0]
-    response = client.get_object(settings.MINIO_BUCKET_NAME, obj.object_name)
+    if not object_name:
+        prefix = f"datasets/{dataset_id}/v{version_number}/"
+        objects = list(client.list_objects(settings.MINIO_BUCKET_NAME, prefix=prefix))
+        # Skip files this pipeline itself produces so we always reload the
+        # original source — protects against re-running structuring after a
+        # cleaned file has already landed in the same prefix.
+        objects = [o for o in objects if not o.object_name.split("/")[-1].startswith("cleaned_")]
+        if not objects:
+            raise FileNotFoundError(f"No source files found at {prefix}")
+        object_name = objects[0].object_name
+
+    response = client.get_object(settings.MINIO_BUCKET_NAME, object_name)
     raw_bytes = response.read()
     response.close()
     response.release_conn()
 
-    # Detect file type and load
-    file_name = obj.object_name.split("/")[-1].lower()
-    if file_name.endswith(".csv"):
-        return pd.read_csv(io.BytesIO(raw_bytes))
+    # Detect file type, encoding, and delimiter. Excel exports often produce
+    # CP-1252 or UTF-16 BOM files; sniff so the loader doesn't choke.
+    file_name = object_name.split("/")[-1].lower()
+    encoding = _detect_encoding(raw_bytes[:65536])
+    if file_name.endswith(".csv") or file_name.endswith(".txt"):
+        ext = ".csv" if file_name.endswith(".csv") else ".txt"
+        delim = _sniff_csv_delimiter(raw_bytes, ext)
+        skip = _find_data_start_line(raw_bytes, delim, encoding)
+        return _read_csv_tolerant(raw_bytes, sep=delim, encoding=encoding, skiprows=skip)
     elif file_name.endswith(".tsv"):
-        return pd.read_csv(io.BytesIO(raw_bytes), sep="\t")
+        skip = _find_data_start_line(raw_bytes, "\t", encoding)
+        return _read_csv_tolerant(raw_bytes, sep="\t", encoding=encoding, skiprows=skip)
     elif file_name.endswith(".json"):
         return pd.read_json(io.BytesIO(raw_bytes))
     elif file_name.endswith(".jsonl"):
         return pd.read_json(io.BytesIO(raw_bytes), lines=True)
     else:
-        # Try CSV as fallback
-        return pd.read_csv(io.BytesIO(raw_bytes))
+        delim = _sniff_csv_delimiter(raw_bytes, ".csv")
+        skip = _find_data_start_line(raw_bytes, delim, encoding)
+        return _read_csv_tolerant(raw_bytes, sep=delim, encoding=encoding, skiprows=skip)
+
+
+def _read_csv_tolerant(raw_bytes: bytes, sep: str, encoding: str, skiprows: int = 0) -> pd.DataFrame:
+    """Read a CSV with graceful degradation.
+
+    First tries the fast C engine with strict parsing. If that fails with
+    "Expected N fields in line K, saw M" or similar, retries with the
+    Python engine + ``on_bad_lines='skip'`` so partially-malformed files
+    still load. The Python engine is slower but handles ragged rows,
+    quoted text spanning lines, and other oddities.
+
+    If even the tolerant pass fails, raises a friendlier RuntimeError
+    that names the problem and points at the offending line.
+    """
+    # Pass 1: strict, fast C engine.
+    try:
+        return pd.read_csv(
+            io.BytesIO(raw_bytes), sep=sep, encoding=encoding,
+            skiprows=skiprows, low_memory=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        first_error = str(exc)
+
+    # Pass 2: tolerant Python engine — skips ragged rows.
+    try:
+        return pd.read_csv(
+            io.BytesIO(raw_bytes), sep=sep, encoding=encoding,
+            skiprows=skiprows, engine="python", on_bad_lines="skip",
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Re-raise with a message that points the user at the actual issue
+        # rather than the cryptic C tokenizer error.
+        raise RuntimeError(
+            f"CSV parse failed even with tolerant mode. "
+            f"First error: {first_error}. "
+            f"This usually means the file has multiple header rows, mixed delimiters, "
+            f"or text values containing unescaped quotes/newlines. "
+            f"Open it in Excel / a text editor and re-save as a plain CSV."
+        ) from exc
 
 
 def _save_cleaned_file(
@@ -121,6 +307,10 @@ def run_structuring_pipeline(
     null_strategy: str = "fill_mode",
     remove_dupes: bool = True,
     handle_outliers: bool = False,
+    drop_cols: list | None = None,
+    case_normalize: str = "none",
+    standardize_columns: bool = False,
+    encode_columns: list | None = None,
 ):
     """Run the full data structuring pipeline: detect → clean → score.
 
@@ -158,6 +348,10 @@ def run_structuring_pipeline(
             null_strategy=null_strategy,
             remove_dupes=remove_dupes,
             handle_outliers=handle_outliers,
+            drop_cols=drop_cols,
+            case_normalize=case_normalize,
+            standardize_columns=standardize_columns,
+            encode_columns=encode_columns,
         )
 
         # ── Step 4: Quality scoring ──────────────────────────────────────

@@ -33,12 +33,21 @@ class DatasetResponse(BaseModel):
     description: Optional[str]
     source_type: str
     status: str
-    created_by: UUID
-    org_id: Optional[str]
     created_at: datetime
     updated_at: Optional[datetime]
+    row_count: Optional[int] = None  # populated from the latest version
+    version_count: Optional[int] = None
 
     model_config = {"from_attributes": True}
+
+
+class DatasetPreviewResponse(BaseModel):
+    """Small head-of-file preview used by the Datasets page inline preview."""
+
+    columns: list[str]
+    rows: list[list]
+    row_count: Optional[int] = None
+    truncated: bool = False
 
 
 class DatasetStatusUpdate(BaseModel):
@@ -74,7 +83,6 @@ class DatasetVersionResponse(BaseModel):
     schema_hash: Optional[str]
     row_count: Optional[int]
     parent_version_id: Optional[UUID]
-    created_by: UUID
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -133,28 +141,3 @@ class UploadResponse(BaseModel):
     dataset: DatasetResponse
     version: DatasetVersionResponse
     validation: ValidationResultResponse
-
-
-# ---------------------------------------------------------------------------
-# Permissions
-# ---------------------------------------------------------------------------
-
-
-class PermissionCreate(BaseModel):
-    """Payload for granting a permission on a dataset."""
-
-    user_id: UUID
-    permission_level: str = Field(..., pattern="^(owner|editor|viewer)$")
-
-
-class PermissionResponse(BaseModel):
-    """Read-only representation of a dataset permission."""
-
-    id: UUID
-    dataset_id: UUID
-    user_id: UUID
-    permission_level: str
-    granted_by: UUID
-    created_at: datetime
-
-    model_config = {"from_attributes": True}

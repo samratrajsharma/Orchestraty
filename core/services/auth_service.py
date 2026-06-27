@@ -1,110 +1,59 @@
 """
-Authentication service — password hashing, JWT creation/validation,
-and the get_current_user dependency for FastAPI.
+Authentication service.
+
+Phase D — auth is gone.
+
+``get_current_user`` returns a synthetic in-memory ``User`` (a tiny
+dataclass that mirrors the old ORM shape so existing route signatures
+keep type-checking). No database hit, no token validation, no password
+hashing — those concepts no longer exist in the codebase.
+
+The module is kept around so routes that do
+``current_user: User = Depends(get_current_user)`` continue to work without
+each one being rewritten.
 """
 
-from datetime import datetime, timedelta, timezone
+from __future__ import annotations
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from core.database import get_db
-from core.models.user import User
-from core.settings import settings
-
-# ---------------------------------------------------------------------------
-# Password hashing
-# ---------------------------------------------------------------------------
-
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+import uuid
+from dataclasses import dataclass
+from typing import Optional
 
 
-def hash_password(password: str) -> str:
-    """Return a bcrypt hash of *password*."""
-    return _pwd_context.hash(password)
+# Stable identity used everywhere a created_by/user_id was previously stored.
+# Routes no longer write FKs to a users table (the table is gone), but the
+# value remains exposed so audit-style "who did it" logging can still be
+# done locally if a route wants to.
+LOCAL_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+LOCAL_USER_EMAIL = "local@orchestraty.local"
 
 
-def verify_password(plain: str, hashed: str) -> bool:
-    """Return ``True`` if *plain* matches the bcrypt *hashed* value."""
-    return _pwd_context.verify(plain, hashed)
+@dataclass(frozen=True)
+class User:
+    """The shape that routes still type their ``current_user`` parameter as.
 
-
-# ---------------------------------------------------------------------------
-# JWT helpers
-# ---------------------------------------------------------------------------
-
-
-def create_access_token(
-    data: dict,
-    expires_delta: timedelta | None = None,
-) -> str:
-    """Create a signed HS256 JWT.
-
-    *data* is copied so the caller's dict is never mutated.
-    If *expires_delta* is ``None`` the default from settings is used.
+    Intentionally a plain dataclass — there is no users table behind it.
     """
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (
-        expires_delta
-        if expires_delta is not None
-        else timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    id: uuid.UUID
+    email: str
+    full_name: Optional[str]
+    role: str
+    is_active: bool
 
 
-def decode_access_token(token: str) -> dict:
-    """Decode and verify a JWT.  Raises **HTTPException 401** on failure."""
-    try:
-        payload: dict = jwt.decode(
-            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
-        )
-        return payload
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+_LOCAL_USER = User(
+    id=LOCAL_USER_ID,
+    email=LOCAL_USER_EMAIL,
+    full_name="Local User",
+    role="superadmin",   # Vestigial — no checks read it. Kept until callers stop expecting a string.
+    is_active=True,
+)
 
 
-# ---------------------------------------------------------------------------
-# FastAPI dependency
-# ---------------------------------------------------------------------------
+async def get_current_user() -> User:
+    """Return the synthetic local user.
 
-
-async def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: AsyncSession = Depends(get_db),
-) -> User:
-    """Decode the bearer token and return the corresponding active ``User``.
-
-    Raises **HTTPException 401** when the token is invalid or the user does
-    not exist / is inactive.
+    Async because every FastAPI dependency in the codebase awaits it; the
+    body itself does no I/O.
     """
-    payload = decode_access_token(token)
-    email: str | None = payload.get("sub")
-    if email is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalars().first()
-
-    if user is None or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found or inactive",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return user
+    return _LOCAL_USER

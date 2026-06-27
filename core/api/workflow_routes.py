@@ -16,9 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from core.middleware.rbac import require_admin, require_annotator, require_viewer
 from core.models.dataset import Dataset, DatasetVersion
-from core.models.user import User
+from core.services.auth_service import User, get_current_user
 from core.models.workflow import Workflow, WorkflowTemplate
 from core.services.task_service import create_task_record
 
@@ -193,7 +192,7 @@ def _get_builtin_templates() -> list[dict]:
 )
 async def create_workflow(
     payload: WorkflowCreate,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Create and start a new workflow pipeline."""
@@ -223,7 +222,6 @@ async def create_workflow(
         name=payload.name,
         description=payload.description,
         dataset_id=payload.dataset_id,
-        created_by=current_user.id,
         status="pending",
         steps=steps,
         current_step=0,
@@ -241,7 +239,6 @@ async def create_workflow(
         celery_task_id=celery_task_id,
         task_type="workflow_execute",
         dataset_id=payload.dataset_id,
-        created_by=current_user.id,
         parameters={
             "workflow_id": str(workflow.id),
             "steps": steps,
@@ -277,7 +274,7 @@ async def create_workflow(
 @router.get("", response_model=list[WorkflowResponse])
 async def list_workflows(
     dataset_id: Optional[UUID] = Query(None),
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """List workflows created by the current user, optionally filtered by dataset."""
@@ -304,7 +301,7 @@ async def list_workflows(
 
 @router.get("/templates", response_model=list[TemplateResponse])
 async def list_templates(
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """List all workflow templates (built-in + custom)."""
@@ -350,7 +347,7 @@ async def list_templates(
 )
 async def create_template(
     payload: TemplateCreate,
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a custom workflow template (admin only)."""
@@ -379,7 +376,7 @@ async def create_template(
 @router.get("/{workflow_id}", response_model=WorkflowDetail)
 async def get_workflow(
     workflow_id: UUID,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get full workflow detail including step statuses."""
@@ -406,7 +403,7 @@ async def get_workflow(
 @router.put("/{workflow_id}/pause")
 async def pause_workflow(
     workflow_id: UUID,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Pause a running workflow."""
@@ -434,7 +431,7 @@ async def pause_workflow(
 @router.put("/{workflow_id}/resume")
 async def resume_workflow(
     workflow_id: UUID,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Resume a paused workflow from the current step."""
@@ -462,7 +459,6 @@ async def resume_workflow(
         celery_task_id=celery_task_id,
         task_type="workflow_execute",
         dataset_id=workflow.dataset_id,
-        created_by=current_user.id,
         parameters={
             "workflow_id": str(workflow.id),
             "resumed_from_step": workflow.current_step,
@@ -494,7 +490,7 @@ async def resume_workflow(
 @router.delete("/{workflow_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_workflow(
     workflow_id: UUID,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a workflow."""
@@ -521,7 +517,7 @@ async def delete_workflow(
 async def quick_start_workflow(
     dataset_id: UUID,
     source_type: Optional[str] = Query(None),
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Quick-start a default pipeline for a dataset."""
@@ -538,7 +534,6 @@ async def quick_start_workflow(
         name=f"Quick Pipeline — {dataset.name}",
         description=f"Auto-generated default pipeline for dataset '{dataset.name}'",
         dataset_id=dataset_id,
-        created_by=current_user.id,
         status="pending",
         steps=steps,
         current_step=0,
@@ -555,7 +550,6 @@ async def quick_start_workflow(
         celery_task_id=celery_task_id,
         task_type="workflow_execute",
         dataset_id=dataset_id,
-        created_by=current_user.id,
         parameters={
             "workflow_id": str(workflow.id),
             "quick_start": True,

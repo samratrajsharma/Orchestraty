@@ -78,7 +78,10 @@ def predict_labels(
         logger.info("Extracted %d text items from column '%s'.", len(texts), text_column)
 
         # Step 3: Build LLM config and run predictions
-        update_task_progress(db, celery_task_id, 0.3, "Running AI label predictions...")
+        update_task_progress(
+            db, celery_task_id, 0.3,
+            f"Predicting labels for {len(texts)} rows...",
+        )
 
         config = _build_llm_config(
             provider, model_name, api_key_encrypted, base_url, temperature, max_tokens
@@ -86,7 +89,34 @@ def predict_labels(
 
         from labeling.ai_labeler import predict_text_labels
 
-        report = predict_text_labels(texts, labels, config, examples=examples, instructions=instructions)
+        # Wire a progress callback so the UI's progress bar moves smoothly
+        # from 30% to 90% as rows complete. Without this, the bar would
+        # freeze for the entire prediction loop and users assume the job
+        # is hung. The callback fires every `batch_size` items (default 10).
+        def _on_progress(done: int, total: int, eta_seconds: float):
+            # Linearly map item progress (0..total) onto task progress (0.3..0.9).
+            frac = done / max(1, total)
+            task_frac = 0.3 + (0.6 * frac)
+            eta_msg = ""
+            if eta_seconds and eta_seconds > 0:
+                if eta_seconds < 60:
+                    eta_msg = f" (~{int(eta_seconds)}s left)"
+                else:
+                    eta_msg = f" (~{int(eta_seconds / 60)}m left)"
+            try:
+                update_task_progress(
+                    db, celery_task_id, task_frac,
+                    f"Predicting labels: {done:,} / {total:,} done{eta_msg}",
+                )
+            except Exception:  # noqa: BLE001
+                pass  # don't let a DB blip kill the prediction job
+
+        report = predict_text_labels(
+            texts, labels, config,
+            examples=examples, instructions=instructions,
+            concurrency=5,
+            progress_callback=_on_progress,
+        )
 
         # Step 4: Save results
         update_task_progress(db, celery_task_id, 0.9, "Saving prediction results...")

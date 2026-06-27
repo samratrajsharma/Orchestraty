@@ -15,11 +15,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from core.middleware.rbac import require_annotator, require_viewer
 from core.models.background_task import BackgroundTask
 from core.models.dataset import Dataset, DatasetMetadata
-from core.models.user import User
+from core.services.auth_service import User, get_current_user
 from core.services.task_service import create_task_record
+from core.services.dataset_access_service import assert_dataset_access
 
 router = APIRouter(prefix="/api/v1/review", tags=["review"])
 
@@ -67,8 +67,12 @@ class StatusUpdateRequest(BaseModel):
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 
-async def _validate_dataset(db: AsyncSession, dataset_id: UUID) -> Dataset:
-    """Ensure the dataset exists and return it."""
+async def _validate_dataset(
+    db: AsyncSession, dataset_id: UUID, user: Optional[User] = None,
+) -> Dataset:
+    """Ensure the dataset exists (and optionally that ``user`` can access it)."""
+    if user is not None:
+        return await assert_dataset_access(db, dataset_id, user)
     result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
     dataset = result.scalars().first()
     if dataset is None:
@@ -94,11 +98,11 @@ _VALID_TRANSITIONS: dict[str, list[str]] = {
 async def trigger_quality_eval(
     dataset_id: UUID,
     payload: QualityEvalRequest,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger quality evaluation on a labeled dataset (async Celery task)."""
-    dataset = await _validate_dataset(db, dataset_id)
+    dataset = await _validate_dataset(db, dataset_id, current_user)
 
     import uuid as _uuid
 
@@ -109,7 +113,6 @@ async def trigger_quality_eval(
         celery_task_id=celery_task_id,
         task_type="quality_eval",
         dataset_id=dataset_id,
-        created_by=current_user.id,
         parameters={
             "expected_labels": payload.expected_labels,
         },
@@ -137,11 +140,11 @@ async def trigger_quality_eval(
 @router.get("/quality/{dataset_id}")
 async def get_quality_results(
     dataset_id: UUID,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get the latest quality evaluation results for a dataset."""
-    await _validate_dataset(db, dataset_id)
+    await _validate_dataset(db, dataset_id, current_user)
 
     stmt = (
         select(BackgroundTask)
@@ -172,7 +175,7 @@ async def get_quality_results(
 @router.post("/actions")
 async def submit_review_actions(
     payload: BulkReviewRequest,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Submit review actions (approve / reject / relabel) for dataset items."""
@@ -292,11 +295,11 @@ async def submit_review_actions(
 @router.get("/status/{dataset_id}")
 async def get_review_status(
     dataset_id: UUID,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get review status summary: counts of approved, rejected, relabeled items."""
-    await _validate_dataset(db, dataset_id)
+    await _validate_dataset(db, dataset_id, current_user)
 
     # Load review actions metadata
     meta_stmt = select(DatasetMetadata).where(
@@ -339,11 +342,11 @@ async def get_review_status(
 async def trigger_export(
     dataset_id: UUID,
     payload: ExportRequest,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger dataset export in the requested format (async Celery task)."""
-    dataset = await _validate_dataset(db, dataset_id)
+    dataset = await _validate_dataset(db, dataset_id, current_user)
 
     valid_formats = {"csv", "json", "coco", "yolo"}
     if payload.format not in valid_formats:
@@ -361,7 +364,6 @@ async def trigger_export(
         celery_task_id=celery_task_id,
         task_type="export",
         dataset_id=dataset_id,
-        created_by=current_user.id,
         parameters={"format": payload.format},
     )
 
@@ -387,11 +389,11 @@ async def trigger_export(
 @router.get("/export/{dataset_id}")
 async def get_export_results(
     dataset_id: UUID,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get the latest export results with a presigned download URL."""
-    await _validate_dataset(db, dataset_id)
+    await _validate_dataset(db, dataset_id, current_user)
 
     stmt = (
         select(BackgroundTask)
@@ -444,11 +446,11 @@ async def get_export_results(
 async def update_dataset_status(
     dataset_id: UUID,
     payload: StatusUpdateRequest,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Promote a dataset through the review workflow (labeled -> reviewed -> ready)."""
-    dataset = await _validate_dataset(db, dataset_id)
+    dataset = await _validate_dataset(db, dataset_id, current_user)
 
     current_status = dataset.status
     new_status = payload.status

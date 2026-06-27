@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:superadmin": "vite --config vite.superadmin.config.ts",
+    "dev:website": "vite --config vite.website.config.ts",
+    "dev:coming": "vite --config vite.coming.config.ts",
     "build": "tsc -b && vite build",
-    "build:superadmin": "tsc -b && vite build --config vite.superadmin.config.ts",
+    "build:website": "tsc -b && vite build --config vite.website.config.ts",
+    "build:coming": "vite build --config vite.coming.config.ts",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -15,7 +17,9 @@
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-router-dom": "^7.6.1",
-    "axios": "^1.9.0"
+    "axios": "^1.9.0",
+    "react-markdown": "^9.0.1",
+    "remark-gfm": "^4.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

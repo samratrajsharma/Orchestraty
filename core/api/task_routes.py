@@ -12,10 +12,8 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from core.middleware.rbac import require_viewer
 from core.models.background_task import BackgroundTask
-from core.models.user import User
-from core.services.auth_service import get_current_user
+from core.services.auth_service import User, get_current_user
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
@@ -57,7 +55,7 @@ async def list_tasks(
     status_filter: Optional[str] = Query(None, alias="status"),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """List background tasks with optional filters."""
@@ -90,7 +88,7 @@ async def list_tasks(
 @router.get("/{task_id}", response_model=TaskResponse)
 async def get_task(
     task_id: UUID,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get a specific background task by ID."""
@@ -109,7 +107,7 @@ async def get_task(
 @router.get("/celery/{celery_task_id}", response_model=TaskResponse)
 async def get_task_by_celery_id(
     celery_task_id: str,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get a background task by its Celery task ID."""

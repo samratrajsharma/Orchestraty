@@ -28,20 +28,16 @@ class BackgroundTask(Base):
     progress = Column(Float, default=0.0)
     progress_message = Column(String(500), nullable=True)
 
-    # Which dataset this task operates on
+    # Which dataset this task operates on (nullable so dataset-agnostic
+    # entries — saved rule sets, etc. — can live in this table too)
     dataset_id = Column(
         UUID(as_uuid=True),
         ForeignKey("datasets.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
 
     # Who triggered it
-    created_by = Column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-    )
 
     # Task input parameters and output results (flexible JSON)
     parameters = Column(JSONB, default=dict)

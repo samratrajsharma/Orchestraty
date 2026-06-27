@@ -1,0 +1,65 @@
+site_name: Orchestraty
+site_description: An open-source, single-user, local-first data operating system.
+repo_url: https://github.com/your-username/orchestraty
+repo_name: orchestraty
+docs_dir: frontend/Frontend/src/website/docs-content
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light
+    - scheme: default
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - content.code.copy
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+  - Concepts:
+      - Architecture: concepts/architecture.md
+      - Data model & versioning: concepts/data-model.md
+  - Pipeline guides:
+      - Datasets (ingest): guides/datasets.md
+      - Structuring: guides/structuring.md
+      - EDA: guides/eda.md
+      - Rule-based labeling: guides/labeling.md
+      - AI labeling: guides/ai-labeling.md
+      - Image pipeline: guides/images.md
+      - Review & export: guides/review-export.md
+      - Workflows: guides/workflows.md
+      - LLM configuration: guides/llm-config.md
+  - Reference:
+      - Configuration: reference/configuration.md
+      - API: reference/api.md
+      - Commands: reference/commands.md
+  - Deployment: deployment.md
+  - FAQ: faq.md
+  - Roadmap: roadmap.md
+  - Contributing: contributing.md

@@ -96,6 +96,36 @@ class MinIOStorage:
                 response.close()
                 response.release_conn()
 
+    async def download_head(self, storage_path: str, max_bytes: int = 262144) -> bytes:
+        """Download only the first ``max_bytes`` of an object via HTTP Range.
+
+        Used for fast inline previews on the Datasets page so we never pull
+        multi-MB files just to render 10 rows. Falls back to a streamed read
+        of N bytes if the server doesn't honour the offset+length kwargs.
+        """
+        response = None
+        try:
+            try:
+                response = self.client.get_object(
+                    self.bucket_name, storage_path, offset=0, length=max_bytes,
+                )
+            except TypeError:
+                # Older minio clients without offset/length kwargs — fall back
+                # to streaming the first chunk.
+                response = self.client.get_object(self.bucket_name, storage_path)
+            data = response.read(max_bytes)
+            logger.debug(
+                "Downloaded HEAD of %s (%d bytes) from MinIO", storage_path, len(data)
+            )
+            return data
+        except S3Error as exc:
+            logger.error("MinIO head-download failed for %s: %s", storage_path, exc)
+            raise
+        finally:
+            if response is not None:
+                response.close()
+                response.release_conn()
+
     # ── Delete ────────────────────────────────────────────────────────────
 
     async def delete_file(self, storage_path: str) -> bool:

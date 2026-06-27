@@ -15,11 +15,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from core.middleware.rbac import require_annotator, require_viewer
 from core.models.background_task import BackgroundTask
 from core.models.dataset import Dataset, DatasetVersion
-from core.models.user import User
+from core.services.auth_service import User, get_current_user
 from core.services.task_service import create_task_record
+from core.services.dataset_access_service import assert_dataset_access
 
 router = APIRouter(prefix="/api/v1/labeling/ai", tags=["ai-labeling"])
 
@@ -93,9 +93,17 @@ async def _get_user_llm_config(
     provider: str = None,
     model_name: str = None,
 ):
-    """Build an LLMConfig from the user's saved LLM provider configuration."""
+    """Build an LLMConfig from the user's saved LLM provider configuration.
+
+    Auto-rewrites localhost URLs to host.docker.internal when we're running
+    inside Docker — covers the case where the user saved their Ollama
+    config back when the default was localhost. The rewrite happens HERE
+    (in the API process which uvicorn auto-reloads) rather than only in
+    the Celery worker, so a stale worker pod still gets a corrected URL.
+    """
     from core.models.llm_config import LLMConfigRecord
     from core.llm.providers import LLMConfig, LLMProvider
+    from core.llm.service import _normalize_local_url
 
     if provider:
         stmt = select(LLMConfigRecord).where(
@@ -117,11 +125,12 @@ async def _get_user_llm_config(
             "No LLM provider configured. Set up a provider in LLM Settings first.",
         )
 
+    fixed_base_url = _normalize_local_url(record.base_url) if record.base_url else record.base_url
     return LLMConfig(
         provider=LLMProvider(record.provider),
         model_name=model_name or record.model_name,
         api_key=record.api_key_encrypted,
-        base_url=record.base_url,
+        base_url=fixed_base_url,
         temperature=record.temperature,
         max_tokens=record.max_tokens,
     )
@@ -131,12 +140,21 @@ async def _resolve_dataset_version(
     db: AsyncSession,
     dataset_id: UUID,
     version_number: int | None = None,
+    user: Optional[User] = None,
 ):
-    """Validate the dataset exists and return (dataset, version)."""
-    result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
-    dataset = result.scalars().first()
-    if dataset is None:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+    """Validate the dataset exists (and access if user given) and return (dataset, version).
+
+    When ``user`` is provided the access check is enforced — that's the
+    expected path for HTTP-triggered calls. Background callers that don't
+    represent a specific user can omit it.
+    """
+    if user is not None:
+        dataset = await assert_dataset_access(db, dataset_id, user)
+    else:
+        result = await db.execute(select(Dataset).where(Dataset.id == dataset_id))
+        dataset = result.scalars().first()
+        if dataset is None:
+            raise HTTPException(status_code=404, detail="Dataset not found")
 
     if version_number:
         version_stmt = select(DatasetVersion).where(
@@ -170,18 +188,16 @@ async def _resolve_dataset_version(
 @router.post("/predict", response_model=AILabelResponse, status_code=status.HTTP_202_ACCEPTED)
 async def predict_labels(
     payload: AILabelRequest,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger AI-powered label prediction on a text dataset (async Celery task)."""
     dataset, version = await _resolve_dataset_version(
-        db, payload.dataset_id, payload.version_number
+        db, payload.dataset_id, payload.version_number, user=current_user,
     )
 
     # Resolve LLM config so we can pass credentials to the worker
-    llm_config = await _get_user_llm_config(
-        db, current_user.id, payload.provider, payload.model_name
-    )
+    llm_config = await _get_user_llm_config(db, payload.provider, payload.model_name)
 
     import uuid as _uuid
 
@@ -192,7 +208,6 @@ async def predict_labels(
         celery_task_id=celery_task_id,
         task_type="ai_labeling",
         dataset_id=payload.dataset_id,
-        created_by=current_user.id,
         parameters={
             "version_number": version.version_number,
             "labels": payload.labels,
@@ -234,7 +249,7 @@ async def predict_labels(
 @router.post("/preview")
 async def preview_predictions(
     payload: PreviewRequest,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Classify the first few rows of a dataset synchronously.
@@ -246,11 +261,9 @@ async def preview_predictions(
         raise HTTPException(status_code=400, detail="Provide at least one label.")
 
     _dataset, version = await _resolve_dataset_version(
-        db, payload.dataset_id, payload.version_number
+        db, payload.dataset_id, payload.version_number, user=current_user,
     )
-    llm_config = await _get_user_llm_config(
-        db, current_user.id, payload.provider, payload.model_name
-    )
+    llm_config = await _get_user_llm_config(db, payload.provider, payload.model_name)
 
     # Load the dataset file off the event loop (blocking download + parse).
     from data_intelligence.tasks.structuring_tasks import _load_dataset_file
@@ -304,18 +317,13 @@ async def preview_predictions(
 @router.post("/predict-images", response_model=AILabelResponse, status_code=status.HTTP_202_ACCEPTED)
 async def predict_image_labels(
     payload: AILabelRequest,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger AI-powered label prediction on an image dataset (async Celery task)."""
-    result = await db.execute(select(Dataset).where(Dataset.id == payload.dataset_id))
-    dataset = result.scalars().first()
-    if dataset is None:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+    dataset = await assert_dataset_access(db, payload.dataset_id, current_user)
 
-    llm_config = await _get_user_llm_config(
-        db, current_user.id, payload.provider, payload.model_name
-    )
+    llm_config = await _get_user_llm_config(db, payload.provider, payload.model_name)
 
     import uuid as _uuid
 
@@ -326,7 +334,6 @@ async def predict_image_labels(
         celery_task_id=celery_task_id,
         task_type="ai_labeling",
         dataset_id=payload.dataset_id,
-        created_by=current_user.id,
         parameters={
             "labels": payload.labels,
             "provider": llm_config.provider.value,
@@ -363,10 +370,11 @@ async def predict_image_labels(
 @router.get("/predictions/{dataset_id}")
 async def get_predictions(
     dataset_id: UUID,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get the latest AI prediction results for a dataset."""
+    await assert_dataset_access(db, dataset_id, current_user)
     stmt = (
         select(BackgroundTask)
         .where(
@@ -396,13 +404,11 @@ async def get_predictions(
 @router.post("/synthetic")
 async def generate_synthetic(
     payload: SyntheticRequest,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Generate synthetic text samples for a given label (synchronous)."""
-    llm_config = await _get_user_llm_config(
-        db, current_user.id, payload.provider, payload.model_name
-    )
+    llm_config = await _get_user_llm_config(db, payload.provider, payload.model_name)
 
     from labeling.ai_labeler import generate_synthetic_data
 
@@ -424,14 +430,11 @@ async def generate_synthetic(
 @router.post("/propagate", response_model=AILabelResponse, status_code=status.HTTP_202_ACCEPTED)
 async def propagate_labels(
     payload: PropagationRequest,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger similarity-based label propagation (async Celery task)."""
-    result = await db.execute(select(Dataset).where(Dataset.id == payload.dataset_id))
-    dataset = result.scalars().first()
-    if dataset is None:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+    dataset = await assert_dataset_access(db, payload.dataset_id, current_user)
 
     import uuid as _uuid
 
@@ -442,7 +445,6 @@ async def propagate_labels(
         celery_task_id=celery_task_id,
         task_type="propagation",
         dataset_id=payload.dataset_id,
-        created_by=current_user.id,
         parameters={
             "labels": payload.labels,
             "confidence_threshold": payload.confidence_threshold,
@@ -474,10 +476,11 @@ async def propagate_labels(
 @router.get("/propagation/{dataset_id}")
 async def get_propagation_results(
     dataset_id: UUID,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get the latest propagation results for a dataset."""
+    await assert_dataset_access(db, dataset_id, current_user)
     stmt = (
         select(BackgroundTask)
         .where(
@@ -507,14 +510,11 @@ async def get_propagation_results(
 @router.post("/aggregate", response_model=AILabelResponse, status_code=status.HTTP_202_ACCEPTED)
 async def aggregate_labels(
     payload: AggregateRequest,
-    current_user: User = Depends(require_annotator),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger label aggregation across all labeling sources (async Celery task)."""
-    result = await db.execute(select(Dataset).where(Dataset.id == payload.dataset_id))
-    dataset = result.scalars().first()
-    if dataset is None:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+    dataset = await assert_dataset_access(db, payload.dataset_id, current_user)
 
     import uuid as _uuid
 
@@ -525,7 +525,6 @@ async def aggregate_labels(
         celery_task_id=celery_task_id,
         task_type="aggregation",
         dataset_id=payload.dataset_id,
-        created_by=current_user.id,
         parameters={
             "strategy": payload.strategy,
             "include_rule_labels": payload.include_rule_labels,
@@ -559,10 +558,11 @@ async def aggregate_labels(
 @router.get("/aggregation/{dataset_id}")
 async def get_aggregation_results(
     dataset_id: UUID,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get the latest aggregation results for a dataset."""
+    await assert_dataset_access(db, dataset_id, current_user)
     stmt = (
         select(BackgroundTask)
         .where(
@@ -592,7 +592,7 @@ async def get_aggregation_results(
 @router.post("/active-learning")
 async def active_learning(
     payload: ActiveLearningRequest,
-    current_user: User = Depends(require_viewer),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Identify items that would benefit most from human review (synchronous)."""

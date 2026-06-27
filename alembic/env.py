@@ -24,12 +24,9 @@ from core.settings import settings  # noqa: E402
 # Import ALL models so Base.metadata is fully populated for autogenerate
 from core.models import Base  # noqa: E402, F401
 from core.models import (  # noqa: E402, F401
-    User,
     Dataset,
     DatasetVersion,
     DatasetMetadata,
-    AuditLog,
-    DatasetPermission,
 )
 
 # Alembic Config object — gives access to values in alembic.ini

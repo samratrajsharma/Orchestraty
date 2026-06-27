@@ -6,6 +6,7 @@ supported providers.
 
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -21,6 +22,44 @@ from core.llm.prompts import (
 from core.llm.providers import LLMConfig, LLMProvider
 
 logger = logging.getLogger(__name__)
+
+
+# Cache the in-Docker check so we don't stat() on every LLM call.
+_IN_DOCKER: bool | None = None
+
+
+def _is_in_docker() -> bool:
+    """Detect whether the process is running inside a Docker container."""
+    global _IN_DOCKER
+    if _IN_DOCKER is None:
+        _IN_DOCKER = (
+            os.path.exists("/.dockerenv")
+            or os.environ.get("DOCKER_CONTAINER") == "1"
+        )
+    return _IN_DOCKER
+
+
+def _normalize_local_url(url: str) -> str:
+    """Rewrite ``localhost`` / ``127.0.0.1`` to ``host.docker.internal`` when
+    the caller is running inside a Docker container.
+
+    This is the saving-grace fix for the most common dev-time gotcha: a user
+    has Ollama on the host machine but the API container can't see it
+    because the saved LLM config (or the OLLAMA_BASE_URL env var) points
+    at ``localhost`` — which from inside the container means *the container
+    itself*, not the host. Outside Docker this is a no-op.
+    """
+    if not url or not _is_in_docker():
+        return url
+    rewritten = (
+        url.replace("://localhost:", "://host.docker.internal:")
+           .replace("://127.0.0.1:", "://host.docker.internal:")
+           .replace("://localhost/", "://host.docker.internal/")
+           .replace("://127.0.0.1/", "://host.docker.internal/")
+    )
+    if rewritten != url:
+        logger.info("Rewrote LLM base_url for Docker: %s -> %s", url, rewritten)
+    return rewritten
 
 
 class LLMService:
@@ -225,11 +264,12 @@ class LLMService:
 
         if provider == LLMProvider.OLLAMA:
             from core.settings import settings as _settings
-            params["api_base"] = (
+            raw_url = (
                 self.config.base_url
                 or _settings.OLLAMA_BASE_URL
                 or "http://localhost:11434"
             )
+            params["api_base"] = _normalize_local_url(raw_url)
 
         elif provider == LLMProvider.OPENAI:
             if self.config.api_key:
@@ -245,7 +285,7 @@ class LLMService:
 
         elif provider == LLMProvider.CUSTOM:
             if self.config.base_url:
-                params["api_base"] = self.config.base_url
+                params["api_base"] = _normalize_local_url(self.config.base_url)
             if self.config.api_key:
                 params["api_key"] = self.config.api_key
 

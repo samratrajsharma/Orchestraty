@@ -20,13 +20,10 @@ from core.settings import settings  # noqa: E402
 from core.database import init_db  # noqa: E402
 
 # Standard routers (normal package imports)
-from core.api.auth_routes import router as auth_router  # noqa: E402
-from core.api.audit_routes import router as audit_router  # noqa: E402
 from core.api.task_routes import router as task_router  # noqa: E402
 from core.api.structuring_routes import router as structuring_router  # noqa: E402
 from core.api.eda_routes import router as eda_router  # noqa: E402
 from core.api.labeling_routes import router as labeling_router  # noqa: E402
-from core.api.admin_routes import router as admin_router  # noqa: E402
 from core.api.llm_routes import router as llm_router  # noqa: E402
 from core.api.image_routes import router as image_router  # noqa: E402
 from core.api.ai_labeling_routes import router as ai_labeling_router  # noqa: E402
@@ -159,65 +156,8 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("MinIO not available — skipping bucket init: %s", exc)
 
-    # Auto-create SuperAdmin on first startup
-    try:
-        from core.database import async_session_factory as async_session, engine
-        from sqlalchemy import select as sa_select, text as sa_text
-        from core.models.user import User as UserModel
-        from core.services.auth_service import hash_password as hp
-
-        # Ensure the 'superadmin' value exists in the PostgreSQL enum
-        # (create_all does NOT alter existing enums, so we must do it manually)
-        async with engine.begin() as conn:
-            existing_vals = await conn.execute(
-                sa_text("SELECT unnest(enum_range(NULL::user_role))::text")
-            )
-            vals = {row[0] for row in existing_vals}
-            if "superadmin" not in vals:
-                await conn.execute(
-                    sa_text("ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'superadmin' BEFORE 'admin'")
-                )
-                logger.info("Added 'superadmin' to user_role enum")
-
-        async with async_session() as db:
-            # Create SuperAdmin if not exists
-            result = await db.execute(
-                sa_select(UserModel).where(
-                    UserModel.email == settings.SUPERADMIN_EMAIL
-                )
-            )
-            existing = result.scalars().first()
-            if existing is None:
-                superadmin = UserModel(
-                    email=settings.SUPERADMIN_EMAIL,
-                    hashed_password=hp(settings.SUPERADMIN_PASSWORD),
-                    full_name=settings.SUPERADMIN_NAME,
-                    role="superadmin",
-                    is_active=True,
-                )
-                db.add(superadmin)
-                await db.commit()
-                logger.info(
-                    "SuperAdmin created: %s", settings.SUPERADMIN_EMAIL
-                )
-            elif existing.role != "superadmin":
-                # Upgrade existing user to superadmin if email matches
-                existing.role = "superadmin"
-                existing.hashed_password = hp(settings.SUPERADMIN_PASSWORD)
-                await db.commit()
-                logger.info(
-                    "Existing user upgraded to SuperAdmin: %s",
-                    settings.SUPERADMIN_EMAIL,
-                )
-            else:
-                # Ensure password stays in sync with .env
-                existing.hashed_password = hp(settings.SUPERADMIN_PASSWORD)
-                await db.commit()
-                logger.info(
-                    "SuperAdmin already exists (password synced): %s", settings.SUPERADMIN_EMAIL
-                )
-    except Exception as exc:
-        logger.warning("Could not auto-create SuperAdmin: %s", exc)
+    # Phase D — no SuperAdmin, no users table, no auto-seed.
+    # Lifespan startup is just init_db + MinIO bucket ensure.
 
     yield
 
@@ -246,14 +186,11 @@ app.add_middleware(
 )
 
 # ── Routers ──────────────────────────────────────────────────────────────
-app.include_router(auth_router)
-app.include_router(audit_router)
 app.include_router(task_router)
 app.include_router(ingestion_router)
 app.include_router(structuring_router)
 app.include_router(eda_router)
 app.include_router(labeling_router)
-app.include_router(admin_router)
 app.include_router(llm_router)
 app.include_router(image_router)
 app.include_router(ai_labeling_router)

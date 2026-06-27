@@ -30,11 +30,6 @@ class Settings(BaseSettings):
     # ── Redis ─────────────────────────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379/0"
 
-    # ── Auth / JWT ────────────────────────────────────────────────────────
-    SECRET_KEY: str = "change-me-in-production"
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
-
     # ── Qdrant (Vector DB) ──────────────────────────────────────────────
     QDRANT_HOST: str = "qdrant"
     QDRANT_PORT: int = 6333
@@ -63,16 +58,13 @@ class Settings(BaseSettings):
     QDRANT_IMAGE_COLLECTION: str = "orchestraty_image_embeddings"
     IMAGE_ALLOWED_EXTENSIONS: str = ".png,.jpg,.jpeg,.webp,.tiff,.tif,.bmp"
 
-    # ── SuperAdmin (auto-created on first startup) ─────────────────────────
-    SUPERADMIN_EMAIL: str = "admin@orchestraty.com"
-    SUPERADMIN_PASSWORD: str = "SaMrAt@ViShAl@Orchestraty@2881276"
-    SUPERADMIN_NAME: str = "Super Admin"
+    # ── Image embedding performance (CPU-friendly) ────────────────────────
+    CLIP_QUANTIZE: bool = True           # int8 dynamic quantization on CPU (2-4x faster, ~half RAM)
+    CLIP_NUM_THREADS: int = 0            # torch CPU threads (0 = auto = all cores)
+    CLIP_BATCH_SIZE: int = 32            # images per inference batch
+    CLIP_DOWNLOAD_CONCURRENCY: int = 8   # parallel MinIO downloads per batch
+    CLIP_PRELOAD: bool = False           # warm CLIP at Celery worker boot (off = lazy on first task)
 
-    # ── Legacy / bootstrap admin helpers ─────────────────────────────────
-    ADMIN_EMAIL: str = "admin@orchestraty.com"
-    ADMIN_PASSWORD: str = "Admin@12345"
-    ADMIN_NAME: str = "System Admin"
-    ADMIN_EMAILS: str = "admin@orchestraty.com"  # comma-separated bootstrap admin emails
 
     # ── Runtime environment ───────────────────────────────────────────────
     ENVIRONMENT: Literal["development", "staging", "production"] = "development"

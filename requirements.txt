@@ -18,9 +18,6 @@ pydantic[email]>=2.9.0,<3.0.0
 pydantic-settings>=2.6.0,<3.0.0
 
 # --- Authentication ---
-python-jose[cryptography]>=3.3.0,<4.0.0
-passlib[bcrypt]>=1.7.4,<2.0.0
-bcrypt>=4.0.0,<4.1.0
 
 # --- Object Storage (MinIO / S3) ---
 minio>=7.2.0,<8.0.0
@@ -70,6 +67,15 @@ litellm>=1.40.0,<2.0.0
 # --- Phase 3B: Image Pipeline ---
 Pillow>=10.4.0,<12.0.0
 transformers>=4.40.0,<5.0.0
+
+# --- Phase 3: Report exports (EDA download as PDF / DOCX) ---
+reportlab>=4.2.0,<5.0.0
+python-docx>=1.1.0,<2.0.0
+
+# --- Phase 3: Encoding detection (Excel-exported CP-1252 / UTF-16 CSVs) ---
+# Usually pulled in transitively by `requests`, but we depend on it directly
+# in core.api.routes._decode_flexible so pin it explicitly.
+charset-normalizer>=3.3.0,<4.0.0
 
 # ============================================
 # Development & Testing

@@ -69,27 +69,56 @@ def generate_image_embeddings(self, dataset_id: str):
         from core.settings import settings
 
         client = _get_minio_client()
-        batch_size = 32
-        all_embedding_ids = []
+        batch_size = int(getattr(settings, "CLIP_BATCH_SIZE", 32)) or 32
+        all_stored_ids = []
 
         from image_pipeline.clip_embedder import embed_images, store_image_vectors_in_qdrant
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        dl_workers = int(getattr(settings, "CLIP_DOWNLOAD_CONCURRENCY", 8)) or 8
+
+        bucket = settings.MINIO_BUCKET_NAME
+
+        def _download_one(meta):
+            # meta is a plain (asset_id, path) tuple — NEVER an ORM object, so
+            # the worker threads never touch the single-threaded DB session
+            # (doing so triggers "concurrent operations are not permitted").
+            asset_id, path = meta
+            response = client.get_object(bucket, path)
+            try:
+                raw = response.read()
+            finally:
+                response.close()
+                response.release_conn()
+            # Cheap header validity check so a corrupt file can't desync the
+            # id/embedding arrays (embed_images drops undecodable images).
+            try:
+                from PIL import Image
+                Image.open(io.BytesIO(raw)).verify()
+            except Exception:
+                logger.warning("Skipping unreadable image %s", path)
+                return None
+            return asset_id, raw
 
         for batch_start in range(0, total, batch_size):
             batch_end = min(batch_start + batch_size, total)
             batch_images = images[batch_start:batch_end]
 
-            # Download image bytes for this batch
-            image_bytes_list = []
-            image_ids = []
-            for img in batch_images:
-                response = client.get_object(
-                    settings.MINIO_BUCKET_NAME, img.original_path,
-                )
-                raw = response.read()
-                response.close()
-                response.release_conn()
-                image_bytes_list.append(raw)
-                image_ids.append(str(img.id))
+            # Read the scalar fields off the ORM objects in THIS thread before
+            # fanning out; the pool then sees only plain strings.
+            batch_meta = [(str(img.id), img.original_path) for img in batch_images]
+
+            # Download this batch concurrently — network-bound, and the MinIO
+            # client's connection pool is thread-safe. .map preserves order.
+            with ThreadPoolExecutor(
+                max_workers=min(dl_workers, len(batch_meta))
+            ) as pool:
+                downloaded = [d for d in pool.map(_download_one, batch_meta) if d]
+            if not downloaded:
+                continue
+            image_ids = [d[0] for d in downloaded]
+            image_bytes_list = [d[1] for d in downloaded]
 
             # ── Step 3: Generate embeddings ─────────────────────────────
             progress = 0.1 + 0.5 * (batch_end / total)
@@ -115,15 +144,18 @@ def generate_image_embeddings(self, dataset_id: str):
                 raise RuntimeError(
                     f"Qdrant upsert failed for batch {batch_start}-{batch_end}"
                 )
-            all_embedding_ids.extend(zip(batch_images, stored_ids))
+            all_stored_ids.extend(stored_ids)
 
         # ── Step 5: Update ImageAsset records ───────────────────────────
         update_task_progress(
             db, celery_task_id, 0.9, "Updating database records...",
         )
 
-        for img, emb_id in all_embedding_ids:
-            img.embedding_id = str(emb_id)
+        id_to_img = {str(img.id): img for img in images}
+        for asset_id in all_stored_ids:
+            img = id_to_img.get(asset_id)
+            if img is not None:
+                img.embedding_id = asset_id
         db.commit()
 
         # ── Done ────────────────────────────────────────────────────────
@@ -226,11 +258,16 @@ def run_image_clustering(self, dataset_id: str, min_cluster_size: int = 5):
 
         from core.models.image_asset import ImageAsset
 
+        import uuid as _uuid
+
         labels = cluster_report.labels
-        for point_id, label in zip(point_ids, labels):
-            db.query(ImageAsset).filter(
-                ImageAsset.id == point_id,
-            ).update({"cluster_id": int(label)})
+        # HDBSCAN labels noise as -1; store that as NULL (unclustered) rather
+        # than a bogus "cluster -1".
+        mappings = [
+            {"id": _uuid.UUID(pid), "cluster_id": (int(lbl) if lbl >= 0 else None)}
+            for pid, lbl in zip(point_ids, labels)
+        ]
+        db.bulk_update_mappings(ImageAsset, mappings)
         db.commit()
 
         # ── Done ────────────────────────────────────────────────────────
@@ -253,6 +290,71 @@ def run_image_clustering(self, dataset_id: str, min_cluster_size: int = 5):
             "Clustering failed for dataset %s: %s",
             dataset_id, exc, exc_info=True,
         )
+        complete_task(db, celery_task_id, error=str(exc))
+        raise
+    finally:
+        db.close()
+
+
+
+@app.task(bind=True, name="image.prepare_model")
+def prepare_clip_model(self, dataset_id: str = None):
+    """One-time: download (if needed) + load the CLIP model, reporting live
+    download progress (MB / %) so the UI's task bar can show it. Progress is
+    measured from the on-disk HF cache size; the watch thread uses its OWN db
+    session so it never shares the main session (which is a concurrency error).
+    """
+    import threading
+    celery_task_id = self.request.id
+    db = SyncSessionLocal()
+    try:
+        from core.settings import settings
+        from image_pipeline.clip_embedder import (
+            load_clip_model, expected_model_size, hf_cache_blobs_size,
+        )
+        name = settings.CLIP_MODEL_NAME
+        update_task_progress(db, celery_task_id, 0.02, "Preparing CLIP model…")
+
+        try:
+            total = expected_model_size(name)
+        except Exception:
+            total = 0
+
+        stop = threading.Event()
+
+        def _watch():
+            tdb = SyncSessionLocal()
+            try:
+                while not stop.is_set():
+                    try:
+                        dl = hf_cache_blobs_size(name)
+                        if total:
+                            frac = min(0.97, dl / total)
+                            msg = (f"Downloading model… {dl/1_000_000:.0f} / "
+                                   f"{total/1_000_000:.0f} MB ({frac*100:.0f}%)")
+                        else:
+                            frac = 0.1
+                            msg = f"Downloading model… {dl/1_000_000:.0f} MB"
+                        update_task_progress(tdb, celery_task_id, max(0.02, frac), msg)
+                    except Exception:
+                        pass
+                    stop.wait(1.0)
+            finally:
+                tdb.close()
+
+        watcher = threading.Thread(target=_watch, daemon=True)
+        watcher.start()
+        try:
+            load_clip_model(name)
+        finally:
+            stop.set()
+            watcher.join(timeout=3)
+
+        complete_task(db, celery_task_id, result={"ready": True, "model": name})
+        logger.info("CLIP model ready.")
+        return {"ready": True, "model": name}
+    except Exception as exc:
+        logger.error("Model preparation failed: %s", exc, exc_info=True)
         complete_task(db, celery_task_id, error=str(exc))
         raise
     finally:

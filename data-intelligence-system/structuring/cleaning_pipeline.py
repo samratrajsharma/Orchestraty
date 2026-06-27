@@ -162,6 +162,135 @@ def remove_outliers(
     return df, step
 
 
+def drop_columns(df: pd.DataFrame, columns: list[str]) -> tuple[pd.DataFrame, CleaningStep]:
+    """Remove the named columns (silently ignores ones not present)."""
+    existing = [c for c in columns if c in df.columns]
+    before = len(df.columns)
+    df = df.drop(columns=existing)
+    step = CleaningStep(
+        step="drop_columns",
+        description=f"Dropped {len(existing)} column(s): {', '.join(existing) if existing else 'none'}",
+        rows_before=len(df), rows_after=len(df), rows_affected=0,
+        columns_affected=existing,
+    )
+    logger.info("Drop columns: %d -> %d columns (dropped %d)", before, len(df.columns), len(existing))
+    return df, step
+
+
+def normalize_case(df: pd.DataFrame, mode: str) -> tuple[pd.DataFrame, CleaningStep]:
+    """Apply a case transformation to text columns AND column names.
+
+    mode is one of ``lower``, ``upper`` or ``title``.
+
+    Renames column headers and lowercases/uppercases/titlecases the cell
+    values of every text/object column. Users intuitively expect "lowercase
+    everything" to include the column headings — this matches that
+    expectation. Use :func:`standardize_column_names` afterwards if you also
+    want to strip special characters / collapse whitespace into snake_case.
+    """
+    text_cols = df.select_dtypes(include=["object"]).columns.tolist()
+    # 1. Cell values
+    if mode == "lower":
+        for col in text_cols:
+            df[col] = df[col].astype(str).str.lower()
+    elif mode == "upper":
+        for col in text_cols:
+            df[col] = df[col].astype(str).str.upper()
+    elif mode == "title":
+        for col in text_cols:
+            df[col] = df[col].astype(str).str.title()
+    # 2. Column names (always, regardless of which columns are text)
+    rename_map: dict = {}
+    for col in df.columns:
+        col_str = str(col)
+        if mode == "lower":
+            new_name = col_str.lower()
+        elif mode == "upper":
+            new_name = col_str.upper()
+        elif mode == "title":
+            new_name = col_str.title()
+        else:
+            new_name = col_str
+        if new_name != col_str:
+            rename_map[col] = new_name
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    step = CleaningStep(
+        step="normalize_case",
+        description=(
+            f"Applied {mode}-case to {len(text_cols)} text column(s) "
+            f"and renamed {len(rename_map)} column heading(s)"
+        ),
+        rows_before=len(df), rows_after=len(df), rows_affected=0,
+        columns_affected=list(set(text_cols + list(rename_map.values()))),
+    )
+    logger.info(
+        "Case normalisation '%s' applied to %d text columns; %d headings renamed",
+        mode, len(text_cols), len(rename_map),
+    )
+    return df, step
+
+
+def encode_categorical(
+    df: pd.DataFrame, specs: list[dict] | None
+) -> tuple[pd.DataFrame, CleaningStep]:
+    """Apply per-column encoding to convert categorical columns into numeric.
+
+    ``specs`` is a list of ``{"column": str, "mode": "onehot" | "label"}``.
+    One-hot expands each column into N boolean columns and drops the original;
+    label replaces values with integer codes (-1 for missing).
+    """
+    applied: list[str] = []
+    touched: list[str] = []
+    for spec in (specs or []):
+        col = spec.get("column") if isinstance(spec, dict) else None
+        mode = spec.get("mode") if isinstance(spec, dict) else None
+        if not col or col not in df.columns:
+            continue
+        touched.append(col)
+        try:
+            if mode == "onehot":
+                df = pd.get_dummies(df, columns=[col], prefix=str(col), dummy_na=False)
+                applied.append(f"{col} → one-hot")
+            elif mode == "label":
+                codes, _ = pd.factorize(df[col])  # NaN -> -1
+                df[col] = codes
+                applied.append(f"{col} → label codes")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Encoding failed for column '%s' (%s): %s", col, mode, exc)
+            continue
+    step = CleaningStep(
+        step="encode_categorical",
+        description=(
+            f"Encoded {len(applied)} column(s): {', '.join(applied)}"
+            if applied else "No encoding applied"
+        ),
+        rows_before=len(df), rows_after=len(df), rows_affected=0,
+        columns_affected=touched,
+    )
+    logger.info("Categorical encoding: %d columns encoded", len(applied))
+    return df, step
+
+
+def standardize_column_names(df: pd.DataFrame) -> tuple[pd.DataFrame, CleaningStep]:
+    """Rename columns to lowercase snake_case (e.g. ``Customer Name`` -> ``customer_name``)."""
+    import re
+    rename: dict = {}
+    for c in df.columns:
+        clean = re.sub(r"[^a-zA-Z0-9_]+", "_", str(c).strip()).strip("_").lower()
+        if clean and clean != c:
+            rename[c] = clean
+    df = df.rename(columns=rename)
+    step = CleaningStep(
+        step="standardize_column_names",
+        description=f"Renamed {len(rename)} column(s) to snake_case",
+        rows_before=len(df), rows_after=len(df), rows_affected=0,
+        columns_affected=list(rename.keys()),
+    )
+    logger.info("Column-name standardisation: %d renamed", len(rename))
+    return df, step
+
+
 def run_cleaning_pipeline(
     df: pd.DataFrame,
     null_strategy: str = "fill_mode",
@@ -169,6 +298,10 @@ def run_cleaning_pipeline(
     normalize: bool = True,
     handle_outliers: bool = False,
     iqr_multiplier: float = 1.5,
+    drop_cols: list[str] | None = None,
+    case_normalize: str = "none",
+    standardize_columns: bool = False,
+    encode_columns: list[dict] | None = None,
 ) -> tuple[pd.DataFrame, CleaningReport]:
     """Run the full cleaning pipeline on a DataFrame.
 
@@ -179,6 +312,9 @@ def run_cleaning_pipeline(
         normalize: Whether to normalize text columns.
         handle_outliers: Whether to remove numeric outliers.
         iqr_multiplier: IQR multiplier for outlier detection.
+        drop_cols: Optional list of column names to drop before processing.
+        case_normalize: ``none``/``lower``/``upper``/``title`` — applied to text columns.
+        standardize_columns: Rename columns to lowercase snake_case.
 
     Returns:
         Tuple of (cleaned DataFrame, CleaningReport).
@@ -186,6 +322,22 @@ def run_cleaning_pipeline(
     original_rows = len(df)
     original_cols = len(df.columns)
     steps = []
+
+    # Step 0a: Drop unwanted columns (use the original names the user picked).
+    if drop_cols:
+        df, step = drop_columns(df, drop_cols)
+        steps.append(asdict(step))
+
+    # Step 0b: Encode categorical columns BEFORE renaming, so the user's
+    # original column names (the ones they see in the UI) match.
+    if encode_columns:
+        df, step = encode_categorical(df, encode_columns)
+        steps.append(asdict(step))
+
+    # Step 0c: Standardize remaining column names to snake_case.
+    if standardize_columns:
+        df, step = standardize_column_names(df)
+        steps.append(asdict(step))
 
     # Step 1: Remove duplicates
     if remove_dupes:
@@ -196,9 +348,14 @@ def run_cleaning_pipeline(
     df, step = handle_nulls(df, strategy=null_strategy)
     steps.append(asdict(step))
 
-    # Step 3: Normalize text
+    # Step 3: Normalize text (trim whitespace)
     if normalize:
         df, step = normalize_text(df)
+        steps.append(asdict(step))
+
+    # Step 3b: Case normalisation
+    if case_normalize and case_normalize != "none":
+        df, step = normalize_case(df, case_normalize)
         steps.append(asdict(step))
 
     # Step 4: Remove outliers (optional)

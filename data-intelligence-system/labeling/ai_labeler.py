@@ -67,6 +67,8 @@ def predict_text_labels(
     batch_size: int = 10,
     examples: list[dict] | None = None,
     instructions: str | None = None,
+    concurrency: int = 5,
+    progress_callback=None,
 ) -> AILabelingReport:
     """Predict labels for a list of text items using the configured LLM.
 
@@ -74,21 +76,25 @@ def predict_text_labels(
         texts: List of text strings to classify.
         labels: Allowed label names.
         config: LLM provider configuration.
-        batch_size: Number of texts to process before yielding control (for logging).
+        batch_size: How often to fire a progress update (every N items).
         examples: Optional few-shot examples as ``[{"text": ..., "label": ...}]``.
         instructions: Optional plain-English guidance on how to assign labels.
+        concurrency: Number of LLM calls to run in parallel. Local Ollama
+            handles a few concurrent requests fine; cloud providers (OpenAI
+            etc.) handle many more. Default 5 is a safe middle ground that
+            roughly 5x's throughput vs sequential.
+        progress_callback: Optional ``callable(done: int, total: int, eta_seconds: float|None)``
+            invoked every ``batch_size`` items so the caller can update a
+            progress bar in real time.
 
     Returns:
         An :class:`AILabelingReport` with all predictions.
     """
     if not texts:
-        logger.info("No texts provided — returning empty report.")
+        logger.info("No texts provided - returning empty report.")
         return AILabelingReport(
-            total_items=0,
-            labeled_count=0,
-            predictions=[],
-            model_used=config.model_name,
-            provider=config.provider.value,
+            total_items=0, labeled_count=0, predictions=[],
+            model_used=config.model_name, provider=config.provider.value,
             avg_confidence=0.0,
         )
 
@@ -96,43 +102,58 @@ def predict_text_labels(
         raise ValueError("At least one label must be provided.")
 
     service = LLMService(config)
-    predictions: list[AILabelPrediction] = []
+    # Pre-allocate so we can fill results in arbitrary completion order
+    # without losing the original row position.
+    predictions: list[AILabelPrediction | None] = [None] * len(texts)
     total_confidence = 0.0
+    completed = 0
+    import time as _time
+    start_time = _time.monotonic()
 
-    async def _classify_all():
-        nonlocal total_confidence
-        for idx, text in enumerate(texts):
+    async def _classify_one(idx: int, text: str, sem: asyncio.Semaphore):
+        nonlocal completed, total_confidence
+        async with sem:
             try:
                 result = await service.classify(text, labels, examples, instructions)
                 predicted_label = result.get("label") or ""
                 confidence = float(result.get("confidence", 0.0))
                 reasoning = result.get("reasoning", "")
-
-                predictions.append(AILabelPrediction(
-                    text=text,
-                    predicted_label=predicted_label,
-                    confidence=confidence,
-                    reasoning=reasoning,
-                ))
+                predictions[idx] = AILabelPrediction(
+                    text=text, predicted_label=predicted_label,
+                    confidence=confidence, reasoning=reasoning,
+                )
                 total_confidence += confidence
-
             except Exception as exc:
-                logger.warning(
-                    "Failed to classify item %d: %s", idx, exc, exc_info=True
-                )
-                predictions.append(AILabelPrediction(
-                    text=text,
-                    predicted_label="",
-                    confidence=0.0,
+                logger.warning("Failed to classify item %d: %s", idx, exc, exc_info=True)
+                predictions[idx] = AILabelPrediction(
+                    text=text, predicted_label="", confidence=0.0,
                     reasoning=f"Classification error: {exc}",
-                ))
-
-            if (idx + 1) % batch_size == 0:
-                logger.info(
-                    "AI labeling progress: %d/%d items processed.", idx + 1, len(texts)
                 )
+
+        completed += 1
+        if completed % batch_size == 0 or completed == len(texts):
+            elapsed = _time.monotonic() - start_time
+            rate = completed / max(0.001, elapsed)
+            remaining = (len(texts) - completed) / max(0.001, rate)
+            logger.info(
+                "AI labeling progress: %d/%d items, %.1f/s, ETA %.0fs",
+                completed, len(texts), rate, remaining,
+            )
+            if progress_callback:
+                try:
+                    progress_callback(completed, len(texts), remaining)
+                except Exception:  # noqa: BLE001
+                    pass  # never let a broken callback kill the job
+
+    async def _classify_all():
+        sem = asyncio.Semaphore(max(1, concurrency))
+        tasks = [_classify_one(i, t, sem) for i, t in enumerate(texts)]
+        await asyncio.gather(*tasks)
 
     _run_async(_classify_all())
+
+    # Drop any None placeholders (shouldn't happen but be defensive).
+    predictions = [p for p in predictions if p is not None]
 
     labeled_count = sum(1 for p in predictions if p.predicted_label)
     avg_confidence = total_confidence / len(predictions) if predictions else 0.0

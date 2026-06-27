@@ -14,8 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from core.models.dataset import Dataset, DatasetMetadata, DatasetVersion
-from core.models.permission import DatasetPermission
-from core.services.audit_service import log_action
 
 from ..storage.minio_client import minio_storage
 from .validation_service import DataValidator, ValidationResult
@@ -44,32 +42,13 @@ class DatasetService:
             description=description,
             source_type=source_type,
             status="raw",
-            created_by=user_id,
-            org_id=org_id,
         )
         db.add(dataset)
         await db.flush()
 
-        # Owner permission
-        permission = DatasetPermission(
-            id=uuid.uuid4(),
-            dataset_id=dataset.id,
-            user_id=user_id,
-            permission_level="owner",
-            granted_by=user_id,
-        )
-        db.add(permission)
-        await db.flush()
+        # Phase D — single-user pivot: no per-user dataset permission.
 
         # Audit
-        await log_action(
-            db,
-            user_id=user_id,
-            action="dataset.create",
-            resource_type="dataset",
-            resource_id=str(dataset.id),
-            details={"name": name, "source_type": source_type},
-        )
 
         await db.refresh(dataset)
         logger.info("Created dataset %s (%s) by user %s", dataset.id, name, user_id)
@@ -112,7 +91,6 @@ class DatasetService:
                 file_type=file_type,
                 schema_hash="",
                 row_count=0,
-                created_by=user_id,
             )
             return dummy_version, validation
 
@@ -155,28 +133,11 @@ class DatasetService:
             schema_hash=validation.schema_hash,
             row_count=validation.row_count,
             parent_version_id=parent_version_id,
-            created_by=user_id,
         )
         db.add(version)
         await db.flush()
 
         # 5. Audit
-        await log_action(
-            db,
-            user_id=user_id,
-            action="dataset.upload_version",
-            resource_type="dataset_version",
-            resource_id=str(version.id),
-            details={
-                "dataset_id": str(dataset_id),
-                "version_number": next_version,
-                "file_name": file_name,
-                "file_type": file_type,
-                "row_count": validation.row_count,
-                "column_count": validation.column_count,
-                "schema_hash": validation.schema_hash,
-            },
-        )
 
         await db.refresh(version)
         logger.info(
@@ -218,15 +179,10 @@ class DatasetService:
 
         Returns ``(datasets, total_count)`` for pagination.
         """
-        # Base filter: datasets where the user has a permission row
-        base_filter = Dataset.id.in_(
-            select(DatasetPermission.dataset_id).where(
-                DatasetPermission.user_id == user_id
-            )
-        )
+        # Phase D — single-user mode: list every dataset.
 
         # Count query
-        count_stmt = select(func.count()).select_from(Dataset).where(base_filter)
+        count_stmt = select(func.count()).select_from(Dataset)
         if status:
             count_stmt = count_stmt.where(Dataset.status == status)
         total_result = await db.execute(count_stmt)
@@ -235,7 +191,7 @@ class DatasetService:
         # Data query
         data_stmt = (
             select(Dataset)
-            .where(base_filter)
+            
             .options(
                 selectinload(Dataset.versions),
                 selectinload(Dataset.metadata_entries),
@@ -278,14 +234,6 @@ class DatasetService:
         if updated_id is None:
             return None
 
-        await log_action(
-            db,
-            user_id=user_id,
-            action="dataset.update_status",
-            resource_type="dataset",
-            resource_id=str(dataset_id),
-            details={"new_status": new_status},
-        )
 
         await db.flush()
         dataset = await DatasetService.get_dataset(db, dataset_id)
@@ -375,31 +323,12 @@ class DatasetService:
         if not dataset.name.startswith("[DELETED] "):
             dataset.name = f"[DELETED] {dataset.name}"
 
-        # Remove non-owner permissions so it drops from list queries
-        del_perms_stmt = (
-            select(DatasetPermission)
-            .where(
-                DatasetPermission.dataset_id == dataset_id,
-                DatasetPermission.permission_level != "owner",
-            )
-        )
-        perm_result = await db.execute(del_perms_stmt)
-        for perm in perm_result.scalars().all():
-            await db.delete(perm)
 
         # Delete files from MinIO for each version
         for version in dataset.versions:
             if version.storage_path:
                 await minio_storage.delete_file(version.storage_path)
 
-        await log_action(
-            db,
-            user_id=user_id,
-            action="dataset.delete",
-            resource_type="dataset",
-            resource_id=str(dataset_id),
-            details={"name": dataset.name},
-        )
 
         await db.flush()
         logger.info("Soft-deleted dataset %s by user %s", dataset_id, user_id)

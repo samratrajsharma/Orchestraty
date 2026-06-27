@@ -17,7 +17,6 @@ async def create_task_record(
     celery_task_id: str,
     task_type: str,
     dataset_id: UUID,
-    created_by: UUID,
     parameters: dict | None = None,
 ) -> BackgroundTask:
     """Create a BackgroundTask record to track a Celery job."""
@@ -27,7 +26,6 @@ async def create_task_record(
         status="pending",
         progress=0.0,
         dataset_id=dataset_id,
-        created_by=created_by,
         parameters=parameters or {},
     )
     db.add(task)
