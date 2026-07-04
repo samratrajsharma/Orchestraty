@@ -1,83 +1,35 @@
-# 🔍 Know Your Projects
+# Know Your Code
 
-A desktop app for **AI-powered code exploration**. Load any local or GitHub project and instantly understand its structure, files, functions, and dependencies — powered by the Gemini API.
+Codebase intelligence that maps any repository, explains it file by file, answers
+questions about it with your own LLM, and tracks how it changes over time.
 
----
+It is built from three components that live side by side in this folder and wire
+together by **relative path**:
 
-## ✨ Features
+| Folder | What it is |
+|---|---|
+| `app/` | The product — a React + FastAPI web app. The backend is a thin REST layer over the engine. |
+| `engine/` | The analysis engine: the `knowit` Python package (indexing, retrieval, narration, over-time tracking). Imported by the app. |
+| `diagrams/` | `codemap` — a standalone, stdlib-only script that renders interactive architecture mindmaps. Imported by the app. |
 
-- 📂 Open local folders or GitHub repos
-- 💻 Syntax-highlighted code viewer with clickable functions
-- 🤖 AI explanations for projects, files, and functions (Gemini API)
-- 🕸 Interactive dependency graph (file & function call graphs)
-- 🪟 Full-screen dependency explorer with search, filters & node details
-- 🗺 Mind map view of project structure
-- 🎨 Dark & Light themes
+## How they wire together
 
----
+`app/backend/app.py` adds the engine and the diagram tool to `sys.path` by
+relative path:
 
-## 🛠 Setup
+- `../../engine` → imported as the `knowit.*` package
+- `../../diagrams/codemap` → imported as the `codemap` module
 
-### 1. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-Or on Windows, double-click `install_deps.bat`.
+Because those paths are relative, **the three folders must stay siblings inside
+`know-your-code/`.** If you move one, update the two path constants at the top of
+`app/backend/app.py`.
 
-### 2. Get a Gemini API key
-Get a free key at [aistudio.google.com](https://aistudio.google.com)
+## Run it
 
-### 3. Run the app
-```bash
-python main.py
-```
-Or double-click `run_app.bat` on Windows.
-
-### 4. Add your API key
-Go to **Settings (⚙️) → Gemini API Key**, paste your key and click Save.
-
----
-
-## 📁 Project Structure
-
-```
-├── main.py                  # Entry point
-├── requirements.txt
-├── core/
-│   ├── ai_explainer.py      # Gemini API wrapper
-│   ├── code_parser.py       # Multi-language code parser
-│   ├── dependency_analyzer.py # Call/import graph builder
-│   ├── file_tree_builder.py
-│   ├── project_loader.py
-│   └── cache_manager.py
-├── ui/
-│   ├── main_window.py       # Root window
-│   ├── code_viewer.py
-│   ├── explanation_panel.py
-│   ├── dependency_graph_panel.py
-│   ├── dependency_window.py # Full-screen graph window
-│   ├── file_tree_panel.py
-│   ├── function_popup.py
-│   ├── mindmap_widget.py
-│   ├── settings_dialog.py
-│   └── welcome_screen.py
-└── assets/styles/
-    ├── dark_theme.qss
-    └── light_theme.qss
+```powershell
+cd app
+.\run.ps1      # installs deps, starts backend (:8100) + frontend (:5273)
+.\stop.ps1     # stops both
 ```
 
----
-
-## 🔧 Requirements
-
-- Python 3.11+
-- PyQt6
-- google-genai
-- networkx
-- pyvis
-
----
-
-## 📄 License
-
-MIT
+See `app/README.md` for ports and per-page detail.

@@ -1,36 +1,39 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.pyc
-*.egg
-*.egg-info/
-dist/
-build/
-*.spec
-
-# Virtual environment
+# ───────────── Dependencies ─────────────
+node_modules/
 .venv/
 venv/
 env/
-ENV/
 
-# IDE / Editor
-.vscode/
-.idea/
-*.suo
-*.user
+# ───────────── Python ─────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
 
-# OS
+# ───────────── JS / build output ─────────────
+dist/
+dist-*/
+build/
+.vite/
+*.tsbuildinfo
+.deps-installed
+
+# ───────────── App runtime state & caches (tracked repos, Chroma index, timeline snapshots) ─────────────
+.cache/
+.knowit_cache/
+*.log
+
+# ───────────── Secrets & local env ─────────────
+.env
+.env.*
+!.env.example
+
+# ───────────── OS / editor junk ─────────────
 .DS_Store
 Thumbs.db
-desktop.ini
-
-# App cache / temp
-*.cache
-*.log
-lib/
-
-# Git
-*.orig
+~$*
+*.swp
