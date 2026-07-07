@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QTextEdit
 
 
 class ExplanationPanel(QWidget):
+    
     """
     Displays AI-generated explanations with a typewriter streaming effect.
     Shows breadcrumb navigation and copy-to-clipboard functionality.

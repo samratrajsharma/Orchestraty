@@ -17,6 +17,7 @@ from core.file_tree_builder import TreeNode, LANGUAGE_MAP
 
 # Language → color map for badges
 LANG_COLORS = {
+    
     "Python":     "#3572A5",
     "JavaScript": "#f1e05a",
     "TypeScript": "#2b7489",

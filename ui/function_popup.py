@@ -15,6 +15,7 @@ from ui.explanation_panel import ExplanationPanel
 
 
 class FunctionPopup(QDialog):
+    
     """
     Detailed popup for a specific function.
     Shows: code, AI explanation, callers, callees, "Show in Graph" button.

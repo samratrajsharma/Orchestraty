@@ -34,6 +34,7 @@ class AnalysisWorker(QRunnable):
     """Background worker that parses all project files."""
 
     class Signals(QObject):
+        
         progress = pyqtSignal(str, int)   # (message, percent)
         finished = pyqtSignal(object, object)  # (parsed_files dict, analyzer)
         error = pyqtSignal(str)
