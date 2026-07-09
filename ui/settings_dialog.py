@@ -18,6 +18,7 @@ class SettingsDialog(QDialog):
     api_key_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
+        
         super().__init__(parent)
         self.setWindowTitle("Settings — Know Your Projects")
         self.setMinimumWidth(520)

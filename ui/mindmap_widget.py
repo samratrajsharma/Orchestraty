@@ -20,6 +20,7 @@ from core.file_tree_builder import TreeNode
 
 # Language color fallback
 LANG_COLORS_MM = {
+  
     "Python": "#3572A5", "JavaScript": "#f1e05a", "TypeScript": "#2b7489",
     "Java": "#b07219", "C++": "#f34b7d", "C": "#555555", "C#": "#178600",
     "Go": "#00ADD8", "Rust": "#dea584", "Ruby": "#701516", "HTML": "#e34c26",

@@ -20,6 +20,7 @@ class WelcomeScreen(QWidget):
     - Recent projects list
     """
 
+
     open_folder_requested = pyqtSignal(str)
     open_github_requested = pyqtSignal(str)
 
