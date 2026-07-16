@@ -1,4 +1,0 @@
-# Build the docs locally:
-#   pip install -r docs/requirements.txt
-#   mkdocs serve
-mkdocs-material>=9.5
