@@ -1,5 +1,5 @@
-# Orchestraty — local control plane (Phase 1)
-# Brings up Postgres (state store), Redis (event bus), and the orchestrator API.
+# Orchestraty - local control plane (Phase 1)
+# Postgres (state store), Redis (event bus), and the orchestrator API.
 services:
   postgres:
     image: postgres:16-alpine
@@ -11,21 +11,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U orchestraty"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
 
   orchestrator:
     build: ./orchestrator
@@ -35,10 +25,8 @@ services:
       ORCH_DATABASE_URL: postgresql+asyncpg://orchestraty:orchestraty@postgres:5432/orchestraty
       ORCH_REDIS_URL: redis://redis:6379/0
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - postgres
+      - redis
 
 volumes:
   postgres_data:

@@ -1,8 +1,8 @@
-# Orchestraty — Orchestration Engine
+# Orchestraty - Orchestration Engine
 
 The control plane of the Orchestraty AI Operations Platform. It turns a declared
 **intent** into a graph of tasks, dispatches them to registered **agents**, tracks
-their state, and reconciles reality to the goal — the "AI Kubernetes" model.
+their state, and reconciles reality to the goal - the "AI Kubernetes" model.
 
 Built incrementally across Phase 1:
 
@@ -30,4 +30,4 @@ From the repo root:
 ## Configuration
 
 Every setting is overridable via an `ORCH_*` environment variable or a `.env`
-file at the repo root (see `.env.example`).
+file at the 
