@@ -13,10 +13,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy import text
 
-from . import __version__, models  # noqa: F401  (imported so tables register on Base)
+from . import models  # noqa: F401  (imported so tables register on Base)
 from .base import Base
 from .config import settings
 from .db import engine
+
+VERSION = "0.1.0"
 
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger("orchestrator")
@@ -50,13 +52,13 @@ async def lifespan(app: FastAPI):
     logger.info("Orchestraty orchestrator shutting down")
 
 
-app = FastAPI(title=settings.app_name, version=__version__, lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version=VERSION, lifespan=lifespan)
 
 
 @app.get("/health", tags=["system"])
 async def health() -> dict:
     """Liveness probe."""
-    return {"status": "healthy", "service": "orchestrator", "version": app.version}
+    return {"status": "healthy", "service": "orchestrator", "version": VERSION}
 
 
 @app.get("/readyz", tags=["system"])
