@@ -1,5 +1,4 @@
-# Orchestraty - local control plane
-# Postgres (state store), Redis (event bus), the orchestrator API, and agents.
+# Orchestraty - local control plane + AI operations agents
 services:
   postgres:
     image: postgres:16-alpine
@@ -16,6 +15,13 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+
+  mlflow:
+    build: ./infra/mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
 
   orchestrator:
     build: ./orchestrator
@@ -40,5 +46,20 @@ services:
       - orchestrator
       - redis
 
+  mlops-agent:
+    build:
+      context: ./agents
+      dockerfile: mlops_agent/Dockerfile
+    environment:
+      ORCH_API_URL: http://orchestrator:8000
+      ORCH_REDIS_URL: redis://redis:6379/0
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      AGENT_NAME: mlops-agent-1
+    depends_on:
+      - orchestrator
+      - redis
+      - mlflow
+
 volumes:
   postgres_data:
+  mlflow_data:
