@@ -1,7 +1,4 @@
-"""Dependency-graph helpers for a workflow's tasks (pure logic).
-
-A "task view" is a mapping with keys: id, depends_on (list of ids), status.
-"""
+"""Dependency-graph helpers for a workflow's tasks (pure logic)."""
 
 from collections import deque
 
@@ -9,7 +6,6 @@ from .enums import TaskStatus
 
 
 def validate_dag(tasks) -> None:
-    """Raise ValueError if a dependency is unknown or the graph has a cycle."""
     ids = {t["id"] for t in tasks}
     graph = {}
     for t in tasks:
@@ -17,7 +13,6 @@ def validate_dag(tasks) -> None:
             if dep not in ids:
                 raise ValueError(f"task {t['id']} depends on unknown task {dep}")
         graph[t["id"]] = list(t["depends_on"])
-
     WHITE, GREY, BLACK = 0, 1, 2
     color = {n: WHITE for n in graph}
 
@@ -36,7 +31,6 @@ def validate_dag(tasks) -> None:
 
 
 def ready_task_ids(tasks):
-    """Ids of QUEUED tasks whose every dependency has SUCCEEDED."""
     status = {t["id"]: t["status"] for t in tasks}
     out = []
     for t in tasks:
@@ -48,7 +42,6 @@ def ready_task_ids(tasks):
 
 
 def topological_order(tasks):
-    """Kahn's algorithm; returns ids in dependency order. Raises on cycle."""
     ids = {t["id"] for t in tasks}
     deps = {t["id"]: set(t["depends_on"]) for t in tasks}
     indeg = {i: len(deps[i]) for i in ids}

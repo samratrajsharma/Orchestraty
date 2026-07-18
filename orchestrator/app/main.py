@@ -24,6 +24,7 @@ from .reaper import AgentReaper
 from .registry import AgentRegistry
 from .results_consumer import ResultConsumer
 from .routers import agents as agents_routes
+from .routers import workflows as workflows_routes
 
 VERSION = "0.1.0"
 
@@ -78,14 +79,12 @@ async def lifespan(app: FastAPI):
         ", ".join(sorted(Base.metadata.tables)),
     )
 
-    # Agent registry + reaper (DB-only, always on).
     registry = AgentRegistry()
     reaper = AgentReaper(registry)
     app.state.registry = registry
     app.state.reaper = reaper
     app.state.reaper_task = asyncio.create_task(reaper.start())
 
-    # Event bus + dispatch + result consumer (best-effort).
     app.state.bus = None
     app.state.dispatcher = None
     app.state.result_consumer = None
@@ -120,17 +119,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, version=VERSION, lifespan=lifespan)
 app.include_router(agents_routes.router)
+app.include_router(workflows_routes.router)
 
 
 @app.get("/health", tags=["system"])
 async def health() -> dict:
-    """Liveness probe."""
     return {"status": "healthy", "service": "orchestrator", "version": VERSION}
 
 
 @app.get("/readyz", tags=["system"])
 async def readyz(request: Request) -> dict:
-    """Readiness - verifies the state store and event bus are reachable."""
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
     return {
@@ -143,7 +141,6 @@ async def readyz(request: Request) -> dict:
 
 @app.get("/debug/bus", tags=["debug"])
 async def debug_bus(request: Request) -> dict:
-    """Publish + read back a message to prove the event bus works."""
     bus = request.app.state.bus
     if bus is None:
         return {"event_bus": "disconnected"}
