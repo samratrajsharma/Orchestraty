@@ -49,3 +49,34 @@ class WorkflowOut(BaseModel):
     status: str
     dispatched: int = 0
     tasks: list[TaskOut] = Field(default_factory=list)
+
+
+class WorkflowSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    status: str
+    created_at: datetime | None = None
+
+
+class WorkflowDetail(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    intent: str | None = None
+    status: str
+    created_at: datetime | None = None
+    tasks: list[TaskOut] = Field(default_factory=list)
+
+
+class EventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    type: str
+    task_id: str | None = None
+    agent_id: str | None = None
+    payload: dict = Field(default_factory=dict)
+    created_at: datetime | None = None
