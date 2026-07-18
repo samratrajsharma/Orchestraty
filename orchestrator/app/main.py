@@ -1,8 +1,9 @@
 """Orchestrator API entrypoint.
 
-On startup: provision the state store, connect the event bus, and start the
-background result consumer (the reconciliation loop). Event-bus startup is
-best-effort so a broker hiccup degrades dispatch rather than crashing the API.
+On startup: provision the state store, start the agent reaper, connect the
+event bus, and start the background result consumer (the reconciliation loop).
+Event-bus startup is best-effort so a broker hiccup degrades dispatch rather
+than crashing the API.
 """
 
 import asyncio
@@ -19,7 +20,10 @@ from .config import settings
 from .db import engine
 from .dispatcher import Dispatcher
 from .engine import TaskEngine
+from .reaper import AgentReaper
+from .registry import AgentRegistry
 from .results_consumer import ResultConsumer
+from .routers import agents as agents_routes
 
 VERSION = "0.1.0"
 
@@ -54,6 +58,16 @@ async def _connect_bus(bus: EventBus, retries: int = 30, delay: float = 2.0) -> 
     raise RuntimeError(f"Event bus unreachable after {retries} attempts: {last_err}")
 
 
+async def _cancel(task) -> None:
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Orchestraty orchestrator starting (env=%s)", settings.environment)
@@ -64,6 +78,14 @@ async def lifespan(app: FastAPI):
         ", ".join(sorted(Base.metadata.tables)),
     )
 
+    # Agent registry + reaper (DB-only, always on).
+    registry = AgentRegistry()
+    reaper = AgentReaper(registry)
+    app.state.registry = registry
+    app.state.reaper = reaper
+    app.state.reaper_task = asyncio.create_task(reaper.start())
+
+    # Event bus + dispatch + result consumer (best-effort).
     app.state.bus = None
     app.state.dispatcher = None
     app.state.result_consumer = None
@@ -72,7 +94,7 @@ async def lifespan(app: FastAPI):
         bus = EventBus(settings.redis_url)
         await _connect_bus(bus)
         task_engine = TaskEngine()
-        dispatcher = Dispatcher(bus, task_engine)
+        dispatcher = Dispatcher(bus, task_engine, registry)
         consumer = ResultConsumer(bus, task_engine, dispatcher)
         app.state.bus = bus
         app.state.task_engine = task_engine
@@ -86,12 +108,10 @@ async def lifespan(app: FastAPI):
 
     if app.state.result_consumer is not None:
         app.state.result_consumer.stop()
-    if app.state.consumer_task is not None:
-        app.state.consumer_task.cancel()
-        try:
-            await app.state.consumer_task
-        except asyncio.CancelledError:
-            pass
+    if app.state.reaper is not None:
+        app.state.reaper.stop()
+    await _cancel(app.state.consumer_task)
+    await _cancel(app.state.reaper_task)
     if app.state.bus is not None:
         await app.state.bus.close()
     await engine.dispose()
@@ -99,6 +119,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version=VERSION, lifespan=lifespan)
+app.include_router(agents_routes.router)
 
 
 @app.get("/health", tags=["system"])
