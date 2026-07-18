@@ -86,6 +86,19 @@ services:
       - orchestrator
       - redis
 
+  infra-agent:
+    build:
+      context: ./agents
+      dockerfile: infra_agent/Dockerfile
+    environment:
+      ORCH_API_URL: http://orchestrator:8000
+      ORCH_REDIS_URL: redis://redis:6379/0
+      AGENT_NAME: infra-agent-1
+      TF_APPLY: "false"
+    depends_on:
+      - orchestrator
+      - redis
+
 volumes:
   postgres_data:
   mlflow_data:
