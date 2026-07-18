@@ -60,6 +60,32 @@ services:
       - redis
       - mlflow
 
+  llmops-agent:
+    build:
+      context: ./agents
+      dockerfile: llmops_agent/Dockerfile
+    environment:
+      ORCH_API_URL: http://orchestrator:8000
+      ORCH_REDIS_URL: redis://redis:6379/0
+      AGENT_NAME: llmops-agent-1
+      LLM_PROVIDER: mock
+      LLM_BUDGET_USD: "5.0"
+    depends_on:
+      - orchestrator
+      - redis
+
+  data-transform-agent:
+    build:
+      context: ./agents
+      dockerfile: data_transform_agent/Dockerfile
+    environment:
+      ORCH_API_URL: http://orchestrator:8000
+      ORCH_REDIS_URL: redis://redis:6379/0
+      AGENT_NAME: data-transform-agent-1
+    depends_on:
+      - orchestrator
+      - redis
+
 volumes:
   postgres_data:
   mlflow_data:

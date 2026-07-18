@@ -38,6 +38,8 @@ class TaskOut(BaseModel):
     capability: str
     status: str
     depends_on: list[str] = Field(default_factory=list)
+    result: dict | None = None
+    error: str | None = None
 
 
 class WorkflowOut(BaseModel):
