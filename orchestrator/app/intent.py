@@ -50,7 +50,6 @@ def compile_spec(spec: dict) -> dict:
             if dep not in key_set:
                 raise CompileError(f"task '{t['key']}' depends on unknown key '{dep}'")
 
-    # Reuse the engine's DAG validator; normalize its ValueError to CompileError.
     try:
         validate_dag(
             [
@@ -98,6 +97,59 @@ TEMPLATES = {
              "payload": {}, "depends_on": ["prep"]},
             {"key": "deploy", "name": "deploy model", "capability": "deploy.k8s",
              "payload": {}, "depends_on": ["train"]},
+        ],
+    },
+    "summarize": {
+        "name": "Summarize text",
+        "intent": "Summarize a piece of text with the LLMOps agent",
+        "tasks": [
+            {"key": "sum", "name": "summarize", "capability": "llm.complete",
+             "payload": {
+                 "template": "summarize", "complexity": "low",
+                 "vars": {"text": "Orchestraty is an agent-driven AI operations platform that "
+                                  "manages models, LLMs, and infrastructure the way Kubernetes "
+                                  "manages containers."},
+             }},
+        ],
+    },
+    "extract-contact": {
+        "name": "Extract contact fields",
+        "intent": "Pull structured fields from unstructured text",
+        "tasks": [
+            {"key": "ex", "name": "extract", "capability": "data.transform",
+             "payload": {
+                 "text": "Reach us at hello@orchestraty.ai or +1 415 555 0142, docs at https://orchestraty.ai",
+                 "schema": [
+                     {"name": "email", "type": "email"},
+                     {"name": "phone", "type": "phone"},
+                     {"name": "url", "type": "url"},
+                 ],
+             }},
+        ],
+    },
+    "ml-pipeline": {
+        "name": "ML pipeline (multi-agent)",
+        "intent": "Extract data hints, train a model, then explain the run - across three agents",
+        "tasks": [
+            {"key": "extract", "name": "extract features", "capability": "data.transform",
+             "payload": {
+                 "text": "Train on the iris dataset, snapshot 2026-07-18.",
+                 "schema": [
+                     {"name": "dataset", "type": "regex", "pattern": "iris|wine"},
+                     {"name": "date", "type": "date"},
+                 ],
+             }},
+            {"key": "train", "name": "train model", "capability": "mlops.train",
+             "payload": {"dataset": "iris", "model": "random_forest",
+                         "registered_model_name": "iris-pipeline"},
+             "depends_on": ["extract"]},
+            {"key": "explain", "name": "explain results", "capability": "llm.complete",
+             "payload": {
+                 "template": "summarize", "complexity": "low",
+                 "vars": {"text": "A random forest was trained on the iris dataset and "
+                                  "registered in the model registry."},
+             },
+             "depends_on": ["train"]},
         ],
     },
 }
