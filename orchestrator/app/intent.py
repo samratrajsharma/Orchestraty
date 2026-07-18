@@ -1,20 +1,4 @@
-"""Intent compiler (pure): validate a workflow spec and resolve task keys to ids.
-
-A spec is a declarative description of a workflow:
-
-    {
-      "name": "...",
-      "intent": "...",
-      "tasks": [
-        {"key": "a", "name": "...", "capability": "...", "payload": {...},
-         "depends_on": ["b"], "max_attempts": 3, "timeout_seconds": 300},
-        ...
-      ]
-    }
-
-Tasks reference each other by local "key"; compilation assigns each a stable id
-and rewrites depends_on to those ids, after validating the graph.
-"""
+"""Intent compiler (pure): validate a workflow spec and resolve task keys to ids."""
 
 import uuid
 
@@ -82,21 +66,9 @@ TEMPLATES = {
         "name": "Echo demo",
         "intent": "Run a two-step echo workflow",
         "tasks": [
-            {"key": "hello", "name": "say hello", "capability": "echo",
-             "payload": {"message": "hello"}},
+            {"key": "hello", "name": "say hello", "capability": "echo", "payload": {"message": "hello"}},
             {"key": "world", "name": "say world", "capability": "echo",
              "payload": {"message": "world"}, "depends_on": ["hello"]},
-        ],
-    },
-    "train-and-deploy": {
-        "name": "Train and deploy",
-        "intent": "Prepare data, train a model, then deploy it",
-        "tasks": [
-            {"key": "prep", "name": "prepare data", "capability": "data.prep", "payload": {}},
-            {"key": "train", "name": "train model", "capability": "mlops.train",
-             "payload": {}, "depends_on": ["prep"]},
-            {"key": "deploy", "name": "deploy model", "capability": "deploy.k8s",
-             "payload": {}, "depends_on": ["train"]},
         ],
     },
     "summarize": {
@@ -104,12 +76,10 @@ TEMPLATES = {
         "intent": "Summarize a piece of text with the LLMOps agent",
         "tasks": [
             {"key": "sum", "name": "summarize", "capability": "llm.complete",
-             "payload": {
-                 "template": "summarize", "complexity": "low",
-                 "vars": {"text": "Orchestraty is an agent-driven AI operations platform that "
-                                  "manages models, LLMs, and infrastructure the way Kubernetes "
-                                  "manages containers."},
-             }},
+             "payload": {"template": "summarize", "complexity": "low",
+                         "vars": {"text": "Orchestraty is an agent-driven AI operations platform "
+                                          "that manages models, LLMs, and infrastructure the way "
+                                          "Kubernetes manages containers."}}},
         ],
     },
     "extract-contact": {
@@ -117,14 +87,10 @@ TEMPLATES = {
         "intent": "Pull structured fields from unstructured text",
         "tasks": [
             {"key": "ex", "name": "extract", "capability": "data.transform",
-             "payload": {
-                 "text": "Reach us at hello@orchestraty.ai or +1 415 555 0142, docs at https://orchestraty.ai",
-                 "schema": [
-                     {"name": "email", "type": "email"},
-                     {"name": "phone", "type": "phone"},
-                     {"name": "url", "type": "url"},
-                 ],
-             }},
+             "payload": {"text": "Reach us at hello@orchestraty.ai or +1 415 555 0142, docs at https://orchestraty.ai",
+                         "schema": [{"name": "email", "type": "email"},
+                                    {"name": "phone", "type": "phone"},
+                                    {"name": "url", "type": "url"}]}},
         ],
     },
     "ml-pipeline": {
@@ -132,24 +98,50 @@ TEMPLATES = {
         "intent": "Extract data hints, train a model, then explain the run - across three agents",
         "tasks": [
             {"key": "extract", "name": "extract features", "capability": "data.transform",
-             "payload": {
-                 "text": "Train on the iris dataset, snapshot 2026-07-18.",
-                 "schema": [
-                     {"name": "dataset", "type": "regex", "pattern": "iris|wine"},
-                     {"name": "date", "type": "date"},
-                 ],
-             }},
+             "payload": {"text": "Train on the iris dataset, snapshot 2026-07-18.",
+                         "schema": [{"name": "dataset", "type": "regex", "pattern": "iris|wine"},
+                                    {"name": "date", "type": "date"}]}},
             {"key": "train", "name": "train model", "capability": "mlops.train",
              "payload": {"dataset": "iris", "model": "random_forest",
                          "registered_model_name": "iris-pipeline"},
              "depends_on": ["extract"]},
             {"key": "explain", "name": "explain results", "capability": "llm.complete",
-             "payload": {
-                 "template": "summarize", "complexity": "low",
-                 "vars": {"text": "A random forest was trained on the iris dataset and "
-                                  "registered in the model registry."},
-             },
+             "payload": {"template": "summarize", "complexity": "low",
+                         "vars": {"text": "A random forest was trained on the iris dataset and registered."}},
              "depends_on": ["train"]},
+        ],
+    },
+    "provision-cluster": {
+        "name": "Provision GPU cluster",
+        "intent": "Provision a GPU node pool via the infrastructure agent",
+        "tasks": [
+            {"key": "infra", "name": "provision", "capability": "infra.provision",
+             "payload": {"provider": "gcp", "resource": "gpu_node_pool", "name": "train-pool",
+                         "size": {"nodes": 3, "machine_type": "a2-highgpu-1g"}}},
+        ],
+    },
+    "train-and-serve": {
+        "name": "Train and serve",
+        "intent": "Train a model, register it, then deploy it to the model server - end to end",
+        "tasks": [
+            {"key": "train", "name": "train model", "capability": "mlops.train",
+             "payload": {"dataset": "iris", "model": "random_forest",
+                         "registered_model_name": "iris-classifier"}},
+            {"key": "serve", "name": "deploy model", "capability": "deploy.model",
+             "payload": {"model_uri": "models:/iris-classifier/latest",
+                         "name": "iris-classifier", "strategy": "direct"},
+             "depends_on": ["train"]},
+        ],
+    },
+    "train-and-deploy": {
+        "name": "Train and deploy (legacy placeholder)",
+        "intent": "Prepare data, train a model, then deploy it",
+        "tasks": [
+            {"key": "prep", "name": "prepare data", "capability": "data.prep", "payload": {}},
+            {"key": "train", "name": "train model", "capability": "mlops.train",
+             "payload": {}, "depends_on": ["prep"]},
+            {"key": "deploy", "name": "deploy model", "capability": "deploy.k8s",
+             "payload": {}, "depends_on": ["train"]},
         ],
     },
 }

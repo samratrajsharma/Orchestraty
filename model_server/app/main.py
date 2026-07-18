@@ -1,14 +1,14 @@
 """Orchestraty model server.
 
 A live inference service - the locally-runnable analog of a Kubernetes model
-deployment. Holds two slots (stable + canary), loads MLflow models by URI, and
-routes /predict traffic by canary weight. The deploy agent drives it (load ->
-canary -> promote/rollback).
+deployment. Holds two slots (stable + canary), loads MLflow models by URI
+(including models:/<name>/latest), and routes /predict traffic by canary weight.
 """
 
 import logging
 import os
 import random
+import re
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -42,6 +42,21 @@ class PredictRequest(BaseModel):
     inputs: list
 
 
+def _resolve_uri(uri: str) -> str:
+    """Resolve models:/<name>/latest to the highest registered version."""
+    m = re.match(r"^models:/(?P<name>.+)/latest$", uri)
+    if not m:
+        return uri
+    from mlflow import MlflowClient
+
+    client = MlflowClient(tracking_uri=TRACKING_URI)
+    versions = client.search_model_versions(f"name='{m.group('name')}'")
+    if not versions:
+        raise ValueError(f"no versions registered for model '{m.group('name')}'")
+    latest = max(versions, key=lambda v: int(v.version))
+    return f"models:/{m.group('name')}/{latest.version}"
+
+
 def _load_model(uri: str):
     import mlflow
     import mlflow.pyfunc
@@ -73,14 +88,15 @@ def load(req: LoadRequest) -> dict:
     if req.slot not in ("stable", "canary"):
         raise HTTPException(status_code=400, detail="slot must be 'stable' or 'canary'")
     try:
-        model = _load_model(req.model_uri)
+        resolved = _resolve_uri(req.model_uri)
+        model = _load_model(resolved)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"failed to load model: {exc}")
     STATE[req.slot].model = model
-    STATE[req.slot].model_uri = req.model_uri
+    STATE[req.slot].model_uri = resolved
     if req.slot == "canary":
         STATE["canary_weight"] = req.weight if req.weight is not None else 10
-    log.info("loaded %s into %s slot", req.model_uri, req.slot)
+    log.info("loaded %s into %s slot", resolved, req.slot)
     return _status()
 
 

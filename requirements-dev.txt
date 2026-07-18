@@ -1,0 +1,4 @@
+# Dev/test tooling. Unit tests are pure Python and need only pytest:
+#   pip install -r requirements-dev.txt
+#   ./run-tests.ps1        (Windows)   or   ./run-tests.sh
+pytest>=8.0,<9

@@ -16,7 +16,11 @@ def encode(message: dict) -> dict:
 
 
 def decode(fields) -> dict:
-    raw = fields.get(DATA_FIELD) if isinstance(fields, dict) else None
+    raw = None
+    if isinstance(fields, dict):
+        raw = fields.get(DATA_FIELD)
+        if raw is None:
+            raw = fields.get(DATA_FIELD.encode())
     if isinstance(raw, bytes):
         raw = raw.decode()
     return json.loads(raw) if raw else {}

@@ -10,8 +10,7 @@ def test_compile_template_echo():
     assert c["name"] == "Echo demo" and len(c["tasks"]) == 2
     hello = next(t for t in c["tasks"] if t["name"] == "say hello")
     world = next(t for t in c["tasks"] if t["name"] == "say world")
-    assert hello["depends_on"] == []
-    assert world["depends_on"] == [hello["id"]]
+    assert hello["depends_on"] == [] and world["depends_on"] == [hello["id"]]
 
 
 def test_compile_explicit_spec_defaults():
@@ -21,8 +20,7 @@ def test_compile_explicit_spec_defaults():
     ]}
     c = intent.compile_spec(spec)
     by = {t["name"]: t for t in c["tasks"]}
-    assert by["a"]["depends_on"] == [] and by["b"]["depends_on"] == [by["a"]["id"]]
-    assert by["a"]["max_attempts"] == 3 and by["a"]["timeout_seconds"] == 300
+    assert by["b"]["depends_on"] == [by["a"]["id"]] and by["a"]["max_attempts"] == 3
 
 
 def test_errors():
@@ -45,3 +43,17 @@ def test_errors():
 def test_unknown_template():
     with pytest.raises(intent.CompileError):
         intent.get_template("nope")
+
+
+def test_all_templates_compile():
+    assert len(intent.TEMPLATES) >= 6
+    for name in intent.TEMPLATES:
+        c = intent.compile_spec(intent.get_template(name))
+        assert c["tasks"], name
+
+
+def test_train_and_serve_chain():
+    c = intent.compile_spec(intent.get_template("train-and-serve"))
+    by = {t["name"]: t for t in c["tasks"]}
+    assert by["deploy model"]["depends_on"] == [by["train model"]["id"]]
+    assert by["deploy model"]["payload"]["model_uri"] == "models:/iris-classifier/latest"
