@@ -1,5 +1,6 @@
 # Orchestraty - local control plane (Phase 1)
-# Postgres (state store), Redis (event bus), and the orchestrator API.
+# Postgres (state store), Redis (event bus), the orchestrator API, and a
+# reference echo agent that proves the end-to-end loop.
 services:
   postgres:
     image: postgres:16-alpine
@@ -26,6 +27,16 @@ services:
       ORCH_REDIS_URL: redis://redis:6379/0
     depends_on:
       - postgres
+      - redis
+
+  echo-agent:
+    build: ./agents/echo_agent
+    environment:
+      ORCH_API_URL: http://orchestrator:8000
+      ORCH_REDIS_URL: redis://redis:6379/0
+      AGENT_NAME: echo-agent-1
+    depends_on:
+      - orchestrator
       - redis
 
 volumes:
