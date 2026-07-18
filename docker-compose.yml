@@ -1,4 +1,4 @@
-# Orchestraty - local control plane + AI operations agents
+# Orchestraty - local control plane + AI operations agents + serving
 services:
   postgres:
     image: postgres:16-alpine
@@ -22,6 +22,15 @@ services:
       - "5000:5000"
     volumes:
       - mlflow_data:/mlflow
+
+  model-server:
+    build: ./model_server
+    ports:
+      - "8080:8080"
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    depends_on:
+      - mlflow
 
   orchestrator:
     build: ./orchestrator
@@ -98,6 +107,20 @@ services:
     depends_on:
       - orchestrator
       - redis
+
+  deploy-agent:
+    build:
+      context: ./agents
+      dockerfile: deploy_agent/Dockerfile
+    environment:
+      ORCH_API_URL: http://orchestrator:8000
+      ORCH_REDIS_URL: redis://redis:6379/0
+      MODEL_SERVER_URL: http://model-server:8080
+      AGENT_NAME: deploy-agent-1
+    depends_on:
+      - orchestrator
+      - redis
+      - model-server
 
 volumes:
   postgres_data:
