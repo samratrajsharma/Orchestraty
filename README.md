@@ -1,462 +1,301 @@
 # Orchestraty
 
-Enterprise AI Operating System — a unified platform for data ingestion, structuring, exploratory analysis, rule-based labeling, AI-powered labeling, image intelligence, review & quality control, workflow orchestration, and multi-LLM integration.
+**An agent-driven AI operations platform — Kubernetes-style declarative control for the machine-learning lifecycle.**
 
-Built by Samrat.
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-Streams-DC382D?logo=redis&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-56%20passing-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-green)
+
+You declare an **intent** — "train this model and serve it" — and Orchestraty compiles it into a task graph, dispatches each step to a specialized **agent**, tracks state, and continuously **reconciles** reality to your goal. It's the Kubernetes model applied to AI work: declarative desired-state, controllers (agents) that do the work, and a control loop that keeps everything converged — including **self-healing** when a model drifts.
+
+```mermaid
+flowchart TD
+    U["Control Tower  (/ui)"] -->|"POST /workflows"| O[Orchestrator]
+    O <-->|state| P[("PostgreSQL")]
+    O -->|"tasks · Redis Streams"| A[Agents]
+    A -->|results| O
+    A --> M["MLflow (:5000)"]
+    A --> S["Model-Server (:8080)"]
+    O --> PR["Prometheus (:9090)"] --> G["Grafana (:3000)"]
+```
 
 ---
 
-## Quick Start
+## Contents
 
-### Prerequisites
-
-- Docker Desktop (running)
-- PowerShell 5.1+ (Windows) or Bash (Linux/macOS)
-- Python 3.11+ with `streamlit` installed (`pip install streamlit`)
-- Ollama (optional, for local LLM features) with `gemma4:e4b` or `qwen3.5:9b`
-
-### One-Command Setup
-
-```powershell
-# First time or full reset (builds images, wipes data, starts everything)
-cd ai-operating-system
-.\setup.ps1 -Fresh
-
-# Daily start (no rebuild, just boots services + Streamlit)
-.\start.ps1
-
-# Stop everything
-docker compose -f infrastructure/docker-compose.yml down
-```
-
-The setup script handles Docker Compose, waits for every service to be healthy, creates the initial superuser from `.env` credentials, and launches Streamlit — all in one command.
-
-### Access Points
-
-| Service              | URL                             |
-|----------------------|---------------------------------|
-| Orchestraty App      | http://localhost:8501            |
-| API + Swagger Docs   | http://localhost:8000/docs       |
-| MinIO Console        | http://localhost:9001            |
-| Qdrant Dashboard     | http://localhost:6333/dashboard  |
-
-Default admin: `admin@orchestraty.com` / `Admin@12345`
-
----
-
-## Architecture
-
-```
-                     +---------------------+
-                     |   Streamlit App     |
-                     | (unified: user +    |
-                     |  admin in one app)  |
-                     +--------+------------+
-                              |
-                     +--------v------------+
-                     |   FastAPI (8000)    |
-                     |  12 route modules   |
-                     +--+------+------+----+
-                        |      |      |
-         +--------------+      |      +---------------+
-         |                     |                       |
-+--------v--------+  +---------v--------+  +-----------v--------+
-|  PostgreSQL     |  |  Redis           |  |  MinIO (S3)        |
-|  (users, tasks, |  |  (cache, Celery  |  |  (files, images,   |
-|   datasets,     |  |   broker)        |  |   thumbnails)      |
-|   workflows)    |  +--------+---------+  +--------------------+
-+---------+-------+           |
-          |          +--------v---------+
-          |          |  Celery Workers  |
-          |          |  (structuring,   |
-          |          |   EDA, labeling, |
-          |          |   AI labeling,   |
-          |          |   image pipeline,|
-          |          |   workflows)     |
-          |          +--------+---------+
-          |                   |
-          |          +--------v---------+     +------------------+
-          +----------+  Qdrant          |     |  Ollama / LLM    |
-                     |  (text + image   |     |  (gemma4, qwen3, |
-                     |   vector store)  |     |   OpenAI, etc.)  |
-                     +------------------+     +------------------+
-```
-
-### Services (Docker Compose)
-
-| Container                | Purpose                                | Port      |
-|--------------------------|----------------------------------------|-----------|
-| orchestraty-api          | FastAPI backend                         | 8000      |
-| orchestraty-postgres     | PostgreSQL 15 (persistent data)         | 5432      |
-| orchestraty-redis        | Redis 7 (cache + Celery broker)         | 6379      |
-| orchestraty-minio        | MinIO (S3-compatible file storage)      | 9000/9001 |
-| orchestraty-qdrant       | Qdrant (vector DB for embeddings)       | 6333      |
-| orchestraty-celery-worker| Celery worker (background pipelines)    | -         |
+[Features](#features) · [Quick start](#quick-start) · [Usage](#usage) · [Capabilities](#capabilities) · [Templates](#workflow-templates) · [Dashboard](#dashboard) · [API](#api) · [Services](#services--ports) · [Configuration](#configuration) · [Testing](#testing) · [Project structure](#project-structure) · [Tech stack](#tech-stack) · [License](#license)
 
 ---
 
 ## Features
 
-### Phase 1 — Data Foundation (Complete)
-
-**Authentication & RBAC**
-- JWT-based auth with four roles: `admin`, `reviewer`, `annotator`, `viewer`
-- Role-gated endpoints via `RoleChecker` middleware
-- Self-registration with auto-admin detection — registering with a bootstrap admin email automatically grants admin role
-- Session persistence across Streamlit reruns
-
-**Data Ingestion & Versioning**
-- Upload CSV, TSV, JSON, JSONL files with automatic validation
-- Schema detection (column types, nulls, unique counts)
-- Immutable version history per dataset with schema hash tracking
-- File storage in MinIO with organized path structure
-
-**Audit Logging**
-- Every write action logged with user, action type, resource, timestamp
-- Queryable by user, action, resource type, and date range
-
-### Phase 2 — Intelligence Pipeline (Complete)
-
-**Data Structuring Agent**
-- Schema inference with type detection (numeric, categorical, datetime, text, boolean)
-- Automated cleaning: null handling (5 strategies), duplicate removal, outlier detection (IQR)
-- Quality scoring on 5 dimensions (completeness, consistency, validity, uniqueness, accuracy)
-- Letter-grade output (A-F) with actionable recommendations
-
-**AI-Powered EDA**
-- Statistical profiling: per-column stats, correlations, skewness/kurtosis, data warnings
-- Embedding generation: sentence-transformers (GPU) with TF-IDF + SVD fallback
-- Clustering analysis: K-Means with PCA dimensionality reduction and silhouette scoring
-- Qdrant vector storage for semantic search
-
-**Rule-Based Labeling Engine**
-- 14 operators: `equals`, `not_equals`, `contains`, `not_contains`, `starts_with`, `ends_with`, `greater_than`, `less_than`, `greater_equal`, `less_equal`, `regex_match`, `in_list`, `is_null`, `is_not_null`
-- 3 conflict resolution strategies: `first_match`, `highest_priority`, `all`
-- Priority-based rule ordering with per-rule match statistics
-
-**Background Task System**
-- Celery-powered async pipelines with Redis broker
-- Real-time progress tracking (percentage + status message)
-- Race-condition-safe: task records committed before Celery dispatch
-- Frontend auto-polls for results
-
-### Phase 3 — Advanced AI & ML Operations (Complete)
-
-**Multi-LLM Provider System**
-- Supports Ollama (local), OpenAI, Anthropic, and Groq
-- Hot-swappable providers — change models without code changes
-- Default: `gemma4:e4b` via Ollama (also supports `qwen3.5:9b`)
-- Connection testing and provider health checks from the UI
-- API key management through environment variables
-
-**Image Intelligence Pipeline**
-- Batch image upload with validation (PNG, JPG, JPEG, WebP, TIFF, BMP)
-- Automatic metadata extraction (dimensions, color mode, EXIF)
-- Thumbnail generation and MinIO storage
-- CLIP embedding generation (Intel XPU, CUDA, or CPU)
-- Image clustering via HDBSCAN on CLIP vectors
-- Text-to-image similarity search using Qdrant
-- Visual gallery with cluster filtering
-
-**Intelligent Labeling System**
-- AI-powered label prediction using connected LLM providers
-- Similarity-based label propagation via vector embeddings
-- Label aggregation across multiple sources (rules, AI, manual)
-- Confidence scoring and conflict resolution
-
-**Review & Quality System**
-- Dataset quality assessment with multi-dimensional scoring
-- Review workflow API for human-in-the-loop validation
-- Export pipeline for labeled datasets
-
-**Workflow Orchestration**
-- Multi-step pipeline engine: structuring → EDA → labeling → review → export
-- Built-in workflow templates (Standard Data Pipeline, Quick Label Pipeline)
-- Custom workflow creation with step-by-step execution
-- Workflow status tracking, pause/resume controls
-- Celery-based async execution with per-step progress
-
-**Unified Streamlit App**
-- Single app for all users — admin features appear as an extra nav section for admin-role users
-- No separate admin app needed
-- Role-based UI: viewers see pipeline tools, admins see user management, system health, audit trail
-- LLM provider configuration page
-- Image pipeline gallery with embedding and clustering controls
-
-### Phase 4 — Enterprise Features (Planned)
-
-- Active learning feedback loops
-- Multi-tenant organization support
-- Model training pipelines (AutoML + custom)
-- Model registry and versioning
-- One-click deployment with A/B testing
-- Performance monitoring and drift detection
-- API rate limiting and usage analytics
+- **Declarative control plane** — submit an intent as a template or an explicit spec; the orchestrator compiles it into a validated task DAG (cycle-checked), schedules it, and reconciles workflow state.
+- **Eight specialized agents** — training (MLflow), LLM completions, data extraction, infrastructure (Terraform), model deployment, drift/health monitoring, and automated recovery.
+- **Redis Streams event bus** — agents are fully decoupled; tasks flow out on per-capability streams and results flow back, with consumer groups for at-least-once delivery and horizontal scaling.
+- **Model training + registry** — the MLOps agent trains scikit-learn models, logs runs to **MLflow**, and registers versioned models.
+- **Live model serving** — a **model-server** loads registered models and serves `/predict` with **stable + canary** slots and weighted traffic routing.
+- **Self-healing loop** — the monitor agent scores drift (PSI) and health against thresholds; the recovery agent turns a breach into a corrective workflow (retrain or rollback) automatically.
+- **Observability** — Prometheus metrics on the orchestrator and model-server, with a pre-provisioned **Grafana** dashboard.
+- **Knowledge layer** — `/insights` (success rates, activity) and `/lineage/{model}` (which workflows trained/deployed a model), mined from an append-only event log.
+- **Control Tower dashboard** — a single web UI to submit intents, watch workflows live, and inspect agents, capabilities, insights, and serving status.
+- **One command to run it all** — `./run.ps1` (or `docker compose up`) brings up the entire 15-service stack.
 
 ---
 
-## Project Structure
+## Quick start
 
+**Prerequisites:** [Docker](https://www.docker.com/) with Compose (Docker Desktop on Windows/macOS). ~8 GB free disk for images. (Python 3.11 optional, only for running the unit tests locally.)
+
+```bash
+git clone https://github.com/samratrajsharma/Orchestraty.git
+cd Orchestraty
 ```
-ai-operating-system/
-├── app.py                            # FastAPI entry point (12 routers, lifespan hooks)
-├── setup.ps1                         # First-time setup (build + start + Streamlit)
-├── start.ps1                         # Daily launcher (start + Streamlit)
-├── manage.py                         # CLI admin commands
-├── .env                              # Environment config (not in git)
-├── requirements.txt                  # Python dependencies
-│
-├── core/                             # Shared platform core
-│   ├── settings.py                   # Pydantic-settings config (reads .env)
-│   ├── database.py                   # Async SQLAlchemy engine + session factory
-│   ├── database_sync.py              # Sync session for Celery workers + CLI
-│   ├── celery_app.py                 # Celery configuration
-│   ├── storage.py                    # Centralized MinIO client factory
-│   ├── paths.py                      # Centralized sys.path setup
-│   ├── models/                       # ORM models
-│   │   ├── user.py                   #   User (id, email, role, is_active)
-│   │   ├── dataset.py                #   Dataset, DatasetVersion, DatasetMetadata
-│   │   ├── background_task.py        #   BackgroundTask (celery tracking)
-│   │   ├── audit_log.py              #   AuditLog (action trail)
-│   │   ├── image_asset.py            #   ImageAsset (images, embeddings, clusters)
-│   │   └── workflow.py               #   Workflow, WorkflowTemplate
-│   ├── api/                          # Route modules (12 total)
-│   │   ├── auth_routes.py            #   /api/v1/auth (register, login, me)
-│   │   ├── admin_routes.py           #   /api/v1/admin (users, stats)
-│   │   ├── task_routes.py            #   /api/v1/tasks (list, get, filter)
-│   │   ├── audit_routes.py           #   /api/v1/audit (query logs)
-│   │   ├── structuring_routes.py     #   /api/v1/structuring (run, results)
-│   │   ├── eda_routes.py             #   /api/v1/eda (run, results, profile)
-│   │   ├── labeling_routes.py        #   /api/v1/labeling (run, results, operators)
-│   │   ├── ai_labeling_routes.py     #   /api/v1/ai-labeling (predict, propagate, aggregate)
-│   │   ├── image_routes.py           #   /api/v1/images (upload, gallery, embed, cluster, search)
-│   │   ├── review_routes.py          #   /api/v1/review (quality, reviews, export)
-│   │   └── workflow_routes.py        #   /api/v1/workflows (create, list, templates)
-│   ├── middleware/
-│   │   └── rbac.py                   #   RoleChecker + require_admin/reviewer/annotator/viewer
-│   └── services/
-│       ├── auth_service.py           #   JWT create/verify, password hash, get_current_user
-│       ├── audit_service.py          #   log_action()
-│       └── task_service.py           #   create_task_record, update/complete task
-│
-├── data-intelligence-system/         # Processing modules
-│   ├── ingestion/                    # File upload, validation, MinIO storage
-│   │   ├── api/                      #   routes.py, schemas.py
-│   │   ├── storage/                  #   minio_client.py
-│   │   └── services/                 #   validation, versioning
-│   ├── structuring/                  # Schema detection + cleaning + quality
-│   │   ├── schema_detector.py
-│   │   ├── cleaning_pipeline.py
-│   │   └── quality_scorer.py
-│   ├── eda/                          # Exploratory data analysis
-│   │   ├── profiler.py
-│   │   ├── embedder.py
-│   │   └── clusterer.py
-│   ├── labeling/                     # Rule-based + AI labeling
-│   │   ├── rule_engine.py
-│   │   ├── rule_store.py
-│   │   ├── ai_labeler.py            #   LLM-powered label prediction
-│   │   └── similarity_propagator.py  #   Vector-based label propagation
-│   ├── image_pipeline/               # Image intelligence
-│   │   ├── metadata_extractor.py     #   Image validation + EXIF extraction
-│   │   ├── thumbnail_generator.py    #   Thumbnail creation
-│   │   ├── clip_embedder.py          #   CLIP embeddings + Qdrant storage
-│   │   └── image_clusterer.py        #   HDBSCAN clustering
-│   ├── orchestration/                # Workflow engine
-│   │   ├── workflow_engine.py        #   Step execution + state management
-│   │   └── templates.py              #   Built-in pipeline templates
-│   └── llm/                          # Multi-LLM provider system
-│       └── llm_provider.py           #   Ollama, OpenAI, Anthropic, Groq
-│
-├── data_intelligence/                # Celery task definitions
-│   └── tasks/
-│       ├── structuring_tasks.py
-│       ├── eda_tasks.py
-│       ├── labeling_tasks.py
-│       ├── ai_labeling_tasks.py
-│       ├── image_tasks.py            #   CLIP embeddings + clustering
-│       ├── review_tasks.py
-│       └── workflow_tasks.py         #   Multi-step pipeline execution
-│
-├── frontend/
-│   └── app.py                        #   Unified Streamlit app (user + admin)
-│
-└── infrastructure/
-    ├── docker-compose.yml            #   6-service stack
-    ├── Dockerfile                    #   Python 3.11 API image
-    ├── k8s/                          #   Kubernetes manifests (planned)
-    └── terraform/                    #   IaC templates (planned)
+
+**Windows (PowerShell):**
+
+```powershell
+./run.ps1              # builds + starts everything, opens the dashboard
+./run.ps1 -Fresh       # wipe all volumes first (clean slate)
+./run.ps1 -NoBrowser   # start without opening browser tabs
+```
+
+**macOS / Linux (or any OS):**
+
+```bash
+docker compose up --build
+```
+
+Then open the **Control Tower** at **http://localhost:8000/ui/**.
+
+> First run pulls images and installs dependencies — it can take a few minutes. Stop everything with `docker compose down`.
+
+---
+
+## Usage
+
+Everything is driven by submitting a **workflow** to the orchestrator (or by clicking *Run* in the dashboard).
+
+**Run a built-in template** — go from nothing to a trained, deployed, serving model:
+
+```bash
+curl -X POST http://localhost:8000/workflows \
+  -H "Content-Type: application/json" \
+  -d '{"template": "train-and-serve"}'
+```
+
+**Submit a custom spec** — chain any capabilities into a DAG:
+
+```bash
+curl -X POST http://localhost:8000/workflows \
+  -H "Content-Type: application/json" \
+  -d '{
+    "spec": {
+      "name": "extract-then-train",
+      "tasks": [
+        {"key": "x", "capability": "data.transform",
+         "payload": {"text": "iris dataset", "schema": [{"name":"ds","type":"regex","pattern":"iris|wine"}]}},
+        {"key": "t", "capability": "mlops.train",
+         "payload": {"dataset": "iris", "registered_model_name": "iris-classifier"},
+         "depends_on": ["x"]}
+      ]
+    }
+  }'
+```
+
+**Track it** (status, tasks, and each task's result):
+
+```bash
+curl http://localhost:8000/workflows/<workflow-id>
+```
+
+**Query a served model** (after a `train-and-serve` or a manual `/load`):
+
+```bash
+curl -X POST http://localhost:8080/predict \
+  -H "Content-Type: application/json" \
+  -d '{"inputs": [[5.1, 3.5, 1.4, 0.2]]}'
 ```
 
 ---
 
-## API Endpoints
+## Capabilities
 
-### Authentication (`/api/v1/auth`)
+Each capability is provided by one agent. Adding a new capability means adding one agent — the core never changes.
 
-| Method | Endpoint   | Role   | Description                              |
-|--------|-----------|--------|------------------------------------------|
-| POST   | /register  | public | Create account (auto-admin if bootstrap) |
-| POST   | /login     | public | Get JWT access token                     |
-| GET    | /me        | any    | Current user profile                     |
+| Capability | Agent | What it does |
+|---|---|---|
+| `echo` | echo-agent | Reference agent (returns its input) |
+| `mlops.train` | mlops-agent | Trains a scikit-learn model, logs to MLflow, registers a version |
+| `llm.complete` | llmops-agent | Prompt versioning, cost-aware model routing, budget enforcement (mock provider by default) |
+| `data.transform` | data-transform-agent | Extracts structured JSON from unstructured text via a schema |
+| `infra.provision` | infra-agent | Generates Terraform IaC (plan mode by default) |
+| `deploy.model` | deploy-agent | Deploys a model to the model-server with canary/blue-green rollout; emits K8s manifests |
+| `monitor.check` | monitor-agent | Drift (PSI) + health/threshold detection |
+| `recovery.heal` | recovery-agent | Maps a breach to a corrective workflow (retrain / rollback) |
 
-### Datasets (`/api/v1/datasets`)
+## Workflow templates
 
-| Method | Endpoint            | Role      | Description              |
-|--------|---------------------|-----------|--------------------------|
-| POST   | /                   | annotator | Create dataset           |
-| GET    | /                   | viewer    | List datasets            |
-| GET    | /{id}               | viewer    | Get dataset + versions   |
-| POST   | /{id}/upload        | annotator | Upload file version      |
-| PUT    | /{id}/status        | reviewer  | Update dataset status    |
-| PUT    | /{id}/metadata      | annotator | Upsert metadata          |
-| DELETE | /{id}               | admin     | Delete dataset           |
+Ready-made specs you can run by name (`{"template": "<name>"}`):
 
-### Structuring (`/api/v1/structuring`)
+| Template | Flow |
+|---|---|
+| `echo-demo` | Two chained echo tasks |
+| `summarize` | LLM summarization |
+| `extract-contact` | Pull structured fields from text |
+| `ml-pipeline` | `data.transform` → `mlops.train` → `llm.complete` |
+| `provision-cluster` | Generate a GPU node-pool plan |
+| `train-and-serve` | `mlops.train` → `deploy.model` (nothing → serving) |
+| `heal-demo` | Trigger a recovery action from a breach |
+| `monitor-and-heal` | `monitor.check` → `recovery.heal` |
+| `train-and-deploy` | Legacy placeholder pipeline |
 
-| Method | Endpoint      | Role      | Description               |
-|--------|--------------|-----------|---------------------------|
-| POST   | /run          | annotator | Start structuring pipeline|
-| GET    | /results/{id} | viewer    | Get results for dataset   |
+---
 
-### EDA (`/api/v1/eda`)
+## Dashboard
 
-| Method | Endpoint      | Role      | Description             |
-|--------|--------------|-----------|-------------------------|
-| POST   | /run          | annotator | Start EDA pipeline      |
-| GET    | /results/{id} | viewer    | Get EDA results         |
-| GET    | /profile/{id} | viewer    | Get column profiles     |
+The **Control Tower** (`http://localhost:8000/ui/`) is served by the orchestrator itself. It provides an intent bar (templates + custom spec), a live-refreshing workflows board with task drill-down, and panels for agents, capabilities, insights, and serving status. Links from the header:
 
-### Labeling (`/api/v1/labeling`)
+| UI | URL |
+|---|---|
+| Control Tower | http://localhost:8000/ui/ |
+| API docs (Swagger) | http://localhost:8000/docs |
+| Grafana | http://localhost:3000 |
+| Prometheus | http://localhost:9090 |
+| MLflow | http://localhost:5000 |
 
-| Method | Endpoint         | Role      | Description              |
-|--------|------------------|-----------|--------------------------|
-| POST   | /run              | annotator | Start labeling pipeline  |
-| GET    | /results/{id}     | viewer    | Get labeling results     |
-| GET    | /rules/operators  | viewer    | List supported operators |
+---
 
-### AI Labeling (`/api/v1/ai-labeling`)
+## API
 
-| Method | Endpoint       | Role      | Description                    |
-|--------|---------------|-----------|--------------------------------|
-| POST   | /predict       | annotator | AI-powered label prediction    |
-| POST   | /propagate     | annotator | Similarity-based propagation   |
-| POST   | /aggregate     | annotator | Aggregate labels from sources  |
+**Orchestrator** (`:8000`)
 
-### Images (`/api/v1/images`)
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/workflows` | Submit an intent (`template` or `spec`) |
+| GET | `/workflows` | List workflows |
+| GET | `/workflows/{id}` | Workflow detail + tasks + results |
+| GET | `/workflows/{id}/events` | Event trail |
+| GET | `/workflows/{id}/stream` | Live status (Server-Sent Events) |
+| POST | `/agents/register` | Agent registration |
+| POST | `/agents/{id}/heartbeat` | Agent heartbeat |
+| GET | `/agents` | List registered agents |
+| GET | `/capabilities` | Capability catalog + templates |
+| GET | `/insights` | Aggregate stats (success rate, counts) |
+| GET | `/lineage/{model}` | Trace a model's train/deploy history |
+| GET | `/metrics` | Prometheus metrics |
+| GET | `/health`, `/readyz` | Liveness / readiness |
 
-| Method | Endpoint               | Role   | Description                      |
-|--------|------------------------|--------|----------------------------------|
-| POST   | /{id}/upload           | viewer | Upload single image              |
-| POST   | /{id}/upload-batch     | viewer | Batch upload images              |
-| GET    | /{id}/gallery          | viewer | Paginated gallery + thumbnails   |
-| GET    | /{id}/{asset_id}       | viewer | Single image metadata            |
-| POST   | /{id}/embeddings       | viewer | Trigger CLIP embedding generation|
-| POST   | /{id}/cluster          | viewer | Trigger HDBSCAN clustering       |
-| GET    | /{id}/clusters         | viewer | Get cluster results              |
-| POST   | /{id}/search           | viewer | Text-to-image similarity search  |
+**Model-server** (`:8080`)
 
-### Review & Quality (`/api/v1/review`)
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/load` | Load a model into `stable` or `canary` |
+| POST | `/predict` | Serve a prediction (weighted stable/canary) |
+| POST | `/promote` | Promote canary → stable |
+| POST | `/rollback` | Drop the canary |
+| GET | `/status` | Loaded models + canary weight |
+| GET | `/metrics` | Prometheus metrics |
 
-| Method | Endpoint          | Role     | Description                |
-|--------|-------------------|----------|----------------------------|
-| POST   | /quality          | reviewer | Run quality assessment     |
-| POST   | /reviews          | reviewer | Create review              |
-| POST   | /export           | reviewer | Export labeled dataset     |
+---
 
-### Workflows (`/api/v1/workflows`)
+## Services & ports
 
-| Method | Endpoint      | Role      | Description               |
-|--------|--------------|-----------|---------------------------|
-| POST   | /             | annotator | Create and start workflow  |
-| GET    | /             | viewer    | List user's workflows      |
-| GET    | /templates    | viewer    | List workflow templates    |
-| GET    | /{id}         | viewer    | Get workflow details       |
+`docker-compose.yml` defines **15 services**:
 
-### Admin (`/api/v1/admin`)
-
-| Method | Endpoint           | Role  | Description              |
-|--------|--------------------|-------|--------------------------|
-| GET    | /users             | admin | List all users           |
-| PUT    | /users/{id}/role   | admin | Change user role         |
-| PUT    | /users/{id}/status | admin | Activate/deactivate user |
-| DELETE | /users/{id}        | admin | Delete user              |
-| GET    | /stats             | admin | System-wide statistics   |
-
-### Tasks & Audit
-
-| Method | Endpoint           | Role   | Description                        |
-|--------|-------------------|--------|------------------------------------|
-| GET    | /api/v1/tasks/     | viewer | List tasks (filter by type/status) |
-| GET    | /api/v1/tasks/{id} | viewer | Get single task                    |
-| GET    | /api/v1/audit/     | admin  | Query audit logs                   |
+| Service | Port | Role |
+|---|---|---|
+| orchestrator | 8000 | Control plane, API, and dashboard (`/ui`) |
+| postgres | 5432 | State store (workflows, tasks, agents, events) |
+| redis | 6379 | Event bus (Redis Streams) |
+| mlflow | 5000 | Experiment tracking + model registry |
+| model-server | 8080 | Live inference (stable + canary) |
+| prometheus | 9090 | Metrics scraping |
+| grafana | 3000 | Metric dashboards |
+| 8 agents | — | echo, mlops, llmops, data-transform, infra, deploy, monitor, recovery |
 
 ---
 
 ## Configuration
 
-All configuration is via environment variables (`.env` file).
+Every setting has a working default; override via environment variables in `docker-compose.yml` (or a `.env`).
 
-Key settings:
-
-| Variable                    | Default                    | Description                   |
-|-----------------------------|----------------------------|-------------------------------|
-| DATABASE_URL                | postgresql+asyncpg://...   | PostgreSQL connection string  |
-| MINIO_ENDPOINT              | minio:9000                 | MinIO server address          |
-| REDIS_URL                   | redis://redis:6379/0       | Redis connection              |
-| SECRET_KEY                  | (change in production)     | JWT signing key               |
-| ACCESS_TOKEN_EXPIRE_MINUTES | 60                         | Token lifetime                |
-| QDRANT_HOST                 | qdrant                     | Vector DB host                |
-| EMBEDDING_MODEL             | all-MiniLM-L6-v2           | Sentence-transformers model   |
-| CLIP_MODEL_NAME             | openai/clip-vit-base-patch32 | CLIP model for images       |
-| DEFAULT_LLM_PROVIDER        | ollama                     | LLM provider (ollama/openai/anthropic/groq) |
-| DEFAULT_LLM_MODEL           | gemma4:e4b                 | Default LLM model             |
-| ADMIN_EMAIL                 | admin@orchestraty.com      | Initial superuser email       |
-| ADMIN_PASSWORD              | Admin@12345                | Initial superuser password    |
-| ADMIN_EMAILS                | admin@orchestraty.com      | Bootstrap admin emails (comma-separated) |
+| Variable | Default | Applies to |
+|---|---|---|
+| `ORCH_DATABASE_URL` | `postgresql+asyncpg://…@postgres:5432/orchestraty` | orchestrator |
+| `ORCH_REDIS_URL` | `redis://redis:6379/0` | orchestrator + agents |
+| `ORCH_LOG_LEVEL` | `INFO` | orchestrator |
+| `MLFLOW_TRACKING_URI` | `http://mlflow:5000` | mlops-agent, model-server |
+| `LLM_PROVIDER` | `mock` | llmops-agent |
+| `LLM_BUDGET_USD` | `5.0` | llmops-agent |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OLLAMA_URL` | — | llmops-agent (opt-in real providers) |
+| `MODEL_SERVER_URL` | `http://model-server:8080` | deploy-agent |
+| `TF_APPLY` | `false` | infra-agent (real `terraform apply` when `true`) |
 
 ---
 
-## CLI Management
+## Testing
 
-```powershell
-docker exec -it orchestraty-api python manage.py list-users
-docker exec -it orchestraty-api python manage.py promote-admin user@example.com
-docker exec -it orchestraty-api python manage.py set-role user@example.com reviewer
-docker exec -it orchestraty-api python manage.py deactivate-user user@example.com
-docker exec -it orchestraty-api python manage.py reset-password user@example.com
-docker exec -it orchestraty-api python manage.py create-superuser
+The unit tests are pure Python (no infrastructure needed):
+
+```bash
+pip install -r requirements-dev.txt
+./run-tests.ps1        # Windows
+./run-tests.sh         # macOS / Linux
+# -> 56 tests across orchestrator, agents, and model-server
+```
+
+End-to-end smoke test against a running stack (drives every capability and asserts):
+
+```bash
+docker compose up --build      # in one terminal
+python e2e/smoke.py            # in another
 ```
 
 ---
 
-## Useful Commands
+## Project structure
 
-```powershell
-# Daily start
-.\start.ps1
-
-# First-time setup / full rebuild
-.\setup.ps1
-
-# Full reset (wipes all databases, storage, and cache)
-.\setup.ps1 -Fresh
-
-# View API logs
-docker compose -f infrastructure/docker-compose.yml logs -f api
-
-# View Celery worker logs
-docker compose -f infrastructure/docker-compose.yml logs -f celery-worker
-
-# Stop all services
-docker compose -f infrastructure/docker-compose.yml down
-
-# Rebuild just the API after code changes
-docker compose -f infrastructure/docker-compose.yml up -d --build api celery-worker
+```
+Orchestraty/
+├── orchestrator/              # Control plane (FastAPI) + dashboard
+│   ├── app/
+│   │   ├── intent.py compiler.py            # intent → validated task DAG
+│   │   ├── engine.py statemachine.py dag.py retry.py   # task engine (pure + DB)
+│   │   ├── bus.py streams.py dispatcher.py results_consumer.py   # event bus + control loop
+│   │   ├── registry.py reaper.py liveness.py           # agent registry
+│   │   ├── models.py db.py enums.py schemas.py         # state store
+│   │   ├── metrics.py insights.py                      # observability + knowledge
+│   │   ├── routers/                                    # agents, workflows, capabilities, metrics, insights
+│   │   └── static/index.html                           # Control Tower dashboard
+│   └── tests/
+├── agents/                    # Containerized workers
+│   ├── sdk/                   # BaseAgent (register · heartbeat · consume · respond)
+│   ├── echo_agent/  mlops_agent/  llmops_agent/  data_transform_agent/
+│   ├── infra_agent/ deploy_agent/ monitor_agent/ recovery_agent/
+│   └── tests/
+├── model_server/             # Live inference (stable + canary)
+├── infra/                    # mlflow/, prometheus/, grafana/ provisioning
+├── e2e/smoke.py              # End-to-end smoke test
+├── docs/                     # architecture.html, DEEP-DIVE.md
+├── docker-compose.yml        # 15 services
+├── run.ps1                   # One-command launcher
+└── run-tests.ps1 · run-tests.sh
 ```
 
 ---
+
+## Tech stack
+
+FastAPI · SQLAlchemy (async) + PostgreSQL · Redis Streams · MLflow · scikit-learn · Prometheus · Grafana · Terraform (generation) · Docker Compose · pytest.
+
+## Documentation
+
+- **[docs/architecture.html](docs/architecture.html)** — the system blueprint (open in a browser).
+- **[docs/DEEP-DIVE.md](docs/DEEP-DIVE.md)** — how every feature works internally, with two end-to-end traces.
 
 ## License
 
-Proprietary — All rights reserved. Thoughtrons.
+Released under the [MIT License](LICENSE).
