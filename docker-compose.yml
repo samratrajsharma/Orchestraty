@@ -122,6 +122,18 @@ services:
       - redis
       - model-server
 
+  monitor-agent:
+    build:
+      context: ./agents
+      dockerfile: monitor_agent/Dockerfile
+    environment:
+      ORCH_API_URL: http://orchestrator:8000
+      ORCH_REDIS_URL: redis://redis:6379/0
+      AGENT_NAME: monitor-agent-1
+    depends_on:
+      - orchestrator
+      - redis
+
   prometheus:
     image: prom/prometheus:latest
     ports:
