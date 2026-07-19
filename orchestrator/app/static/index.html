@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Orchestraty - Control Tower</title>
+<style>
+  :root{--green:#1DB954;--bg:#000;--card:#121212;--card2:#181818;--border:#262626;--text:#fff;--muted:#a7a7a7;--amber:#f5a623;--red:#e0245e;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px}
+  a{color:var(--green);text-decoration:none}
+  header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:16px;padding:14px 22px;background:#0a0a0a;border-bottom:1px solid var(--border)}
+  .brand{font-weight:800;font-size:18px;letter-spacing:.5px}
+  .brand span{color:var(--green)}
+  .pill{font-size:12px;padding:3px 10px;border-radius:20px;border:1px solid var(--border);color:var(--muted)}
+  .pill.ok{color:var(--green);border-color:var(--green)}
+  .pill.bad{color:var(--red);border-color:var(--red)}
+  header .links{margin-left:auto;display:flex;gap:14px;font-size:13px}
+  .wrap{max-width:1200px;margin:20px auto;padding:0 18px;display:grid;grid-template-columns:1.7fr 1fr;gap:18px}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:18px}
+  .card h2{margin:0 0 12px;font-size:14px;text-transform:uppercase;letter-spacing:1px;color:var(--muted)}
+  select,textarea,button,input{font:inherit;border-radius:8px;border:1px solid var(--border);background:var(--card2);color:var(--text);padding:9px 12px}
+  button{background:var(--green);color:#000;font-weight:700;border:none;cursor:pointer}
+  button.ghost{background:transparent;color:var(--text);border:1px solid var(--border);font-weight:500}
+  button:hover{opacity:.9}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  tr.wf{cursor:pointer}
+  tr.wf:hover{background:var(--card2)}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;border:1px solid var(--border);color:var(--muted)}
+  .b-green{color:var(--green);border-color:var(--green)}
+  .b-amber{color:var(--amber);border-color:var(--amber)}
+  .b-red{color:var(--red);border-color:var(--red)}
+  .chip{display:inline-block;font-size:12px;padding:4px 10px;border-radius:20px;border:1px solid var(--green);color:var(--green);margin:0 6px 6px 0}
+  .muted{color:var(--muted)}
+  .empty{color:var(--muted);padding:14px 4px;font-style:italic}
+  .kv{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)}
+  .kv b{font-weight:700}
+  pre{background:#0a0a0a;border:1px solid var(--border);border-radius:8px;padding:10px;overflow:auto;font-size:12px;margin:6px 0 0;color:#cfe8d8;max-height:220px}
+  .tasks{background:var(--card2)}
+  #toast{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:20}
+  .toast{background:var(--card2);border:1px solid var(--green);border-left:4px solid var(--green);padding:11px 15px;border-radius:8px;max-width:340px;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+  .toast.err{border-color:var(--red);border-left-color:var(--red)}
+  .agent{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)}
+  .agent small{color:var(--muted)}
+  .stat{display:flex;justify-content:space-between;padding:7px 0}
+  .stat b{font-size:16px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">ORCHESTRA<span>TY</span> · Control Tower</div>
+  <span id="health" class="pill">connecting...</span>
+  <span id="agentcount" class="pill">- agents</span>
+  <div class="links">
+    <a href="/docs" target="_blank">API</a>
+    <a href="#" id="mlflow" target="_blank">MLflow</a>
+    <a href="#" id="grafana" target="_blank">Grafana</a>
+    <a href="#" id="prom" target="_blank">Prometheus</a>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="col-main">
+    <div class="card">
+      <h2>Declare an intent</h2>
+      <div class="row">
+        <select id="tpl"><option value="">Loading templates...</option></select>
+        <button id="run">Run template</button>
+        <button class="ghost" id="toggleSpec">Custom spec</button>
+      </div>
+      <div id="specBox" style="display:none;margin-top:12px">
+        <textarea id="spec" rows="6" style="width:100%" placeholder='{"name":"my-flow","tasks":[{"key":"t","capability":"echo","payload":{"message":"hi"}}]}'></textarea>
+        <div class="row" style="margin-top:8px"><button id="runSpec">Submit spec</button></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Workflows</h2>
+      <table>
+        <thead><tr><th>Name</th><th>Status</th><th>Tasks</th><th>Created</th></tr></thead>
+        <tbody id="wfbody"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="col-side">
+    <div class="card">
+      <h2>Agents</h2>
+      <div id="agents"><div class="empty">Loading...</div></div>
+    </div>
+    <div class="card">
+      <h2>Capabilities</h2>
+      <div id="caps"><div class="empty">Loading...</div></div>
+    </div>
+    <div class="card">
+      <h2>Insights</h2>
+      <div id="insights"><div class="empty">Loading...</div></div>
+    </div>
+    <div class="card">
+      <h2>Serving (model-server)</h2>
+      <div id="serving"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const API = location.origin;
+const HOST = location.hostname || "localhost";
+const MODEL = location.protocol + "//" + HOST + ":8080";
+document.getElementById("mlflow").href = location.protocol + "//" + HOST + ":5000";
+document.getElementById("grafana").href = location.protocol + "//" + HOST + ":3000";
+document.getElementById("prom").href = location.protocol + "//" + HOST + ":9090";
+
+let expanded = null;
+
+async function getJSON(u){ const r = await fetch(u); if(!r.ok) throw new Error(u+" -> "+r.status); return r.json(); }
+async function postJSON(u,b){
+  const r = await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
+  const d = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(d.detail || ("HTTP "+r.status));
+  return d;
+}
+function toast(msg, err){
+  const t = document.createElement("div");
+  t.className = "toast" + (err ? " err":"");
+  t.textContent = msg;
+  document.getElementById("toast").appendChild(t);
+  setTimeout(()=>t.remove(), 4200);
+}
+function badge(s){
+  const g=["SUCCEEDED","SUCCESS","ONLINE","healthy","ready"];
+  const a=["RUNNING","ASSIGNED","QUEUED","PENDING","degraded"];
+  const r=["FAILED","TIMED_OUT","CANCELLED","OFFLINE","unhealthy"];
+  let c="";
+  if(g.includes(s)) c="b-green"; else if(a.includes(s)) c="b-amber"; else if(r.includes(s)) c="b-red";
+  return `<span class="badge ${c}">${s??"-"}</span>`;
+}
+function ago(ts){ if(!ts) return "-"; const d=new Date(ts); const s=Math.max(0,(Date.now()-d.getTime())/1000);
+  if(s<60) return Math.floor(s)+"s ago"; if(s<3600) return Math.floor(s/60)+"m ago"; return Math.floor(s/3600)+"h ago"; }
+
+async function loadHealth(){
+  const el = document.getElementById("health");
+  try{ const h = await getJSON(API+"/health"); el.textContent = "orchestrator online"; el.className="pill ok"; }
+  catch(e){ el.textContent = "orchestrator offline"; el.className="pill bad"; }
+}
+async function loadCapabilities(){
+  const c = await getJSON(API+"/capabilities");
+  document.getElementById("agentcount").textContent = (c.online_agents ?? 0) + " agents online";
+  const sel = document.getElementById("tpl");
+  if(sel.dataset.loaded !== "1"){
+    sel.innerHTML = (c.templates||[]).map(t=>`<option value="${t}">${t}</option>`).join("") || `<option value="">no templates</option>`;
+    sel.dataset.loaded = "1";
+  }
+  const caps = c.capabilities||[];
+  document.getElementById("caps").innerHTML = caps.length
+    ? caps.map(x=>`<span class="chip" title="${(x.agents||[]).join(', ')}">${x.capability} · ${x.count}</span>`).join("")
+    : `<div class="empty">No capabilities - no agents online.</div>`;
+}
+async function loadAgents(){
+  const a = await getJSON(API+"/agents");
+  document.getElementById("agents").innerHTML = a.length
+    ? a.map(x=>`<div class="agent"><div><b>${x.name}</b><br><small>${(x.capabilities||[]).join(", ")||"-"}</small></div>${badge(x.status)}</div>`).join("")
+    : `<div class="empty">No agents registered yet.</div>`;
+}
+async function loadWorkflows(){
+  const list = await getJSON(API+"/workflows");
+  const body = document.getElementById("wfbody");
+  if(!list.length){ body.innerHTML = `<tr><td colspan="4" class="empty">No workflows yet - submit an intent above.</td></tr>`; return; }
+  let html = "";
+  for(const w of list){
+    html += `<tr class="wf" data-id="${w.id}"><td>${w.name}</td><td>${badge(w.status)}</td><td class="muted">${w.task_count ?? 0} tasks</td><td class="muted">${ago(w.created_at)}</td></tr>`;
+    if(expanded === w.id){ html += `<tr class="tasks"><td colspan="4" id="det-${w.id}"><div class="muted">Loading tasks...</div></td></tr>`; }
+  }
+  body.innerHTML = html;
+  body.querySelectorAll("tr.wf").forEach(tr=>tr.onclick = ()=>{ expanded = (expanded===tr.dataset.id)?null:tr.dataset.id; loadWorkflows(); });
+  if(expanded){ openWorkflow(expanded); }
+}
+async function openWorkflow(id){
+  try{
+    const w = await getJSON(API+"/workflows/"+id);
+    const tc = document.getElementById("tc-"+id); if(tc) tc.textContent = (w.tasks||[]).length + " tasks";
+    const det = document.getElementById("det-"+id); if(!det) return;
+    det.innerHTML = `<div class="muted" style="margin-bottom:6px">${w.intent||""}</div>` + (w.tasks||[]).map(t=>{
+      const res = (t.result!=null)?`<pre>${escapeHtml(JSON.stringify(t.result,null,2))}</pre>`:"";
+      const err = t.error?`<pre style="color:#ffb4c8">${escapeHtml(t.error)}</pre>`:"";
+      return `<div style="padding:8px 0;border-top:1px solid var(--border)"><b>${t.name}</b> <span class="muted">(${t.capability})</span> ${badge(t.status)}${res}${err}</div>`;
+    }).join("");
+  }catch(e){ const det=document.getElementById("det-"+id); if(det) det.innerHTML = `<div class="empty">${e.message}</div>`; }
+}
+async function loadInsights(){
+  const i = await getJSON(API+"/insights");
+  const wf=i.workflows||{}, tk=i.tasks||{}, ag=i.agents||{};
+  document.getElementById("insights").innerHTML =
+    `<div class="stat"><span class="muted">Workflow success rate</span><b>${Math.round((wf.success_rate||0)*100)}%</b></div>`+
+    `<div class="stat"><span class="muted">Workflows</span><b>${wf.total||0}</b></div>`+
+    `<div class="stat"><span class="muted">Tasks</span><b>${tk.total||0}</b></div>`+
+    `<div class="stat"><span class="muted">Agents online</span><b>${ag.online||0} / ${ag.total||0}</b></div>`+
+    `<div class="stat"><span class="muted">Events recorded</span><b>${(i.events||{}).total||0}</b></div>`;
+}
+async function loadServing(){
+  const el = document.getElementById("serving");
+  try{
+    const s = await getJSON(MODEL+"/status");
+    el.innerHTML = `<div class="kv"><span class="muted">Stable</span><b>${s.stable||"none"}</b></div>`+
+      `<div class="kv"><span class="muted">Canary</span><b>${s.canary||"none"}</b></div>`+
+      `<div class="kv"><span class="muted">Canary weight</span><b>${s.canary_weight||0}%</b></div>`;
+  }catch(e){ el.innerHTML = `<div class="empty">model-server not reachable (${MODEL})</div>`; }
+}
+function escapeHtml(s){ return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+document.getElementById("run").onclick = async ()=>{
+  const t = document.getElementById("tpl").value;
+  if(!t){ toast("Pick a template first", true); return; }
+  try{ const w = await postJSON(API+"/workflows",{template:t}); toast(`Submitted "${t}" -> ${w.status}`); expanded=w.id; loadWorkflows(); }
+  catch(e){ toast("Failed: "+e.message, true); }
+};
+document.getElementById("toggleSpec").onclick = ()=>{ const b=document.getElementById("specBox"); b.style.display = b.style.display==="none"?"block":"none"; };
+document.getElementById("runSpec").onclick = async ()=>{
+  let spec; try{ spec = JSON.parse(document.getElementById("spec").value); }catch(e){ toast("Invalid JSON", true); return; }
+  try{ const w = await postJSON(API+"/workflows",{spec}); toast(`Submitted -> ${w.status}`); expanded=w.id; loadWorkflows(); }
+  catch(e){ toast("Failed: "+e.message, true); }
+};
+
+async function refresh(){
+  await Promise.allSettled([loadHealth(), loadCapabilities(), loadAgents(), loadWorkflows(), loadInsights(), loadServing()]);
+}
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

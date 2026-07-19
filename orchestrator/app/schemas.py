@@ -60,6 +60,7 @@ class WorkflowSummary(BaseModel):
     name: str
     status: str
     created_at: datetime | None = None
+    task_count: int = 0
 
 
 class WorkflowDetail(BaseModel):

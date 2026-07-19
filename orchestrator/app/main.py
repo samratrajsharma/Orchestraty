@@ -8,9 +8,13 @@ than crashing the API.
 
 import asyncio
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from . import models  # noqa: F401  (imported so tables register on Base)
@@ -121,11 +125,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version=VERSION, lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.include_router(agents_routes.router)
 app.include_router(workflows_routes.router)
 app.include_router(capabilities_routes.router)
 app.include_router(metrics_routes.router)
 app.include_router(insights_routes.router)
+app.mount("/ui", StaticFiles(directory=str(Path(__file__).resolve().parent / "static"), html=True), name="ui")
 
 
 @app.get("/health", tags=["system"])
@@ -154,10 +160,6 @@ async def debug_bus(request: Request) -> dict:
     return {"event_bus": "ok" if ok else "no_message"}
 
 
-@app.get("/", tags=["system"])
-async def root() -> dict:
-    return {
-        "name": settings.app_name,
-        "environment": settings.environment,
-        "docs": "/docs",
-    }
+@app.get("/", tags=["system"], include_in_schema=False)
+async def root():
+    return RedirectResponse(url="/ui/")

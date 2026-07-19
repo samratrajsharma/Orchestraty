@@ -6,7 +6,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..compiler import IntentCompiler
@@ -68,7 +68,16 @@ async def list_workflows(session: AsyncSession = Depends(get_session)):
     rows = (
         await session.execute(select(Workflow).order_by(Workflow.created_at.desc()))
     ).scalars().all()
-    return [WorkflowSummary.model_validate(w) for w in rows]
+    counts = {
+        wid: c for wid, c in (
+            await session.execute(select(Task.workflow_id, func.count()).group_by(Task.workflow_id))
+        ).all()
+    }
+    return [
+        WorkflowSummary(id=w.id, name=w.name, status=w.status,
+                        created_at=w.created_at, task_count=counts.get(w.id, 0))
+        for w in rows
+    ]
 
 
 @router.get("/{workflow_id}", response_model=WorkflowDetail)

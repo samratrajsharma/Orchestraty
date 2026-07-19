@@ -11,6 +11,7 @@ import random
 import re
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .routing import pick_slot
@@ -32,6 +33,7 @@ STATE = {"stable": _Slot(), "canary": _Slot(), "canary_weight": 0}
 _METRICS = {"predictions": 0}
 
 app = FastAPI(title="Orchestraty Model Server", version="0.1.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 class LoadRequest(BaseModel):
