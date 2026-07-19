@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from .routing import pick_slot
+from .metrics import render
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("model-server")
@@ -28,6 +29,7 @@ class _Slot:
 
 
 STATE = {"stable": _Slot(), "canary": _Slot(), "canary_weight": 0}
+_METRICS = {"predictions": 0}
 
 app = FastAPI(title="Orchestraty Model Server", version="0.1.0")
 
@@ -133,4 +135,21 @@ def predict(req: PredictRequest) -> dict:
 
     preds = model.predict(np.array(req.inputs))
     out = preds.tolist() if hasattr(preds, "tolist") else list(preds)
+    _METRICS["predictions"] += 1
     return {"served_by": slot, "model_uri": STATE[slot].model_uri, "predictions": out}
+
+
+@app.get("/metrics", tags=["system"])
+def metrics():
+    from fastapi.responses import PlainTextResponse
+
+    data = [
+        ("model_server_predictions_total", "counter", "Total predictions served",
+         [({}, _METRICS["predictions"])]),
+        ("model_server_model_loaded", "gauge", "Models loaded by slot",
+         [({"slot": "stable"}, 1 if STATE["stable"].model is not None else 0),
+          ({"slot": "canary"}, 1 if STATE["canary"].model is not None else 0)]),
+        ("model_server_canary_weight", "gauge", "Canary traffic weight",
+         [({}, STATE["canary_weight"])]),
+    ]
+    return PlainTextResponse(render(data))

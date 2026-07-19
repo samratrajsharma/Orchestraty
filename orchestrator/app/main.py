@@ -25,6 +25,7 @@ from .registry import AgentRegistry
 from .results_consumer import ResultConsumer
 from .routers import agents as agents_routes
 from .routers import capabilities as capabilities_routes
+from .routers import metrics as metrics_routes
 from .routers import workflows as workflows_routes
 
 VERSION = "0.1.0"
@@ -122,6 +123,7 @@ app = FastAPI(title=settings.app_name, version=VERSION, lifespan=lifespan)
 app.include_router(agents_routes.router)
 app.include_router(workflows_routes.router)
 app.include_router(capabilities_routes.router)
+app.include_router(metrics_routes.router)
 
 
 @app.get("/health", tags=["system"])
