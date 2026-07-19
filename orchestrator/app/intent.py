@@ -147,6 +147,32 @@ TEMPLATES = {
 }
 
 
+TEMPLATES["heal-demo"] = {
+    "name": "Heal on breach",
+    "intent": "Given a monitor breach, auto-trigger the recovery action",
+    "tasks": [
+        {"key": "heal", "name": "recover", "capability": "recovery.heal",
+         "payload": {"verdict": {"status": "unhealthy",
+                                 "breaches": [{"metric": "accuracy", "observed": 0.70, "threshold": 0.85}]},
+                     "dataset": "iris", "model_name": "iris-classifier"}},
+    ],
+}
+
+TEMPLATES["monitor-and-heal"] = {
+    "name": "Monitor and heal",
+    "intent": "Check health, then heal - the reconcile loop as one workflow",
+    "tasks": [
+        {"key": "check", "name": "monitor", "capability": "monitor.check",
+         "payload": {"metrics": {"accuracy": 0.70, "latency_ms": 200}}},
+        {"key": "heal", "name": "recover", "capability": "recovery.heal",
+         "payload": {"verdict": {"status": "unhealthy",
+                                 "breaches": [{"metric": "accuracy", "observed": 0.70, "threshold": 0.85}]},
+                     "dataset": "iris", "model_name": "iris-classifier"},
+         "depends_on": ["check"]},
+    ],
+}
+
+
 def get_template(name: str) -> dict:
     tpl = TEMPLATES.get(name)
     if tpl is None:
