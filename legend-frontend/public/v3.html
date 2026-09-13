@@ -1,0 +1,999 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>document.documentElement.classList.replace('no-js', 'js'); if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) document.documentElement.classList.add('reduce');</script>
+  <title>Legend — your codebase, as a graph</title>
+  <meta name="description" content="Legend indexes a repo once, on your machine, into a graph of real call and import edges. Browse it, hand it to your coding agent over MCP, gate pull requests on it. No account, no telemetry, no cloud.">
+  <meta property="og:title" content="Legend — your codebase, as a graph">
+  <meta property="og:description" content="Local-first codebase intelligence. Index once into a graph of real edges; browse it, give it to your agent over MCP, gate CI on it. Run it with: uvx legend-lens .">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#000000">
+  <link rel="icon" type="image/svg+xml" href="./legend-icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap">
+  <style>
+    /* ───────────── tokens ───────────── */
+    :root {
+      --bg: #000; --fg: #f2f2f2; --muted: #a7a7a7; --dim: #3a3a3a; --hair: #262626;
+      --green: #1DB954; --green-hi: #1ED760;
+      --sans: 'Montserrat', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      --mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+      --ease: cubic-bezier(.16, 1, .3, 1);
+      --t-fast: 180ms; --t-base: 420ms; --t-move: 700ms; --t-draw: 900ms;
+      --nav-h: 64px; --max: 1200px; --gutter: 24px;
+      --stage-h: calc(100vh - var(--nav-h) - 48px);
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; color-scheme: dark; }
+    html.reduce { scroll-behavior: auto; }
+    body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 17px; line-height: 1.55; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+    a { color: inherit; text-decoration: none; }
+    button, summary { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+    code, pre, .mono { font-family: var(--mono); }
+    h1, h2 { font-weight: 600; letter-spacing: -.02em; text-wrap: balance; }
+    ul, ol { list-style: none; }
+    :focus-visible { outline: 2px solid var(--green); outline-offset: 3px; border-radius: 2px; }
+    ::selection { background: rgba(29,185,84,.35); }
+    .vh { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+    .skip { position: absolute; left: 16px; top: -48px; z-index: 100; padding: 8px 14px; background: var(--green); color: #000; font-weight: 600; font-size: 14px; border-radius: 4px; }
+    .skip:focus { top: 12px; }
+    .wrap { max-width: var(--max); margin: 0 auto; padding: 0 var(--gutter); }
+    .eyebrow { font-family: var(--mono); font-size: 12.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 10px; }
+    .eyebrow::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: transparent; border: 1px solid var(--dim); transition: background var(--t-fast), border-color var(--t-fast); flex: 0 0 auto; }
+    .g { color: var(--green); }
+    .mono { font-size: 13px; line-height: 1.75; }
+    .mono .m { color: var(--muted); }
+    .mono .d { color: var(--dim); user-select: none; }
+    .mono .dim { opacity: .7; }
+    .mono .k { color: var(--muted); display: inline-block; min-width: 8.5em; }
+
+    /* ───────────── motion primitives ───────────── */
+    .js:not(.reduce) .rv { opacity: 0; transform: translateY(8px); }
+    .js:not(.reduce) .is-in .rv, .js:not(.reduce) .rv.is-in { opacity: 1; transform: none; transition: opacity var(--t-base) var(--ease) var(--d, 0ms), transform var(--t-base) var(--ease) var(--d, 0ms); }
+    .js:not(.reduce) .is-in .rv.dim { opacity: .7; }
+    .st > :nth-child(1) { --d: 0ms; } .st > :nth-child(2) { --d: calc(var(--step, 40ms) * 1); } .st > :nth-child(3) { --d: calc(var(--step, 40ms) * 2); }
+    .st > :nth-child(4) { --d: calc(var(--step, 40ms) * 3); } .st > :nth-child(5) { --d: calc(var(--step, 40ms) * 4); } .st > :nth-child(6) { --d: calc(var(--step, 40ms) * 5); }
+    .st > :nth-child(7) { --d: calc(var(--step, 40ms) * 6); } .st > :nth-child(8) { --d: calc(var(--step, 40ms) * 7); } .st > :nth-child(9) { --d: calc(var(--step, 40ms) * 8); }
+    .st > :nth-child(10) { --d: calc(var(--step, 40ms) * 9); } .st > :nth-child(11) { --d: calc(var(--step, 40ms) * 10); }
+    .js:not(.reduce) .rule { clip-path: inset(0 100% 0 0); }
+    .js:not(.reduce) .is-in .rule { clip-path: inset(0 0 0 0); transition: clip-path 500ms var(--ease) var(--d, 0ms); }
+    .js:not(.reduce) .dr { stroke-dasharray: var(--len, 600); stroke-dashoffset: var(--len, 600); }
+    .js:not(.reduce) .is-in .dr { stroke-dashoffset: 0; transition: stroke-dashoffset var(--t-draw) var(--ease) var(--d, 0ms); }
+
+    /* the Line */
+    .line { position: fixed; top: 0; bottom: 0; left: max(10px, calc((100vw - var(--max)) / 2 - 8px)); width: 1px; background: var(--green); transform-origin: top; transform: scaleY(var(--progress, 0)); pointer-events: none; z-index: 40; }
+    @supports (animation-timeline: scroll()) {
+      .js:not(.reduce) .line { animation: line-grow linear both; animation-timeline: scroll(root); }
+      @keyframes line-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+    }
+    html:not(.js) .line, html.reduce .line { display: none; }
+    @media (max-width: 899px), (pointer: coarse) { .line { display: none; } }
+
+    /* ───────────── nav ───────────── */
+    .nav { position: fixed; top: 0; left: 0; right: 0; z-index: 50; height: var(--nav-h); background: rgba(0,0,0,.9); border-bottom: 1px solid transparent; transition: border-color var(--t-fast); }
+    .nav.is-scrolled { border-bottom-color: var(--hair); }
+    .nav-in { height: 100%; display: flex; align-items: center; gap: 28px; }
+    .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; flex-shrink: 0; }
+    .brand svg { width: 20px; height: 20px; }
+    .links { display: flex; align-items: center; gap: 4px; flex: 1; font-family: var(--mono); font-size: 13px; }
+    .links a { display: block; padding: 12px; color: var(--muted); transition: color var(--t-fast); }
+    .links a:hover { color: var(--fg); }
+    .btn-install { display: inline-flex; align-items: center; padding: 9px 20px; background: var(--green); color: #000; font-weight: 600; font-size: 14px; border-radius: 100px; white-space: nowrap; flex-shrink: 0; transition: background var(--t-fast); }
+    .btn-install:hover { background: var(--green-hi); }
+    .menu-btn { display: none; font-family: var(--mono); font-size: 13px; color: var(--muted); min-height: 44px; padding: 0 12px; margin-left: auto; }
+    .menu-btn[aria-expanded="true"] { color: var(--fg); }
+    @media (max-width: 899px) {
+      .menu-btn { display: inline-flex; align-items: center; }
+      .links { display: none; position: absolute; top: var(--nav-h); left: 0; right: 0; flex-direction: column; align-items: stretch; gap: 0; background: #000; border-bottom: 1px solid var(--hair); padding: 0 var(--gutter) 16px; }
+      .links li { border-top: 1px solid var(--hair); }
+      .links a { padding: 0; min-height: 48px; display: flex; align-items: center; font-size: 14px; }
+      .links .m-install { margin-top: 14px; border-top: 0; }
+      .links .m-install a { min-height: 0; padding: 10px 20px; display: inline-flex; background: var(--green); color: #000; font-family: var(--sans); font-weight: 600; border-radius: 100px; }
+      .nav.is-open .links { display: flex; }
+      .js:not(.reduce) .nav.is-open .links { animation: fade var(--t-fast) var(--ease) both; }
+      @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+    }
+    @media (min-width: 900px) { .links .m-install { display: none; } }
+    html:not(.js) .menu-btn { display: none; }
+    @media (max-width: 899px) {
+      html:not(.js) .nav { position: static; height: auto; }
+      html:not(.js) .nav-in { flex-wrap: wrap; height: auto; padding-top: 12px; padding-bottom: 12px; row-gap: 4px; }
+      html:not(.js) .links { display: flex; position: static; flex-direction: row; flex-wrap: wrap; border: 0; padding: 0; width: 100%; gap: 0 8px; order: 3; }
+      html:not(.js) .links li { border: 0; }
+      html:not(.js) .links a { min-height: 40px; }
+      html:not(.js) .links .m-install { display: none; }
+      html:not(.js) .story { padding-top: clamp(40px, 6vh, 72px); }
+      html:not(.js) .stage { position: static; height: auto; }
+    }
+
+    /* ───────────── story: one sticky graph, six beats ───────────── */
+    .story { padding-top: calc(var(--nav-h) + clamp(48px, 8vh, 96px)); padding-bottom: clamp(48px, 8vh, 96px); }
+    .story-g { display: grid; grid-template-columns: 5fr 7fr; gap: 0 56px; align-items: start; }
+    .hero-text { grid-column: 1; grid-row: 1; min-height: calc(var(--stage-h)); display: flex; flex-direction: column; justify-content: center; padding-bottom: 8vh; }
+    .beats { grid-column: 1; grid-row: 2; }
+    .stage { grid-column: 2; grid-row: 1 / span 2; position: sticky; top: calc(var(--nav-h) + 24px); height: var(--stage-h); display: flex; align-items: center; justify-content: center; }
+
+    h1 { font-size: clamp(36px, 4.3vw, 58px); line-height: 1.05; margin-top: 18px; }
+    .sub { color: var(--muted); font-size: 17px; max-width: 40ch; margin-top: 22px; }
+    .rule { height: 1px; background: var(--green); width: 160px; margin-top: 24px; }
+    .cmdrow { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 0; margin-top: 30px; }
+    .pill { display: inline-flex; align-items: center; gap: 12px; border: 1px solid var(--hair); padding: 10px 10px 10px 16px; font-family: var(--mono); font-size: 14px; color: var(--fg); max-width: 100%; }
+    .pill.g { border-color: var(--green); }
+    .pill .d { color: var(--dim); margin-right: 8px; user-select: none; }
+    .pill .cmd { white-space: nowrap; overflow-x: auto; scrollbar-width: none; min-width: 0; flex: 1 1 auto; }
+    .copy { font-family: var(--mono); font-size: 12px; color: var(--muted); border: 1px solid var(--hair); padding: 8px 12px; min-height: 36px; transition: color var(--t-fast), border-color var(--t-fast); flex: 0 0 auto; }
+    .copy:hover { color: var(--fg); border-color: var(--muted); }
+    .copy.is-ok { color: var(--green); border-color: var(--green); }
+    .link { display: inline-block; padding: 6px 0; font-size: 15px; font-weight: 600; margin-left: 22px; white-space: nowrap; transition: color var(--t-fast); }
+    .link:hover { color: var(--green); }
+    .facts { font-family: var(--mono); font-size: 13px; color: var(--muted); margin-top: 28px; line-height: 1.9; }
+    .facts b { color: var(--fg); font-weight: 500; }
+
+    .beat { min-height: 62vh; display: flex; flex-direction: column; justify-content: center; padding: 7vh 0; border-top: 1px solid var(--hair); scroll-margin-top: calc(var(--nav-h) + 24px); }
+    .beat h2 { font-size: clamp(30px, 3.4vw, 46px); line-height: 1.08; margin-top: 14px; color: var(--muted); transition: color var(--t-base) var(--ease); max-width: 16ch; }
+    .beat .cap { color: var(--muted); font-size: 17px; max-width: 42ch; margin-top: 16px; }
+    .beat .cap code { font-size: 14.5px; color: var(--fg); }
+    .beat.is-on h2 { color: var(--fg); }
+    .beat.is-on .eyebrow::before { background: var(--green); border-color: var(--green); }
+    .receipt { margin-top: 22px; }
+    .receipt summary { display: inline-flex; align-items: center; gap: 8px; list-style: none; font-family: var(--mono); font-size: 12.5px; color: var(--muted); padding: 8px 0; min-height: 36px; transition: color var(--t-fast); }
+    .receipt summary::-webkit-details-marker { display: none; }
+    .receipt summary::before { content: '+'; display: inline-block; width: 16px; height: 16px; border: 1px solid var(--hair); font-size: 12px; line-height: 14px; text-align: center; color: var(--green); }
+    .receipt[open] summary::before { content: '−'; }
+    .receipt summary:hover { color: var(--fg); }
+    .receipt[open] summary { color: var(--fg); }
+    .receipt .body { margin-top: 14px; border-top: 1px solid var(--hair); padding-top: 14px; display: grid; gap: 18px; min-width: 0; }
+    .receipt .body > * { min-width: 0; }
+    .pane .t { color: var(--muted); margin-bottom: 6px; }
+    .pane .foot { color: var(--muted); font-size: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--hair); }
+    .hit { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .hit .call { color: var(--green); font-size: 12px; margin-left: 8px; }
+    .rows { border-top: 1px solid var(--hair); }
+    .rows > div { display: grid; grid-template-columns: 24px 1fr; gap: 4px 12px; padding: 8px 0; border-bottom: 1px solid var(--hair); font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
+    .rows > div b { color: var(--green); font-weight: 500; }
+    .rows > div .m { color: var(--muted); grid-column: 2; }
+    .kvl { border-top: 1px solid var(--hair); font-family: var(--mono); font-size: 12.5px; line-height: 1.6; }
+    .kvl div { display: grid; grid-template-columns: 96px 1fr; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--hair); }
+    .kvl dt { color: var(--muted); } .kvl dd { margin: 0; }
+    .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0 12px; }
+    .tiles div { border-top: 1px solid var(--hair); padding-top: 5px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .tiles b { display: block; font-family: var(--sans); font-weight: 600; font-size: 20px; line-height: 1.1; color: var(--fg); }
+    .report { font-family: var(--mono); font-size: 12.5px; line-height: 1.7; white-space: pre; overflow-x: auto; margin: 0; }
+    .report .fail { color: var(--green); } .report .m { color: var(--muted); }
+    .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 20px; font-family: var(--mono); font-size: 12.5px; line-height: 1.7; }
+    .tools b { display: block; color: var(--muted); font-weight: 500; letter-spacing: .1em; text-transform: uppercase; font-size: 10.5px; margin-bottom: 2px; }
+    .quote { font-weight: 600; font-size: 17px; margin-top: 4px; }
+    .note { font-family: var(--mono); font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+    .note code { color: var(--fg); font-family: inherit; }
+
+    /* the stage figure */
+    .fig-stage { position: relative; width: min(100%, calc((var(--stage-h) - 96px) * 1.037)); margin: 0; padding: 44px 0 52px; border: 1px solid transparent; border-radius: 10px; transition: border-color var(--t-base) var(--ease); }
+    .fig-stage svg { width: 100%; height: auto; display: block; font-family: var(--mono); aspect-ratio: 560 / 540; }
+    .fig-stage .tagline { position: absolute; left: 0; right: 0; bottom: -22px; font-family: var(--mono); font-size: 11px; color: #7a7a7a; text-align: right; }
+    .bar { position: absolute; top: 0; left: 0; right: 0; height: 36px; display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--hair); font-family: var(--mono); font-size: 11px; color: var(--muted); opacity: 0; transition: opacity var(--t-base) var(--ease); white-space: nowrap; overflow: hidden; }
+    .bar i { width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--dim); flex: 0 0 auto; }
+    .bar .tabs b { color: var(--fg); font-weight: 500; }
+    .bar .tabs-s { display: none; }
+    .chip { position: absolute; z-index: 2; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; color: var(--fg); background: rgba(0,0,0,.92); border: 1px solid var(--hair); padding: 8px 12px; max-width: 62%; overflow-wrap: anywhere; opacity: 0; transform: translateY(6px); transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease); pointer-events: none; }
+    .chip.on { transition: opacity var(--t-base) var(--ease) 140ms, transform var(--t-base) var(--ease) 140ms; }
+    .chip .m { color: var(--muted); } .chip .g { color: var(--green); } .chip .x { display: block; }
+    .chip.tl { top: 0; left: 0; } .chip.tr { top: 0; right: 0; text-align: right; } .chip.bl { bottom: 0; left: 0; } .chip.br { bottom: 0; right: 0; text-align: right; }
+    .chip.on { opacity: 1; transform: none; }
+    .pipe { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; padding: 0 4px; font-family: var(--mono); font-size: 11px; color: var(--muted); opacity: 0; transition: opacity var(--t-base) var(--ease); }
+    .pipe li { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; position: relative; }
+    .pipe li::before { content: ''; width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--dim); background: #000; transition: background var(--t-fast) var(--ease) var(--d, 0ms), border-color var(--t-fast) var(--ease) var(--d, 0ms); }
+    .pipe li::after { content: ''; position: absolute; top: 4px; left: calc(50% + 8px); right: calc(-50% + 8px); height: 1px; background: var(--hair); }
+    .pipe li:last-child::after { display: none; }
+    .pipe li b { font-weight: 500; color: var(--muted); transition: color var(--t-fast) var(--ease) var(--d, 0ms); }
+    .pipe li:nth-child(1) { --d: 0ms; } .pipe li:nth-child(2) { --d: 140ms; } .pipe li:nth-child(3) { --d: 280ms; } .pipe li:nth-child(4) { --d: 420ms; } .pipe li:nth-child(5) { --d: 560ms; } .pipe li:nth-child(6) { --d: 700ms; }
+
+    /* graph base */
+    .gv text { font-size: 11px; fill: var(--muted); }
+    .gv .sym text { font-size: 11.5px; fill: var(--fg); }
+    .gv .sym circle { fill: var(--fg); }
+    .gv .file rect { fill: #000; stroke: var(--dim); }
+    .gv .e { stroke: var(--fg); stroke-opacity: .55; fill: none; stroke-width: 1; }
+    .gv .el { font-size: 10px; }
+    .gv .unres { stroke: var(--muted); stroke-opacity: .45; stroke-dasharray: 4 4; }
+    .gv .unres-l { fill-opacity: .8; }
+    .gv .n { cursor: default; }
+    .gv .n, .gv .e, .gv .el { transition: opacity var(--t-base) var(--ease), stroke var(--t-base) var(--ease), fill var(--t-base) var(--ease), stroke-opacity var(--t-base) var(--ease); }
+    .gv .bound { fill: none; stroke: var(--green); stroke-opacity: 0; stroke-width: 1; transition: stroke-opacity var(--t-base) var(--ease); }
+    .gv .bound-l { fill: var(--green); font-size: 10.5px; opacity: 0; transition: opacity var(--t-base) var(--ease); }
+    /* hover light (hero state) */
+    .gv.is-hover .n, .gv.is-hover .e, .gv.is-hover .el, .js .gv.is-hover .rv { opacity: .3; transition-delay: 0ms; }
+    .gv.is-hover .n.is-on, .gv.is-hover .e.is-lit, .gv.is-hover .el.is-lit, .js .gv.is-hover .rv.is-on, .js .gv.is-hover .rv.is-lit { opacity: 1; }
+    .gv.is-hover .e.is-lit { stroke: var(--green-hi); stroke-opacity: 1; }
+    .gv.is-hover .el.is-lit { fill: var(--green-hi); }
+    .gv.is-hover .sym.is-on circle { fill: var(--green-hi); }
+    .gv.is-hover .file.is-on rect { stroke: var(--green-hi); }
+
+    /* beat states that live outside the graph */
+    .fig-stage[data-beat="2"] .pipe { opacity: 1; }
+    .fig-stage[data-beat="2"] .pipe li::before { background: var(--green); border-color: var(--green); }
+    .fig-stage[data-beat="2"] .pipe li b { color: var(--fg); }
+    .fig-stage[data-beat="3"] { border-color: var(--hair); }
+    .fig-stage[data-beat="3"] .bar { opacity: 1; }
+
+    /* ───────────── install ───────────── */
+    .install { padding: clamp(96px, 14vh, 160px) 0 clamp(72px, 10vh, 120px); border-top: 1px solid var(--hair); text-align: center; }
+    .install h2 { font-size: clamp(30px, 4vw, 52px); line-height: 1.08; margin: 8px auto 0; max-width: 22ch; }
+    .install .sub { margin: 18px auto 0; max-width: 46ch; }
+    .install .fig { max-width: 520px; margin: 0 auto; }
+    .install .fig svg { width: 100%; height: auto; display: block; font-family: var(--mono); aspect-ratio: 560 / 400; }
+    .doors { max-width: 720px; margin: 40px auto 0; text-align: left; }
+    .door { display: grid; grid-template-columns: 80px 1fr; gap: 20px; align-items: center; padding: 12px 0; border-top: 1px solid var(--hair); }
+    .door:last-child { border-bottom: 1px solid var(--hair); }
+    .door .lab { font-weight: 600; font-size: 14px; color: var(--muted); }
+    .door .cmd { display: flex; justify-content: space-between; align-items: center; gap: 14px; font-family: var(--mono); font-size: 14px; min-width: 0; }
+    .door .cmd > span:first-child { min-width: 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+    .door small { display: block; font-size: 11.5px; color: var(--muted); white-space: normal; }
+    .door.primary { border-color: var(--green); }
+    .alt { font-family: var(--mono); font-size: 13px; color: var(--muted); margin-top: 20px; }
+    .alt code { color: var(--fg); }
+    .install .actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px 0; margin-top: 26px; }
+    /* mark state (install figure) */
+    .gv-mark .fade { opacity: 0; transition: opacity 200ms var(--ease); }
+    .gv-mark .travel { transition: transform var(--t-move) var(--ease) var(--d, 0ms); }
+    .gv-mark .travel text { opacity: 0; transition: opacity 200ms var(--ease); }
+    .gv-mark .travel circle { fill: var(--green); transition: fill var(--t-move) var(--ease) var(--d, 0ms); }
+    .gv-mark .n[data-id="post_entry"] { transform: translate(-60.5px, -10.5px); }
+    .gv-mark .n[data-id="refund"] { transform: translate(-60.5px, -15px); }
+    .gv-mark .n[data-id="entry"] { transform: translate(8.5px, -90.5px); }
+    .gv-mark .n[data-id="refundservice"] { transform: translate(-129.5px, 179.5px); }
+    .gv-mark .me { stroke: var(--green); stroke-width: 1.4; fill: none; stroke-linecap: round; }
+    .gv-mark .mh { stroke: var(--green); stroke-width: 7; stroke-opacity: .12; fill: none; stroke-linecap: round; transition: opacity 200ms var(--ease) 1.2s; }
+    .js:not(.reduce) .gv-mark:not(.is-in) .fade { opacity: 1; }
+    .js:not(.reduce) .gv-mark:not(.is-in) .travel { transform: none; }
+    .js:not(.reduce) .gv-mark:not(.is-in) .travel text { opacity: 1; }
+    .js:not(.reduce) .gv-mark:not(.is-in) .travel circle { fill: var(--fg); }
+    .js:not(.reduce) .gv-mark:not(.is-in) .mh { opacity: 0; }
+    .js:not(.reduce) .gv-mark .me { --d: 700ms; }
+
+    /* ───────────── footer ───────────── */
+    .footer { border-top: 1px solid var(--hair); padding: 24px 0 36px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+    .footer .in { display: flex; justify-content: space-between; align-items: center; gap: 10px 24px; flex-wrap: wrap; }
+    .footer .brand { font-family: var(--sans); font-size: 14px; }
+    .footer .brand svg { width: 16px; height: 16px; }
+    .footer nav { display: flex; gap: 18px; }
+    .footer nav a { display: inline-block; padding: 8px 0; }
+    .footer a:hover { color: var(--fg); }
+
+    /* ───────────── responsive ───────────── */
+    @media (max-width: 899px) {
+      :root { --stage-h: min(50vh, 460px); }
+      .nav { background: #000; }
+      .story { padding-top: calc(var(--nav-h) + 32px); }
+      .story-g { display: flex; flex-direction: column; gap: 0; }
+      .hero-text { order: 0; min-height: 0; padding-bottom: 32px; }
+      .stage { order: 1; position: sticky; top: var(--nav-h); height: var(--stage-h); background: var(--bg); z-index: 5; margin: 0 calc(-1 * var(--gutter)); padding: 8px var(--gutter) 0; border-bottom: 1px solid var(--hair); }
+      .beats { order: 2; }
+      .beat { min-height: calc(100vh - var(--nav-h) - var(--stage-h)); padding: 28px 0; scroll-margin-top: calc(var(--nav-h) + var(--stage-h) + 8px); }
+      .beat h2 { max-width: none; }
+      .fig-stage { padding: 30px 0 36px; width: min(100%, calc((var(--stage-h) - 82px) * 1.037)); }
+      .fig-stage .tagline { display: none; }
+      .bar { height: 28px; font-size: 10px; padding: 0 10px; }
+      .bar .tabs { display: none; } .bar .tabs-s { display: inline; }
+      .chip { font-size: 11px; padding: 5px 8px; max-width: 70%; }
+      .chip.tl { max-width: 40%; } .chip.tr { max-width: 58%; }
+      .chip .x { display: none; }
+      .pipe { font-size: 9.5px; }
+      .gv text { font-size: 12.5px; } .gv .sym text { font-size: 13px; } .gv .el { font-size: 11.5px; }
+      .link { margin-left: 16px; }
+      .door { grid-template-columns: 1fr; gap: 4px; }
+    }
+    @media (max-height: 560px) and (max-width: 899px) { :root { --stage-h: 52vh; } }
+    html:not(.js) .stage { position: static; height: auto; }
+    html:not(.js) .fig-stage { width: 100%; }
+
+    /* reduced motion: durations and delays to zero, final states are the CSS default */
+    html.reduce *, html.reduce *::before, html.reduce *::after { transition-duration: 0s !important; transition-delay: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important; }
+    /* ───────────── soul: the living graph ───────────── */
+    .fig-stage::before { content: ''; position: absolute; left: 4%; right: 4%; top: 12%; bottom: 14%; background: radial-gradient(ellipse at 50% 52%, rgba(29,185,84,.20), rgba(29,185,84,.06) 42%, transparent 66%); pointer-events: none; z-index: 0; }
+    .fig-stage::after { content: ''; position: absolute; left: 0; right: 0; top: 44px; bottom: 52px; background-image: radial-gradient(rgba(255,255,255,.10) 1px, transparent 1.5px); background-size: 22px 22px; -webkit-mask-image: radial-gradient(ellipse at center, #000 30%, transparent 72%); mask-image: radial-gradient(ellipse at center, #000 30%, transparent 72%); pointer-events: none; z-index: 0; }
+    .fig-stage > svg { position: relative; z-index: 1; }
+    .fig-stage[data-beat="6"]::after { -webkit-mask-image: radial-gradient(ellipse at center, #000 45%, transparent 66%); mask-image: radial-gradient(ellipse at center, #000 45%, transparent 66%); }
+    .gv.live { aspect-ratio: 560 / 540; }
+    .gv.live .n { transition: opacity var(--t-base) var(--ease) var(--ld, 0ms); }
+    .gv.live .n .halo { fill: url(#halog); opacity: .5; transform-box: fill-box; transform-origin: center; animation: breathe var(--bd, 4.2s) ease-in-out var(--bdl, 0s) infinite; transition: opacity var(--t-base) var(--ease) var(--ld, 0ms); }
+    .gv.live .n .dot { fill: var(--fg); transition: fill var(--t-base) var(--ease) var(--ld, 0ms); }
+    .gv.live .n .ring { fill: #000; stroke: var(--fg); stroke-width: 1.2; transition: stroke var(--t-base) var(--ease) var(--ld, 0ms); }
+    .gv.live .n text { font-size: 11px; fill: var(--muted); transition: fill var(--t-base) var(--ease); }
+    .gv.live .n.sym text { fill: var(--fg); font-size: 11.5px; }
+    .gv.live .n.ghost text { font-size: 9.5px; fill: var(--fg); opacity: 0; }
+    .gv.live .e { fill: none; stroke: var(--fg); stroke-width: 1; stroke-linecap: round; transition: opacity 600ms var(--ease) var(--d, 0ms), stroke var(--t-base) var(--ease); }
+    .gv.live .e.imports { opacity: .36; }
+    .gv.live .e.calls { opacity: .68; stroke-width: 1.2; }
+    .gv.live .e.contains { opacity: .30; stroke-dasharray: 1.5 4; }
+    .gv.live .e.method_of, .gv.live .e.inherits { opacity: .36; stroke-dasharray: 6 3; }
+    .gv.live .e.new, .gv.live .e.unres { opacity: 0; }
+    .gv.live .e.unres { stroke: var(--muted); stroke-dasharray: 4 4; }
+    .gv.live .el { font-size: 9.5px; fill: var(--green-hi); opacity: 0; text-anchor: middle; transition: opacity var(--t-base) var(--ease); paint-order: stroke; stroke: #000; stroke-width: 3px; stroke-linejoin: round; }
+    .gv.live .pulse { fill: url(#pg); pointer-events: none; }
+    .js:not(.reduce) .gv.live:not(.is-live) .n { opacity: 0; }
+    .js:not(.reduce) .gv.live:not(.is-live) .e { opacity: 0; transition: none; }
+    .gv.live .n.on .dot { fill: var(--green-hi); }
+    .gv.live .n.on .ring { stroke: var(--green-hi); }
+    .gv.live .n.on text { fill: var(--fg); }
+    .gv.live .n.on .halo { opacity: 1; animation-duration: 2s; }
+    .gv.live .n.origin .dot { r: 4.2; }
+    .gv.live .n.dim { opacity: .26; }
+    .gv.live .e.on { stroke: var(--green-hi); opacity: 1 !important; stroke-width: 1.3; }
+    .gv.live .e.dim { opacity: .10 !important; }
+    .gv.live .el.on { opacity: 1; }
+    @keyframes breathe { 0%, 100% { transform: scale(1); opacity: .42; } 50% { transform: scale(1.45); opacity: .9; } }
+    /* beat 1 — grep ghosts appear and dissolve; the unresolved call flickers out */
+    .ghost { font-size: 9.5px; fill: var(--muted); opacity: 0; }
+    .fig-stage[data-beat="1"] .ghost { animation: ghost 3.4s var(--ease) var(--gd, 0s) forwards; }
+    @keyframes ghost { 0% { opacity: 0; transform: translateY(4px); } 18% { opacity: .75; transform: none; } 66% { opacity: .75; } 100% { opacity: 0; } }
+    .fig-stage[data-beat="1"] .e.unres { animation: unres 3.6s var(--ease) forwards; }
+    .fig-stage[data-beat="1"] .n.ghost text { animation: unres 3.6s var(--ease) forwards; }
+    @keyframes unres { 0% { opacity: 0; } 16% { opacity: .9; } 62% { opacity: .9; } 100% { opacity: .18; } }
+    /* beat 2 — a scan sweeps the constellation */
+    .sweep { opacity: 0; }
+    .fig-stage[data-beat="2"] .sweep { opacity: 1; animation: sweep 1.9s cubic-bezier(.4, 0, .2, 1) forwards; }
+    @keyframes sweep { from { transform: translateX(0); } to { transform: translateX(680px); } }
+    .fig-stage[data-beat="2"] .n .dot { animation: flashdot .8s var(--ease) var(--sx, 0s) 1; }
+    .fig-stage[data-beat="2"] .n .ring { animation: flashring .8s var(--ease) var(--sx, 0s) 1; }
+    .fig-stage[data-beat="2"] .n .halo { animation: breathe var(--bd, 4.2s) ease-in-out var(--bdl, 0s) infinite, flashhalo .8s var(--ease) var(--sx, 0s) 1; }
+    @keyframes flashdot { 35% { fill: var(--green-hi); } }
+    @keyframes flashring { 35% { stroke: var(--green-hi); } }
+    @keyframes flashhalo { 35% { opacity: 1; } }
+    /* beat 3 — areas settle around the clusters */
+    .areas { opacity: 0; transition: opacity var(--t-base) var(--ease); }
+    .areas ellipse { fill: url(#areag); }
+    .areas text { font-family: var(--mono); font-size: 9.5px; fill: var(--green); letter-spacing: .14em; text-transform: uppercase; }
+    .fig-stage[data-beat="3"] .areas { opacity: 1; }
+    /* beat 4 — a ripple radiates from the origin */
+    .rip { fill: none; stroke: var(--green-hi); stroke-width: 1; opacity: 0; }
+    .fig-stage[data-beat="4"] .rip { animation: rip 2.6s ease-out infinite; }
+    .fig-stage[data-beat="4"] .rip:nth-child(2) { animation-delay: .85s; }
+    .fig-stage[data-beat="4"] .rip:nth-child(3) { animation-delay: 1.7s; }
+    @keyframes rip { 0% { r: 4; opacity: .75; } 100% { r: 180; opacity: 0; } }
+    /* beat 5 — the new edge closes a cycle; both edges march */
+    .fig-stage[data-beat="5"] .e.new { opacity: 1; }
+    .fig-stage[data-beat="5"] .e.cyc { stroke: var(--green-hi); opacity: 1 !important; stroke-dasharray: 5 4; animation: ants 1.1s linear infinite; }
+    @keyframes ants { to { stroke-dashoffset: -18; } }
+    /* beat 6 — the boundary closes */
+    .gv.live .bound { fill: none; stroke: var(--green); stroke-opacity: 0; stroke-width: 1; stroke-dasharray: 3 7; stroke-linecap: round; transition: stroke-opacity var(--t-base) var(--ease); }
+    .fig-stage[data-beat="6"] .gv.live .bound { stroke-opacity: .75; animation: ants 4s linear infinite; }
+    .gv.live .bound-l { font-family: var(--mono); font-size: 10px; fill: var(--green); opacity: 0; transition: opacity var(--t-base) var(--ease); }
+    .fig-stage[data-beat="6"] .gv.live .bound-l { opacity: 1; }
+    .fig-stage[data-beat="2"] .gv.live, .fig-stage[data-beat="5"] .gv.live { opacity: 1; }
+    @media (max-width: 899px) { .gv.live .n text { font-size: 12px; } .gv.live .n.sym text { font-size: 12.5px; } .gv.live .el { font-size: 10.5px; } .gv.live .n.ghost text { font-size: 10px; } .ghost { font-size: 10px; } .fig-stage::after { top: 34px; bottom: 40px; } }
+  </style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="line" aria-hidden="true"></div>
+
+<nav class="nav" aria-label="Primary">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top" aria-label="Legend, back to top">
+      <svg viewBox="0 0 48 48" fill="none" aria-hidden="true"><g stroke="#1DB954" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="24" y1="24" x2="24" y2="9"/><line x1="24" y1="24" x2="37" y2="31.5"/><line x1="24" y1="24" x2="11" y2="31.5"/><line x1="24" y1="9" x2="37" y2="31.5"/><line x1="37" y1="31.5" x2="11" y2="31.5"/><line x1="11" y1="31.5" x2="24" y2="9"/></g><g fill="#1DB954"><circle cx="24" cy="24" r="4.6"/><circle cx="24" cy="9" r="4"/><circle cx="37" cy="31.5" r="4"/><circle cx="11" cy="31.5" r="4"/></g></svg>
+      Legend
+    </a>
+    <button class="menu-btn" type="button" aria-expanded="false" aria-controls="menu">Menu</button>
+    <ul class="links" id="menu">
+      <li><a href="#how-it-works">How it works</a></li>
+      <li><a href="#app">The app</a></li>
+      <li><a href="#agents">Agents</a></li>
+      <li><a href="#cli">CLI</a></li>
+      <li><a href="./docs.html">Docs</a></li>
+      <li><a href="https://github.com/samratrajsharma/legend" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+      <li class="m-install"><a href="#install">Install</a></li>
+    </ul>
+    <a class="btn-install" href="#install">Install</a>
+  </div>
+</nav>
+
+<main id="main">
+<section class="story" id="top" aria-label="What Legend is">
+  <div class="wrap story-g">
+
+    <!-- ── the stage: one graph that stays on screen and changes with each beat ── -->
+    <div class="stage">
+      <figure class="fig-stage" data-beat="0" id="stage">
+        <div class="bar" aria-hidden="true"><i></i><i></i><i></i><span class="tabs"><b>Overview</b> · Timeline · Files · Insight Graph · API &amp; DB · Ask · Track · Intel</span><span class="tabs-s">legend · 127.0.0.1:8100 · <b>Overview</b> + 7 views</span></div>
+
+        <svg class="gv live" data-hover viewBox="0 0 560 540" role="img" aria-labelledby="gv1-t">
+          <title id="gv1-t">A living graph of a sample repo: five files and seven symbols joined by real import, call, contains, method and inheritance edges; light pulses travel along the edges; one unresolved call is left out</title>
+          <defs>
+            <radialGradient id="halog"><stop offset="0" stop-color="#1ED760" stop-opacity=".55"/><stop offset=".55" stop-color="#1ED760" stop-opacity=".12"/><stop offset="1" stop-color="#1ED760" stop-opacity="0"/></radialGradient>
+            <radialGradient id="pg"><stop offset="0" stop-color="#ffffff" stop-opacity=".95"/><stop offset=".35" stop-color="#1ED760" stop-opacity=".9"/><stop offset="1" stop-color="#1ED760" stop-opacity="0"/></radialGradient>
+            <radialGradient id="areag"><stop offset="0" stop-color="#1DB954" stop-opacity=".14"/><stop offset=".7" stop-color="#1DB954" stop-opacity=".05"/><stop offset="1" stop-color="#1DB954" stop-opacity="0"/></radialGradient>
+            <linearGradient id="sweepg" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#1ED760" stop-opacity="0"/><stop offset=".5" stop-color="#1ED760" stop-opacity=".28"/><stop offset="1" stop-color="#1ED760" stop-opacity="0"/></linearGradient>
+          </defs>
+          <g class="areas" aria-hidden="true">
+            <ellipse cx="190" cy="150" rx="122" ry="84"/><text x="90" y="84" text-anchor="middle">api</text>
+            <ellipse cx="400" cy="246" rx="152" ry="118"/><text x="466" y="254" text-anchor="middle">services</text>
+            <ellipse cx="486" cy="382" rx="92" ry="74"/><text x="486" y="318" text-anchor="middle">models</text>
+            <ellipse cx="160" cy="372" rx="94" ry="66"/><text x="96" y="316" text-anchor="middle">tests</text>
+          </g>
+          <rect class="bound" x="14.5" y="66.5" width="531" height="410" rx="18"/>
+          <text class="bound-l" x="30" y="466">127.0.0.1 · loopback only · nothing leaves this box</text>
+          <rect class="sweep" x="-100" y="62" width="100" height="420" fill="url(#sweepg)"/>
+          <g class="edges">
+            <path class="e imports" data-id="e1" data-from="refunds" data-to="ledger" data-kind="imports" data-sign="1" data-k="0.16" d="M118.0,150.0 Q199.1,241.0 318.0,268.0" style="--d:0ms"/>
+            <path class="e imports" data-id="e2" data-from="refunds" data-to="auth" data-kind="imports" data-sign="1" data-k="0.16" d="M118.0,150.0 Q285.0,191.3 445.0,128.0" style="--d:60ms"/>
+            <path class="e contains" data-id="e3" data-from="refunds" data-to="refundservice" data-kind="contains" data-sign="1" data-k="0.14" d="M118.0,150.0 Q176.4,141.6 222.0,104.0" style="--d:120ms"/>
+            <path class="e method_of" data-id="e4" data-from="refund" data-to="refundservice" data-kind="method_of" data-sign="1" data-k="0.16" d="M232.0,190.0 Q240.8,145.4 222.0,104.0" style="--d:180ms"/>
+            <path class="e calls" data-id="e5" data-from="refund" data-to="post_entry" data-kind="calls" data-sign="1" data-k="0.16" d="M232.0,190.0 Q268.3,283.2 352.0,338.0" style="--d:240ms"/>
+            <path class="e contains" data-id="e6" data-from="ledger" data-to="post_entry" data-kind="contains" data-sign="-1" data-k="0.14" d="M318.0,268.0 Q344.8,298.2 352.0,338.0" style="--d:300ms"/>
+            <path class="e imports" data-id="e7" data-from="ledger" data-to="entryfile" data-kind="imports" data-sign="-1" data-k="0.16" d="M318.0,268.0 Q403.6,332.1 436.0,434.0" style="--d:360ms"/>
+            <path class="e calls" data-id="e8" data-from="post_entry" data-to="entry" data-kind="calls" data-sign="1" data-k="0.16" d="M352.0,338.0 Q416.6,377.4 492.0,372.0" style="--d:420ms"/>
+            <path class="e contains" data-id="e9" data-from="entryfile" data-to="entry" data-kind="contains" data-sign="1" data-k="0.14" d="M436.0,434.0 Q472.7,410.8 492.0,372.0" style="--d:480ms"/>
+            <path class="e inherits" data-id="e10" data-from="entry" data-to="base" data-kind="inherits" data-sign="1" data-k="0.16" d="M492.0,372.0 Q519.5,341.1 524.0,300.0" style="--d:540ms"/>
+            <path class="e imports" data-id="e11" data-from="testfile" data-to="ledger" data-kind="imports" data-sign="1" data-k="0.22" d="M120.0,396.0 Q247.2,375.6 318.0,268.0" style="--d:600ms"/>
+            <path class="e contains" data-id="e12" data-from="testfile" data-to="test_refund_flow" data-kind="contains" data-sign="-1" data-k="0.14" d="M120.0,396.0 Q154.5,349.7 208.0,328.0" style="--d:660ms"/>
+            <path class="e calls" data-id="e13" data-from="test_refund_flow" data-to="post_entry" data-kind="calls" data-sign="1" data-k="0.14" d="M208.0,328.0 Q278.6,353.2 352.0,338.0" style="--d:720ms"/>
+            <path class="e contains" data-id="e14" data-from="auth" data-to="require_scope" data-kind="contains" data-sign="1" data-k="0.14" d="M445.0,128.0 Q457.7,169.3 490.0,198.0" style="--d:780ms"/>
+            <path class="e imports cyc" data-id="e15" data-from="auth" data-to="ledger" data-kind="imports" data-sign="1" data-k="0.16" d="M445.0,128.0 Q359.1,177.7 318.0,268.0" style="--d:840ms"/>
+            <path class="e imports new cyc" data-id="e16" data-from="ledger" data-to="auth" data-kind="imports" data-sign="1" data-k="0.16" d="M318.0,268.0 Q403.9,218.3 445.0,128.0" style="--d:900ms"/>
+            <path class="e unres" data-id="e17" data-from="batch" data-to="post_entry" data-kind="unres" data-sign="1" data-k="0.12" d="M540.0,470.0 Q461.8,381.4 352.0,338.0" style="--d:960ms"/>
+          </g>
+          <g class="elabels" aria-hidden="true">
+            <text class="el" data-edge="e1" x="208.6" y="220.0">imports</text>
+            <text class="el" data-edge="e2" x="283.3" y="160.2">imports</text>
+            <text class="el" data-edge="e3" x="173.2" y="129.3">contains</text>
+            <text class="el" data-edge="e4" x="233.9" y="141.2">method_of</text>
+            <text class="el" data-edge="e5" x="280.2" y="268.6">calls</text>
+            <text class="el" data-edge="e6" x="339.9" y="295.6">contains</text>
+            <text class="el" data-edge="e7" x="390.3" y="336.6">imports</text>
+            <text class="el" data-edge="e8" x="419.3" y="361.2">calls · constructor</text>
+            <text class="el" data-edge="e9" x="468.3" y="401.9">contains</text>
+            <text class="el" data-edge="e10" x="513.8" y="333.6">inherits</text>
+            <text class="el" data-edge="e11" x="233.1" y="348.8">imports</text>
+            <text class="el" data-edge="e12" x="159.2" y="350.8">contains</text>
+            <text class="el" data-edge="e13" x="279.3" y="338.1">calls</text>
+            <text class="el" data-edge="e14" x="462.6" y="161.2">contains</text>
+            <text class="el" data-edge="e15" x="370.3" y="182.8">imports</text>
+            <text class="el" data-edge="e16" x="392.7" y="203.2">imports · new in this PR</text>
+          </g>
+          <g class="ripples" aria-hidden="true"><circle class="rip" cx="352" cy="338" r="4"/><circle class="rip" cx="352" cy="338" r="4"/><circle class="rip" cx="352" cy="338" r="4"/></g>
+          <g class="pulses" aria-hidden="true"></g>
+          <g class="ghosts" aria-hidden="true">
+            <text class="ghost" x="40" y="250" text-anchor="start" style="--gd:0.00s">README.md:44 · … calls post_entry to record …</text>
+            <text class="ghost" x="40" y="505" text-anchor="start" style="--gd:0.25s">refunds.py:2 · import post_entry</text>
+            <text class="ghost" x="300" y="505" text-anchor="start" style="--gd:0.50s">test_ledger.py:2 · import post_entry</text>
+            <text class="ghost" x="40" y="525" text-anchor="start" style="--gd:0.75s">ledger.py:5 · def post_entry(account, amount):</text>
+          </g>
+          <g class="nodes">
+            <g class="n file" data-id="refunds" data-x="118" data-y="150" style="--bd:4.3s;--bdl:-0.6s;--sx:0.40s"><circle class="halo" cx="118" cy="150" r="16"/><circle class="ring" cx="118" cy="150" r="5.5"/><text x="118" y="174" text-anchor="middle">api/refunds.py</text></g>
+            <g class="n sym" data-id="refundservice" data-x="222" data-y="104" style="--bd:5.0s;--bdl:-0.3s;--sx:0.75s"><circle class="halo" cx="222" cy="104" r="12"/><circle class="dot" cx="222" cy="104" r="3.2"/><text x="222" y="92" text-anchor="middle">RefundService</text></g>
+            <g class="n sym" data-id="refund" data-x="232" data-y="190" style="--bd:4.8s;--bdl:-1.5s;--sx:0.79s"><circle class="halo" cx="232" cy="190" r="12"/><circle class="dot" cx="232" cy="190" r="3.2"/><text x="244" y="194" text-anchor="start">refund</text></g>
+            <g class="n file" data-id="auth" data-x="445" data-y="128" style="--bd:3.7s;--bdl:-2.0s;--sx:1.51s"><circle class="halo" cx="445" cy="128" r="16"/><circle class="ring" cx="445" cy="128" r="5.5"/><text x="445" y="114" text-anchor="middle">services/auth.py</text></g>
+            <g class="n sym" data-id="require_scope" data-x="490" data-y="198" style="--bd:3.7s;--bdl:-1.7s;--sx:1.66s"><circle class="halo" cx="490" cy="198" r="12"/><circle class="dot" cx="490" cy="198" r="3.2"/><text x="490" y="216" text-anchor="middle">require_scope</text></g>
+            <g class="n file" data-id="ledger" data-x="318" data-y="268" style="--bd:3.8s;--bdl:-0.4s;--sx:1.08s"><circle class="halo" cx="318" cy="268" r="16"/><circle class="ring" cx="318" cy="268" r="5.5"/><text x="332" y="272" text-anchor="start">services/ledger.py</text></g>
+            <g class="n sym" data-id="post_entry" data-x="352" data-y="338" style="--bd:4.5s;--bdl:-3.3s;--sx:1.19s"><circle class="halo" cx="352" cy="338" r="12"/><circle class="dot" cx="352" cy="338" r="3.2"/><text x="365" y="342" text-anchor="start">post_entry</text></g>
+            <g class="n file" data-id="testfile" data-x="120" data-y="396" style="--bd:3.9s;--bdl:-0.9s;--sx:0.41s"><circle class="halo" cx="120" cy="396" r="16"/><circle class="ring" cx="120" cy="396" r="5.5"/><text x="120" y="420" text-anchor="middle">tests/test_ledger.py</text></g>
+            <g class="n sym" data-id="test_refund_flow" data-x="208" data-y="328" style="--bd:5.0s;--bdl:-3.8s;--sx:0.71s"><circle class="halo" cx="208" cy="328" r="12"/><circle class="dot" cx="208" cy="328" r="3.2"/><text x="196" y="332" text-anchor="end">test_refund_flow</text></g>
+            <g class="n file" data-id="entryfile" data-x="436" data-y="434" style="--bd:4.9s;--bdl:-1.6s;--sx:1.48s"><circle class="halo" cx="436" cy="434" r="16"/><circle class="ring" cx="436" cy="434" r="5.5"/><text x="436" y="458" text-anchor="middle">models/entry.py</text></g>
+            <g class="n sym" data-id="entry" data-x="492" data-y="372" style="--bd:5.7s;--bdl:-0.2s;--sx:1.67s"><circle class="halo" cx="492" cy="372" r="12"/><circle class="dot" cx="492" cy="372" r="3.2"/><text x="504" y="376" text-anchor="start">Entry</text></g>
+            <g class="n sym" data-id="base" data-x="524" data-y="300" style="--bd:5.5s;--bdl:-1.2s;--sx:1.78s"><circle class="halo" cx="524" cy="300" r="12"/><circle class="dot" cx="524" cy="300" r="3.2"/><text x="524" y="288" text-anchor="middle">Base</text></g>
+            <g class="n ghost" data-id="batch" data-x="540" data-y="470"><text x="540" y="470" text-anchor="end">services/batch.py:41 · x.post_entry(row) · no edge</text></g>
+          </g>
+        </svg>
+
+        <!-- per-beat readouts, positioned in the bands above and below the graph -->
+        <div class="chips" aria-hidden="true">
+          <span class="chip tl" data-for="1"><span class="m">$</span> grep -rn post_entry .<span class="x m">7 hits · 4 are just text</span></span>
+          <span class="chip tr" data-for="1">callers_of("post_entry")<span class="x"><span class="g">2</span> <span class="m">resolved · no LLM</span></span></span>
+          <span class="chip tl" data-for="2">one in-memory index<span class="x m">HMAC-signed · read by app · MCP · CLI</span></span>
+          <span class="chip br" data-for="3"><span class="g">7 of 8</span> views need no model<span class="x m">only Ask calls an LLM</span></span>
+          <span class="chip tl" data-for="4"><span class="g">▸</span> blast_radius("post_entry")<span class="x">affected_symbols <span class="g">2</span> <span class="m">·</span> affected_files <span class="g">5</span></span><span class="x m">one call · no LLM · no embeddings</span></span>
+          <span class="chip tl" data-for="5"><span class="m">$</span> legend check --base main<span class="x"><span class="g">FAIL</span>  Import cycles introduced (1)</span><span class="x"><span class="g">FAIL</span>  Public symbols removed (1)</span><span class="x">Result: <span class="g">FAIL</span> <span class="m">· exit 1</span></span></span>
+          <span class="chip br" data-for="5"><span class="m">$</span> legend context --write AGENTS.md<span class="x m">derived from the graph, not written</span></span>
+          <span class="chip tl" data-for="6">no account<span class="x m">no login, no cloud</span></span>
+          <span class="chip tr" data-for="6"><span class="g">0</span> telemetry</span>
+          <span class="chip br" data-for="6">outbound<span class="x m">the git clone you asked for · a model you choose, optional</span></span>
+        </div>
+        <ol class="pipe" aria-hidden="true">
+          <li><b>ingest</b></li><li><b>parse</b></li><li><b>graph</b></li><li><b>chunk</b></li><li><b>retrieve</b></li><li><b>cache</b></li>
+        </ol>
+        <div class="tagline">sample repo · payments-service</div>
+        <figcaption class="vh">Edges: api/refunds.py imports services/ledger.py; services/ledger.py imports models/entry.py; api/refunds.py contains RefundService; services/ledger.py contains post_entry; models/entry.py contains Entry; refund is a method of RefundService; refund calls post_entry; post_entry calls the Entry constructor; Entry inherits Base. Left out: x.post_entry(row) in services/batch.py line 41, an unknown receiver.</figcaption>
+      </figure>
+    </div>
+
+    <!-- ── hero text ── -->
+    <div class="hero-text st" id="hero" data-beat="0">
+      <p class="eyebrow rv">Open source · MIT · Python 3.10+</p>
+      <h1 class="rv">Your codebase, as a graph.<br><span class="g">Not a pile of text matches.</span></h1>
+      <div class="rule" aria-hidden="true"></div>
+      <p class="sub rv">Indexed once, on your machine. Browse it, hand it to your coding agent, gate your pull requests on it.</p>
+      <div class="cmdrow rv">
+        <span class="pill g"><span class="d" aria-hidden="true">$</span><span class="cmd">uvx legend-lens .</span><button class="copy" type="button" data-cmd="uvx legend-lens ." aria-label="Copy the install command">copy</button></span>
+        <a class="link" href="./docs.html">Docs →</a>
+        <a class="link" href="https://github.com/samratrajsharma/legend" target="_blank" rel="noopener noreferrer">GitHub →</a>
+      </div>
+      <p class="facts rv"><b>5</b> edge types &nbsp;·&nbsp; <b>13</b> MCP tools &nbsp;·&nbsp; <b>14</b> languages &nbsp;·&nbsp; <b>0</b> telemetry</p>
+    </div>
+
+    <!-- ── six beats ── -->
+    <div class="beats">
+
+      <article class="beat st" data-beat="1" id="how-it-works" data-io>
+        <p class="eyebrow rv">01 · Why not grep</p>
+        <h2 class="rv">Real edges, not text matches.</h2>
+        <p class="cap rv">grep finds seven lines. Legend finds the two real callers, and refuses to guess the rest.</p>
+        <details class="receipt rv">
+          <summary>Show the receipt</summary>
+          <div class="body">
+            <div class="pane mono">
+              <div class="t"><span class="d" aria-hidden="true">$</span> grep -rn post_entry .</div>
+              <span class="hit dim">README.md:44 <span class="m">… calls post_entry to record …</span></span>
+              <span class="hit dim">api/refunds.py:2 <span class="m">from services.ledger import post_entry</span></span>
+              <span class="hit">api/refunds.py:12 <span class="m">post_entry(p.account, -amount)</span><span class="call">◂ caller</span></span>
+              <span class="hit dim">services/batch.py:41 <span class="m">x.post_entry(row)</span></span>
+              <span class="hit dim">services/ledger.py:5 <span class="m">def post_entry(account, amount):</span></span>
+              <span class="hit dim">tests/test_ledger.py:2 <span class="m">from services.ledger import post_entry</span></span>
+              <span class="hit">tests/test_ledger.py:12 <span class="m">post_entry("acct-1", 10)</span><span class="call">◂ caller</span></span>
+              <div class="foot">7 hits · 2 resolved callers · 1 Legend will not guess · 4 text</div>
+            </div>
+            <div class="pane mono">
+              <div class="t">legend · callers_of("post_entry")</div>
+              <div><span class="k">symbol</span>services/ledger.py::post_entry · function</div>
+              <div><span class="k">transitive</span>false</div>
+              <div><span class="k">count</span>2</div>
+              <div><span class="k">callers</span>api/refunds.py::RefundService.refund · method</div>
+              <div><span class="k"></span>tests/test_ledger.py::test_refund_flow · function</div>
+              <div class="foot">resolved edges only · no LLM</div>
+            </div>
+            <div class="rows">
+              <div><b>bare</b><span>post_entry(p.account, -amount) · refunds.py:12</span><span class="m">resolved by import, then same file, then a repo-unique name → edge</span></div>
+              <div><b>self</b><span>self.audit(p)</span><span class="m">resolved in the caller's own class or its bases, never repo-wide → edge</span></div>
+              <div><b>typed</b><span>p: Payment … p.total()</span><span class="m">class known from an annotation or p = Payment(...) → Payment.total, across files → edge</span></div>
+              <div><b>attr</b><span>self.db.get(pid) · refunds.py:9</span><span class="m">receiver type unknown → same-file definitions only → nothing here → no edge</span></div>
+              <div><b>import</b><span>session.add(e) · ledger.py:7</span><span class="m">receiver is an import → external → no edge</span></div>
+              <div><b>?</b><span>x.post_entry(row) · services/batch.py:41</span><span class="m">unknown receiver, no same-file match — grep counted it; Legend draws nothing</span></div>
+            </div>
+            <p class="quote">“A wrong edge is worse than a missing one.”</p>
+            <p class="note">2 node types · 5 edge types: contains · method_of · calls · inherits · imports</p>
+          </div>
+        </details>
+      </article>
+
+      <article class="beat st" data-beat="2" id="index" data-io>
+        <p class="eyebrow rv">02 · The index</p>
+        <h2 class="rv">Index once.</h2>
+        <p class="cap rv">Six stages on your machine, cached and signed. The app, the MCP server and the CLI all read the same index.</p>
+        <details class="receipt rv">
+          <summary>Show the receipt</summary>
+          <div class="body">
+            <div class="rows">
+              <div><b>01</b><span>Ingest / clone</span><span class="m">a folder or a git URL</span></div>
+              <div><b>02</b><span>Parse</span><span class="m">Python: full AST (deepest) · JS/TS: built-in parser · Go, Java, Rust, C#, Ruby, PHP, C, C++, Kotlin, Swift, Scala via the treesitter extra</span></div>
+              <div><b>03</b><span>Build code graph</span><span class="m">2 node types · 5 edge types</span></div>
+              <div><b>04</b><span>Chunk</span><span class="m">searchable chunks</span></div>
+              <div><b>05</b><span>Build retrievers</span><span class="m">BM25 always · on-device embeddings optional · fused with Reciprocal Rank Fusion · expanded through the call graph</span></div>
+              <div><b>06</b><span>Cache</span><span class="m">HMAC-signed per install</span></div>
+            </div>
+            <p class="note">Stdlib-first: Python's own <code>ast</code>, a hand-rolled graph, BM25 from scratch. A fixed sample repo pins its exact invariants in tests. The graph is computed, not predicted.</p>
+          </div>
+        </details>
+      </article>
+
+      <article class="beat st" data-beat="3" id="app" data-io>
+        <p class="eyebrow rv">03 · The app</p>
+        <h2 class="rv">Browse it.</h2>
+        <p class="cap rv">Eight views on localhost. Seven need no model. Ask streams an answer with cited sources.</p>
+        <details class="receipt rv">
+          <summary>Show the receipt</summary>
+          <div class="body">
+            <div class="pane mono">
+              <div class="t">Overview · payments-service · commit 3f9c2a1 · retrieval bm25 + chroma (hybrid RRF)</div>
+              <div class="tiles"><div><b>42</b>Code files</div><div><b>168</b>Symbols</div><div><b>311</b>Graph edges</div><div><b>214</b>Chunks</div><div><b>6,420</b>Total LOC</div><div><b>3.4</b>Avg complexity / fn</div></div>
+              <div><span class="k">Languages</span>Python 38 · SQL 2 · YAML 1 · Markdown 1</div>
+              <div><span class="k">Entry points</span>main.py · api/app.py</div>
+              <div><span class="k">Hub files</span>core/db.py · imported by 18</div>
+              <div><span class="k">Most complex</span>require_scope 22 · verify 14</div>
+              <div><span class="k">Likely unused</span>legacy_charge · old_balance …</div>
+            </div>
+            <div class="rows">
+              <div><b>1</b><span>Overview</span><span class="m">What is this, in one screen?</span></div>
+              <div><b>2</b><span>Timeline <span class="g">LLM-free</span></span><span class="m">What changed since I last looked? Captures record structural diffs: LOC 120→160 · cx 8→11.</span></div>
+              <div><b>3</b><span>Files</span><span class="m">What does this file do, and who calls it? Called by (2) · Calls (1) · Source.</span></div>
+              <div><b>4</b><span>Insight Graph</span><span class="m">Where do I start? Areas → files → file deep-dive with role, fan-in, fan-out, reading order.</span></div>
+              <div><b>5</b><span>API &amp; DB</span><span class="m">What does it expose, and what does it store? Auto-detected routes and ORM models.</span></div>
+              <div><b>6</b><span>Ask</span><span class="m">What is the riskiest part of this codebase? Sources cite file:lines · symbol · via lexical / semantic / both / graph · score.</span></div>
+              <div><b>7</b><span>Track</span><span class="m">What changed between two commits, structurally? Not a text diff: both commits re-indexed and compared.</span></div>
+              <div><b>8</b><span>Intel</span><span class="m">What is quietly rotting? Dead code · hotspots (cx ≥ 10) · duplicates · import cycles · god files · undocumented.</span></div>
+            </div>
+            <p class="note">Download report · Markdown · Word · PDF. Models: OpenAI · Anthropic · Gemini · Groq · OpenRouter · Ollama · custom — or none. <span class="m">sample repo · payments-service</span></p>
+          </div>
+        </details>
+      </article>
+
+      <article class="beat st" data-beat="4" id="agents" data-io>
+        <p class="eyebrow rv">04 · For coding agents</p>
+        <h2 class="rv">Hand it to your agent.</h2>
+        <p class="cap rv">13 read-only MCP tools over the same graph. One <code>blast_radius</code> call instead of ~15 greps.</p>
+        <details class="receipt rv">
+          <summary>Show the receipt</summary>
+          <div class="body">
+            <div class="pane mono">
+              <div><span class="m">agent</span>&nbsp; Before I change post_entry I'll check what depends on it.</div>
+              <div class="g">▸ blast_radius(symbol="post_entry")</div>
+              <div>&nbsp;&nbsp;<span class="k">symbol</span>services/ledger.py::post_entry · function</div>
+              <div>&nbsp;&nbsp;<span class="k">affected_symbols</span>RefundService.refund · test_refund_flow</div>
+              <div>&nbsp;&nbsp;<span class="k">affected_files</span>api/accounts.py · api/refunds.py · services/auth.py · services/batch.py · tests/test_ledger.py</div>
+              <div>&nbsp;&nbsp;<span class="k">counts</span>symbols 2 · files 5</div>
+              <div><span class="m">agent</span>&nbsp; Two callers, five importing files. I'll add a keyword argument with a default.</div>
+            </div>
+            <div class="tools">
+              <div><b>Orient</b>overview · architecture_map · public_surface</div>
+              <div><b>Navigate</b>find_symbol · callers_of · callees_of</div>
+              <div><b>Before you edit</b>blast_radius · impact_of_change · routes_touched · models_touched</div>
+              <div><b>Before you merge</b>structural_diff · cycles &nbsp;<span class="m">· housekeeping: reindex</span></div>
+            </div>
+            <p class="note">SKILL.md rules: before editing any function → <code>blast_radius</code> · before changing a signature → <code>callers_of</code> · before merging → <code>cycles</code>. Index builds lazily on the first call; graph tools need no LLM and no embeddings.</p>
+            <div class="cmdrow" style="margin-top:4px"><span class="pill"><span class="d" aria-hidden="true">$</span><span class="cmd">uvx --from "legend-lens[mcp]" legend mcp --repo .</span><button class="copy" type="button" data-cmd='uvx --from "legend-lens[mcp]" legend mcp --repo .' aria-label="Copy the MCP server command">copy</button></span></div>
+            <p class="note">Works in Claude Code · Claude Desktop · Cursor · Windsurf · Zed · Cline · Continue. <a class="g" href="./docs.html#mcp">Setup guide →</a></p>
+          </div>
+        </details>
+      </article>
+
+      <article class="beat st" data-beat="5" id="cli" data-io>
+        <p class="eyebrow rv">05 · In the repo and in CI</p>
+        <h2 class="rv">Gate your pull requests.</h2>
+        <p class="cap rv"><code>legend check</code> fails a PR on a new import cycle or a removed public symbol. <code>legend context</code> writes AGENTS.md from the graph.</p>
+        <details class="receipt rv">
+          <summary>Show the receipt</summary>
+          <div class="body">
+            <div class="pane">
+              <div class="t mono"><span class="d" aria-hidden="true">$</span> legend check --base main</div>
+<pre class="report">legend check: payments-service  base=main  head=8b21d0e
+
+<span class="fail">FAIL</span>  Import cycles introduced (1):
+        services/ledger.py -> services/auth.py -> services/ledger.py
+<span class="fail">FAIL</span>  Public symbols removed (1):
+        services/legacy.py::old_balance
+<span class="m">WARN</span>  Complexity regressions (+>=5) (1):
+        services/auth.py::require_scope  22 -> 27
+
+Result: <span class="fail">FAIL</span>   <span class="m">$ echo $?</span> → 1</pre>
+              <div class="foot mono">FAIL → blocking · WARN → warning, FAIL with --strict · exit 0 clean · 1 regression · 2 error</div>
+            </div>
+            <div class="pane mono">
+              <div class="t"><span class="d" aria-hidden="true">$</span> legend context --write AGENTS.md</div>
+              <div>Project · Entry points · Architecture <span class="m">(areas &amp; real import edges)</span> · HTTP routes · Data models · Key files · Public surface · Configuration surface · Constraints &amp; cautions · For coding agents</div>
+              <div class="foot">derived, not written · regenerate each commit so it can never drift</div>
+            </div>
+          </div>
+        </details>
+      </article>
+
+      <article class="beat st" data-beat="6" id="local" data-io>
+        <p class="eyebrow rv">06 · Local-first</p>
+        <h2 class="rv">One machine.</h2>
+        <p class="cap rv">Loopback only. No account, no telemetry, no cloud. Bring a model, or don't.</p>
+        <details class="receipt rv">
+          <summary>Show the receipt</summary>
+          <div class="body">
+            <dl class="kvl">
+              <div><dt>bind</dt><dd>loopback only</dd></div>
+              <div><dt>outbound</dt><dd>the git clone you asked for · an LLM you configure (optional)</dd></div>
+              <div><dt>telemetry</dt><dd>none</dd></div>
+              <div><dt>cloning</dt><dd>hardened: transport allowlist · argument-injection guarded</dd></div>
+              <div><dt>rendering</dt><dd>XSS-safe README and LLM output</dd></div>
+              <div><dt>cache</dt><dd>HMAC-signed per install</dd></div>
+            </dl>
+          </div>
+        </details>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ INSTALL ═══════════════ -->
+<section class="install" id="install" aria-labelledby="h-install" data-io>
+  <div class="wrap">
+    <figure class="fig">
+      <svg class="gv gv-mark" data-io viewBox="0 0 560 400" role="img" aria-labelledby="gv3-t">
+        <title id="gv3-t">The sample graph collapses into the Legend mark: four nodes travel to the tetrahedron's vertices and its six edges draw</title>
+        <g class="fade" shape-rendering="crispEdges" stroke="#f2f2f2" stroke-opacity=".35" stroke-width="1" fill="none">
+          <line x1="110.5" y1="74" x2="110.5" y2="196"/><line x1="110.5" y1="224" x2="110.5" y2="316"/>
+          <line x1="187" y1="60.5" x2="333" y2="60.5"/><line x1="187" y1="210.5" x2="333" y2="210.5"/><line x1="187" y1="330.5" x2="333" y2="330.5"/>
+          <line x1="340.5" y1="129" x2="340.5" y2="68"/><line x1="340.5" y1="141" x2="340.5" y2="203"/><line x1="340.5" y1="217" x2="340.5" y2="323"/><line x1="390" y1="330.5" x2="483" y2="330.5"/>
+        </g>
+        <g class="fade">
+          <g class="n file"><rect x="35.5" y="48.5" width="150" height="24" rx="4"/><text x="110" y="64.5" text-anchor="middle">api/refunds.py</text></g>
+          <g class="n file"><rect x="35.5" y="198.5" width="150" height="24" rx="4"/><text x="110" y="214.5" text-anchor="middle">services/ledger.py</text></g>
+          <g class="n file"><rect x="35.5" y="318.5" width="150" height="24" rx="4"/><text x="110" y="334.5" text-anchor="middle">models/entry.py</text></g>
+          <g class="n sym"><circle cx="490.5" cy="330.5" r="4"/><text x="501" y="334.5">Base</text></g>
+        </g>
+        <g class="mh" aria-hidden="true">
+          <line x1="280" y1="200" x2="280" y2="120"/><line x1="280" y1="200" x2="349" y2="240"/><line x1="280" y1="200" x2="211" y2="240"/>
+          <line x1="280" y1="120" x2="349" y2="240"/><line x1="349" y1="240" x2="211" y2="240"/><line x1="211" y1="240" x2="280" y2="120"/>
+        </g>
+        <g>
+          <line class="me dr" x1="280" y1="200" x2="280" y2="120"/><line class="me dr" x1="280" y1="200" x2="349" y2="240"/><line class="me dr" x1="280" y1="200" x2="211" y2="240"/>
+          <line class="me dr" x1="280" y1="120" x2="349" y2="240"/><line class="me dr" x1="349" y1="240" x2="211" y2="240"/><line class="me dr" x1="211" y1="240" x2="280" y2="120"/>
+        </g>
+        <g class="n sym travel" data-id="refundservice" style="--d:180ms"><circle cx="340.5" cy="60.5" r="4"/><text x="351" y="64.5">RefundService</text></g>
+        <g class="n sym travel" data-id="refund" style="--d:60ms"><circle cx="340.5" cy="135" r="4"/><text x="351" y="139">refund</text></g>
+        <g class="n sym travel" data-id="post_entry" style="--d:0ms"><circle cx="340.5" cy="210.5" r="5"/><text x="351" y="214.5">post_entry</text></g>
+        <g class="n sym travel" data-id="entry" style="--d:120ms"><circle cx="340.5" cy="330.5" r="4"/><text x="351" y="334.5">Entry</text></g>
+      </svg>
+    </figure>
+    <div class="st">
+      <h2 class="rv" id="h-install">Run it on a repo you have never seen.</h2>
+      <p class="sub rv">Zero install with uv. Or pipx, or pip. Python 3.10+. Extras when you want them: semantic · llm · treesitter · export · mcp · all.</p>
+    </div>
+    <div class="doors st" style="--step:120ms">
+      <div class="door primary rv"><span class="lab">App</span><span class="cmd"><span><span class="d" aria-hidden="true" style="color:var(--dim)">$ </span>uvx legend-lens .</span><button class="copy" type="button" data-cmd="uvx legend-lens ." aria-label="Copy the app command">copy</button></span></div>
+      <div class="door rv"><span class="lab">Agents</span><span class="cmd"><span><span class="d" aria-hidden="true" style="color:var(--dim)">$ </span>uvx --from "legend-lens[mcp]" legend mcp --repo .</span><button class="copy" type="button" data-cmd='uvx --from "legend-lens[mcp]" legend mcp --repo .' aria-label="Copy the MCP server command">copy</button></span></div>
+      <div class="door rv"><span class="lab">CI</span><span class="cmd"><span><span class="d" aria-hidden="true" style="color:var(--dim)">$ </span>uvx --from legend-lens legend check --base main<small>run on a pull request against main · exit 0 clean · 1 regression · 2 error</small></span><button class="copy" type="button" data-cmd="uvx --from legend-lens legend check --base main" aria-label="Copy the CI check command">copy</button></span></div>
+    </div>
+    <p class="alt rv"><code>pipx install legend-lens</code> · <code>pip install legend-lens</code></p>
+    <div class="actions rv">
+      <a class="link" href="./docs.html" style="margin-left:0">Read the docs →</a>
+      <a class="link" href="https://github.com/samratrajsharma/legend" target="_blank" rel="noopener noreferrer">GitHub →</a>
+      <a class="link" href="https://pypi.org/project/legend-lens/" target="_blank" rel="noopener noreferrer">PyPI →</a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="footer">
+  <div class="wrap in">
+    <span class="brand"><svg viewBox="0 0 48 48" fill="none" aria-hidden="true"><g stroke="#1DB954" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="24" y1="24" x2="24" y2="9"/><line x1="24" y1="24" x2="37" y2="31.5"/><line x1="24" y1="24" x2="11" y2="31.5"/><line x1="24" y1="9" x2="37" y2="31.5"/><line x1="37" y1="31.5" x2="11" y2="31.5"/><line x1="11" y1="31.5" x2="24" y2="9"/></g><g fill="#1DB954"><circle cx="24" cy="24" r="4.6"/><circle cx="24" cy="9" r="4"/><circle cx="37" cy="31.5" r="4"/><circle cx="11" cy="31.5" r="4"/></g></svg>Legend — local-first codebase intelligence</span>
+    <nav aria-label="Footer"><a href="./docs.html">Docs</a><a href="https://github.com/samratrajsharma/legend" target="_blank" rel="noopener noreferrer">GitHub</a><a href="https://pypi.org/project/legend-lens/" target="_blank" rel="noopener noreferrer">PyPI</a><a href="https://github.com/samratrajsharma/legend/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT</a></nav>
+    <span>Legend is local-first. This page has no analytics.</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+  var html = document.documentElement;
+  var rm = window.matchMedia('(prefers-reduced-motion: reduce)');
+  var setReduce = function () { html.classList.toggle('reduce', rm.matches); };
+  setReduce();
+  if (rm.addEventListener) rm.addEventListener('change', setReduce);
+
+  /* measure every self-drawing stroke so the draw runs at one speed */
+  function measure() {
+    var els = document.querySelectorAll('.dr');
+    for (var i = 0; i < els.length; i++) {
+      try { els[i].style.setProperty('--len', String(Math.ceil(els[i].getTotalLength()) + 1)); } catch (e) { /* not a geometry element */ }
+    }
+  }
+  measure();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(measure);
+
+  /* reveal on arrival: threshold 0 so a section taller than the viewport still fires */
+  var targets = document.querySelectorAll('[data-io]');
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) { if (en.isIntersecting) { en.target.classList.add('is-in'); io.unobserve(en.target); } });
+    }, { threshold: 0, rootMargin: '0px 0px -12% 0px' });
+    targets.forEach(function (t) { io.observe(t); });
+  } else {
+    targets.forEach(function (t) { t.classList.add('is-in'); });
+  }
+  /* the hero text and the stage draw on load (no requestAnimationFrame: a background tab never gets a frame) */
+  var hero = document.getElementById('hero'), stage = document.querySelector('.stage');
+  if (hero) { void hero.offsetWidth; hero.classList.add('is-in'); }
+  if (stage) { void stage.offsetWidth; stage.classList.add('is-in'); }
+
+  /* beats: the stage follows whichever beat sits in the reading band */
+  var graph = null;
+  var fig = document.getElementById('stage');
+  var beats = Array.prototype.slice.call(document.querySelectorAll('[data-beat]')).filter(function (el) { return el !== fig; });
+  var chips = document.querySelectorAll('.chip[data-for]');
+  function setBeat(n) {
+    if (!fig) return;
+    fig.setAttribute('data-beat', n);
+    beats.forEach(function (b) { b.classList.toggle('is-on', b.getAttribute('data-beat') === n); });
+    chips.forEach(function (c) { c.classList.toggle('on', c.getAttribute('data-for') === n); });
+    if (graph) graph.applyBeat(n);
+  }
+  if (fig && 'IntersectionObserver' in window) {
+    /* the reading band: the middle of the viewport on desktop; just below the sticky stage on phones */
+    var band = '-45% 0px -45% 0px';
+    if (window.matchMedia('(max-width: 899px)').matches && stage) {
+      var vh = window.innerHeight || 1;
+      var top = Math.min(70, Math.max(30, Math.round((stage.getBoundingClientRect().height + 64) / vh * 100) + 2));
+      band = '-' + top + '% 0px -' + Math.max(5, 100 - top - 25) + '% 0px';
+    }
+    var bio = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) { if (en.isIntersecting) setBeat(en.target.getAttribute('data-beat')); });
+    }, { threshold: 0, rootMargin: band });
+    beats.forEach(function (b) { bio.observe(b); });
+  }
+
+  /* nav: hairline after 10px, mobile menu disclosure */
+  var nav = document.querySelector('.nav');
+  var onScroll = function () { nav.classList.toggle('is-scrolled', window.scrollY > 10); };
+  onScroll();
+  window.addEventListener('scroll', onScroll, { passive: true });
+  var btn = nav.querySelector('.menu-btn'), menu = document.getElementById('menu');
+  function setMenu(open) {
+    nav.classList.toggle('is-open', open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) { var first = menu.querySelector('a'); if (first) first.focus(); }
+  }
+  btn.addEventListener('click', function () { setMenu(!nav.classList.contains('is-open')); });
+  menu.addEventListener('click', function (e) { if (e.target.closest('a')) setMenu(false); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && nav.classList.contains('is-open')) { setMenu(false); btn.focus(); } });
+  document.addEventListener('click', function (e) { if (nav.classList.contains('is-open') && !nav.contains(e.target)) setMenu(false); });
+
+  /* the Line: JS fallback only where scroll-driven animations are unsupported */
+  var line = document.querySelector('.line');
+  var nativeLine = window.CSS && CSS.supports && CSS.supports('animation-timeline: scroll()');
+  if (line && !nativeLine) {
+    var ticking = false;
+    var update = function () {
+      ticking = false;
+      var max = html.scrollHeight - window.innerHeight;
+      line.style.setProperty('--progress', max > 0 ? (window.scrollY / max).toFixed(4) : '0');
+    };
+    window.addEventListener('scroll', function () { if (!ticking) { ticking = true; window.requestAnimationFrame(update); } }, { passive: true });
+    update();
+  }
+
+  /* copy buttons: the command comes from data-cmd, never from DOM text */
+  document.querySelectorAll('.copy').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var cmd = b.getAttribute('data-cmd');
+      var label = b.getAttribute('aria-label');
+      var done = function () {
+        b.classList.add('is-ok'); b.textContent = 'copied'; b.setAttribute('aria-label', 'Copied');
+        window.setTimeout(function () { b.classList.remove('is-ok'); b.textContent = 'copy'; b.setAttribute('aria-label', label); }, 1200);
+      };
+      var fallback = function () {
+        var t = b.previousElementSibling;
+        if (t && window.getSelection) { var s = window.getSelection(); s.removeAllRanges(); var r = document.createRange(); r.selectNodeContents(t); s.addRange(r); }
+        try { if (document.execCommand && document.execCommand('copy')) { done(); return; } } catch (e) { /* fall through */ }
+        b.textContent = 'selected'; b.setAttribute('aria-label', 'Command selected. Press Ctrl+C or Cmd+C to copy.');
+        window.setTimeout(function () { b.textContent = 'copy'; b.setAttribute('aria-label', label); }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(cmd).then(done).catch(fallback); else fallback();
+    });
+  });
+
+  /* ── the living graph: assembly, drift, pulses, beats, hover ── */
+  var live = document.querySelector('.gv.live');
+  if (live) (function () {
+    var reduce = function () { return html.classList.contains('reduce'); };
+    var rand = function (a, b) { return a + Math.random() * (b - a); };
+    var nodes = [], byId = {}, edges = [], byEdge = {}, pulses = [];
+    live.querySelectorAll('.n').forEach(function (g, i) {
+      var n = { el: g, id: g.getAttribute('data-id'), x: +g.getAttribute('data-x'), y: +g.getAttribute('data-y'), ox: 0, oy: 0,
+        ph: rand(0, 6.28), ax: rand(1.6, 3.4), ay: rand(1.6, 3.4), fx: rand(.00026, .00048), fy: rand(.00026, .00048),
+        fixed: g.classList.contains('ghost'), delay: i * 60 };
+      n.bx = n.x; n.by = n.y;
+      var a = rand(0, 6.28), d = n.fixed ? 0 : rand(120, 230);
+      n.sx = n.x + Math.cos(a) * d; n.sy = n.y + Math.sin(a) * d;
+      nodes.push(n); byId[n.id] = n;
+    });
+    live.querySelectorAll('path.e').forEach(function (p) {
+      var e = { el: p, id: p.getAttribute('data-id'), from: byId[p.getAttribute('data-from')], to: byId[p.getAttribute('data-to')],
+        sign: +(p.getAttribute('data-sign') || 1), k: +(p.getAttribute('data-k') || .16), kind: p.getAttribute('data-kind'),
+        label: live.querySelector('.el[data-edge="' + p.getAttribute('data-id') + '"]'), g: null };
+      if (e.from && e.to) { edges.push(e); byEdge[e.id] = e; }
+    });
+    function geom(e) {
+      var x1 = e.from.bx + e.from.ox, y1 = e.from.by + e.from.oy, x2 = e.to.bx + e.to.ox, y2 = e.to.by + e.to.oy;
+      var mx = (x1 + x2) / 2, my = (y1 + y2) / 2, dx = x2 - x1, dy = y2 - y1, ln = Math.hypot(dx, dy) || 1;
+      var nx = -dy / ln, ny = dx / ln;
+      return { x1: x1, y1: y1, x2: x2, y2: y2, cx: mx + nx * ln * e.k * e.sign, cy: my + ny * ln * e.k * e.sign };
+    }
+    function draw(e) {
+      var g = geom(e); e.g = g;
+      e.el.setAttribute('d', 'M' + g.x1.toFixed(1) + ',' + g.y1.toFixed(1) + ' Q' + g.cx.toFixed(1) + ',' + g.cy.toFixed(1) + ' ' + g.x2.toFixed(1) + ',' + g.y2.toFixed(1));
+      if (e.label) { e.label.setAttribute('x', ((g.x1 + 2 * g.cx + g.x2) / 4).toFixed(1)); e.label.setAttribute('y', ((g.y1 + 2 * g.cy + g.y2) / 4 - 5).toFixed(1)); }
+    }
+    function at(e, t) { var g = e.g || geom(e), u = 1 - t; return { x: u * u * g.x1 + 2 * u * t * g.cx + t * t * g.x2, y: u * u * g.y1 + 2 * u * t * g.cy + t * t * g.y2 }; }
+    /* pulses */
+    var layer = live.querySelector('.pulses'), active = [], rate = 1;
+    var normal = function (e) { return e.kind !== 'new' && e.kind !== 'unres'; };
+    function spawn(p) {
+      if (!active.length) { p.dead = true; p.el.setAttribute('opacity', '0'); return; }
+      p.dead = false; p.e = active[Math.floor(Math.random() * active.length)]; p.t = 0; p.v = rand(.00016, .00028) * rate;
+    }
+    for (var i = 0; i < 11; i++) {
+      var c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      c.setAttribute('class', 'pulse'); c.setAttribute('r', i % 3 === 0 ? '3' : '2.3'); c.setAttribute('opacity', '0');
+      layer.appendChild(c); pulses.push({ el: c, t: Math.random(), e: null, v: 0, dead: true });
+    }
+    function setActive(pred, r) {
+      active = edges.filter(pred); rate = r || 1;
+      pulses.forEach(function (p) { if (p.dead || active.indexOf(p.e) < 0) { spawn(p); p.t = Math.random() * .5; } });
+    }
+    /* loop */
+    var assembling = true, t0 = null, D = 1500, running = false, last = 0;
+    var ease = function (t) { return 1 - Math.pow(1 - t, 3); };
+    function tick(ts) {
+      if (!running) return;
+      if (!last) last = ts; var dt = Math.min(48, ts - last); last = ts;
+      if (assembling) {
+        if (t0 === null) t0 = ts;
+        var done = true;
+        nodes.forEach(function (n) {
+          if (n.fixed) return;
+          var p = Math.min(1, Math.max(0, (ts - t0 - n.delay) / D)); if (p < 1) done = false;
+          var q = ease(p); n.bx = n.sx + (n.x - n.sx) * q; n.by = n.sy + (n.y - n.sy) * q;
+          n.el.style.opacity = String(Math.min(1, p * 1.8));
+        });
+        if (done) { assembling = false; nodes.forEach(function (n) { n.el.style.opacity = ''; }); live.classList.add('is-live'); }
+      }
+      nodes.forEach(function (n) {
+        if (!n.fixed) { n.ox = Math.sin(ts * n.fx + n.ph) * n.ax; n.oy = Math.sin(ts * n.fy + n.ph * 1.7) * n.ay; }
+        n.el.setAttribute('transform', 'translate(' + (n.bx - n.x + n.ox).toFixed(2) + ',' + (n.by - n.y + n.oy).toFixed(2) + ')');
+      });
+      edges.forEach(draw);
+      if (!assembling) pulses.forEach(function (p) {
+        if (p.dead) return;
+        p.t += p.v * dt; if (p.t >= 1) { spawn(p); if (p.dead) return; }
+        var q = at(p.e, p.t);
+        p.el.setAttribute('cx', q.x.toFixed(1)); p.el.setAttribute('cy', q.y.toFixed(1));
+        p.el.setAttribute('opacity', (Math.sin(p.t * Math.PI) * .9 + .08).toFixed(2));
+      });
+      window.requestAnimationFrame(tick);
+    }
+    function start() { if (running || reduce()) return; running = true; last = 0; window.requestAnimationFrame(tick); }
+    function stop() { running = false; }
+    function layoutStatic() {
+      nodes.forEach(function (n) { n.bx = n.x; n.by = n.y; n.ox = 0; n.oy = 0; n.el.setAttribute('transform', ''); n.el.style.opacity = ''; });
+      edges.forEach(draw); live.classList.add('is-live'); pulses.forEach(function (p) { p.el.setAttribute('opacity', '0'); });
+    }
+    /* beats: what is lit, what is dimmed, where the pulses run */
+    var SETS = {
+      '0': { n: [], e: [], dim: false, pulse: normal, rate: 1 },
+      '1': { n: ['refund', 'test_refund_flow', 'post_entry'], e: ['e5', 'e13'], dim: true, pulse: function (e) { return e.id === 'e5' || e.id === 'e13'; }, rate: 1.7 },
+      '2': { n: [], e: [], dim: false, pulse: normal, rate: 1.15 },
+      '3': { n: [], e: [], dim: false, pulse: normal, rate: .85 },
+      '4': { n: ['post_entry', 'refund', 'test_refund_flow', 'refunds', 'testfile', 'auth'], e: ['e5', 'e13', 'e1', 'e11', 'e15'], dim: true, pulse: function (e) { return ['e5', 'e13', 'e1', 'e11', 'e15'].indexOf(e.id) >= 0; }, rate: 1.7,
+        ld: { post_entry: 0, refund: 260, test_refund_flow: 260, refunds: 560, testfile: 560, auth: 560 } },
+      '5': { n: ['ledger', 'auth'], e: ['e15', 'e16'], dim: true, pulse: function (e) { return e.id === 'e15' || e.id === 'e16'; }, rate: 1.9 },
+      '6': { n: [], e: [], dim: false, pulse: normal, rate: .9 }
+    };
+    var current = '0';
+    function paint(nOn, eOn, dim, ld) {
+      nodes.forEach(function (n) {
+        var on = nOn.indexOf(n.id) >= 0;
+        n.el.classList.toggle('on', on); n.el.classList.toggle('dim', dim && !on && !n.fixed);
+        n.el.classList.toggle('origin', on && n.id === 'post_entry' && current === '4');
+        n.el.style.setProperty('--ld', (ld && ld[n.id] ? ld[n.id] : 0) + 'ms');
+      });
+      edges.forEach(function (e) {
+        var on = eOn.indexOf(e.id) >= 0;
+        e.el.classList.toggle('on', on); e.el.classList.toggle('dim', dim && !on && normal(e));
+        if (e.label) e.label.classList.toggle('on', on);
+      });
+    }
+    function applyBeat(b) {
+      current = String(b); var s = SETS[current] || SETS['0'];
+      paint(s.n, s.e, s.dim, s.ld); setActive(s.pulse, s.rate);
+    }
+    /* hover: light a node's real neighbourhood (any beat), then restore the beat */
+    nodes.forEach(function (n) {
+      if (n.fixed) return;
+      n.el.addEventListener('mouseenter', function () {
+        var nOn = [n.id], eOn = [];
+        edges.forEach(function (e) { if (!normal(e)) return; if (e.from === n || e.to === n) { eOn.push(e.id); nOn.push(e.from === n ? e.to.id : e.from.id); } });
+        paint(nOn, eOn, true, null); setActive(function (e) { return eOn.indexOf(e.id) >= 0; }, 1.9);
+      });
+      n.el.addEventListener('mouseleave', function () { applyBeat(current); });
+    });
+    if (reduce()) layoutStatic(); else { edges.forEach(draw); start(); }
+    applyBeat('0');
+    document.addEventListener('visibilitychange', function () { if (document.hidden) stop(); else start(); });
+    if ('IntersectionObserver' in window) new IntersectionObserver(function (es) { es.forEach(function (en) { if (en.isIntersecting) start(); else stop(); }); }, { threshold: 0 }).observe(live);
+    if (rm.addEventListener) rm.addEventListener('change', function () { if (rm.matches) { stop(); layoutStatic(); } else start(); });
+    graph = { applyBeat: applyBeat };
+    window.legendGraph = graph;
+  })();
+})();
+</script>
+</body>
+</html>
