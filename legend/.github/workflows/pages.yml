@@ -1,0 +1,54 @@
+name: Deploy landing page
+
+# Builds the marketing site in legend-frontend/ and publishes it to GitHub Pages.
+# Homepage = legend-frontend/public/v3.html (published as index.html); docs = docs.html.
+# One-time setup: repo Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
+# Site URL will be https://samratrajsharma.github.io/legend/
+on:
+  push:
+    branches: [main]
+    paths:
+      - "legend-frontend/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Build the site
+        working-directory: legend-frontend
+        run: |
+          npm ci
+          npm run build
+          # Publish the v3 landing page as the site homepage.
+          # v3.html is hand-authored, self-contained static HTML in public/, so it is
+          # copied verbatim (no Vite processing) over the built index.html. The docs
+          # page (docs.html) and /v3.html still build/serve normally.
+          cp public/v3.html dist/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: legend-frontend/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,228 @@
+from __future__ import annotations
+import hashlib
+import hmac
+import json
+import os
+import pickle
+from collections import defaultdict
+
+from .config import CONFIG
+from .ingest import ingest
+from .parsing import parse_file
+from .graph import build_graph
+from .chunking import make_chunks
+from .index import BM25Retriever, ChromaRetriever
+from .retrieval import hybrid_search, assemble_context
+from .llm import synthesize, synthesize_stream
+
+
+class RepoIndex:
+    def __init__(self, meta, parsed_files, graph, chunks, lexical, dense, config):
+        self.meta = meta
+        self.parsed_files = parsed_files
+        self.graph = graph
+        self.chunks = chunks
+        self.lexical = lexical
+        self.dense = dense
+        self.config = config
+        self.memo = {}          # per-index cache for pure analyses (insights, overview, ...)
+        self.chunks_by_id = {c.id: c for c in chunks}
+        self.chunks_by_node = defaultdict(list)
+        for c in chunks:
+            self.chunks_by_node[c.node_id].append(c)
+
+    def stats(self):
+        s = self.graph.stats()
+        return {
+            "repo": self.meta.name, "commit": self.meta.commit[:12],
+            "is_git": self.meta.is_git, "files_parsed": len(self.parsed_files),
+            "python_files": sum(1 for p in self.parsed_files
+                                if p.language in ("python", "javascript", "typescript")),
+            "parse_errors": sum(1 for p in self.parsed_files if p.error),
+            "symbols": s["node_types"].get("symbol", 0), "chunks": len(self.chunks),
+            "graph_nodes": s["nodes"], "graph_edges": s["edges"],
+            "edge_types": s["edge_types"],
+            "retriever": "bm25 + chroma (hybrid RRF)" if self.dense is not None else "bm25",
+        }
+
+    def search(self, query):
+        return hybrid_search(query, self.lexical, self.dense, self.graph,
+                             self.chunks_by_node, k=self.config.top_k,
+                             expand=self.config.graph_expand)
+
+    def ask(self, query, model=None, llm_kwargs=None):
+        # model/llm_kwargs are per-request overrides passed by value - NOT written back to
+        # self.config, so concurrent asks with different models can't cross-contaminate (#49).
+        m = model or self.config.llm_model
+        kw = llm_kwargs if llm_kwargs is not None else self.config.llm_kwargs
+        retrieved = self.search(query)
+        context = assemble_context(retrieved, model=m)
+        answer, used = synthesize(query, context, m, kw)
+        return {"question": query, "answer": answer, "used_llm": used,
+                "retrieved": retrieved, "context": context}
+
+    def ask_stream(self, query, model=None, llm_kwargs=None):
+        """Streaming variant of ask(): returns (retrieved, context, token_generator)."""
+        m = model or self.config.llm_model
+        kw = llm_kwargs if llm_kwargs is not None else self.config.llm_kwargs
+        retrieved = self.search(query)
+        context = assemble_context(retrieved, model=m)
+        tokens = synthesize_stream(query, context, m, kw)
+        return retrieved, context, tokens
+
+
+# ---------------- cache + multi-repo registry ----------------
+def _signature(meta, files):
+    # Fingerprint = commit sha + the ACTUAL working-tree state. The working-tree
+    # fingerprint used to be computed only for non-git folders (commit=="working-tree");
+    # for a git repo the signature was the HEAD sha alone, so uncommitted edits did NOT
+    # bust the cache. That silently broke Timeline/Track on git repos: track/dirty saw
+    # the edit, but capture reused the stale HEAD-keyed parse and reported "no change"
+    # (QA finding G-05). Always hashing the tree makes any uncommitted edit invalidate
+    # the cache, which is the whole point of over-time tracking.
+    h = hashlib.sha1()
+    h.update((meta.commit or "").encode())
+    for rel, ab in sorted(files):
+        try:
+            st = os.stat(ab)
+            h.update(f"{rel}:{int(st.st_mtime)}:{st.st_size}".encode())
+        except OSError:
+            pass
+    return h.hexdigest()[:16]
+
+
+def _cache_file(data_dir, meta, sig):
+    d = os.path.join(data_dir, "cache")
+    os.makedirs(d, exist_ok=True)
+    safe = "".join(ch if ch.isalnum() else "_" for ch in meta.name)[:40] or "repo"
+    return os.path.join(d, f"{safe}_{sig}.pkl")
+
+
+def _cache_secret(data_dir):
+    """A per-install secret used to HMAC-sign cache blobs (created once, 0600)."""
+    d = os.path.join(data_dir, "cache")
+    os.makedirs(d, exist_ok=True)
+    key_path = os.path.join(d, ".hmac_key")
+    try:
+        with open(key_path, "rb") as fh:
+            k = fh.read()
+        if len(k) >= 32:
+            return k
+    except OSError:
+        pass
+    k = os.urandom(32)
+    try:
+        with open(key_path, "wb") as fh:
+            fh.write(k)
+        try:
+            os.chmod(key_path, 0o600)
+        except OSError:
+            pass
+    except OSError:
+        pass
+    return k
+
+
+def _cache_load(path, secret):
+    """Load a cache blob only if its HMAC matches — never unpickle unverified bytes. A missing,
+    truncated or tampered file (e.g. a planted .pkl on a shared/synced data dir) is treated as a
+    cache miss and rebuilt, closing the pickle-RCE vector."""
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    if len(raw) < 32:
+        return None
+    sig, blob = raw[:32], raw[32:]
+    if not hmac.compare_digest(sig, hmac.new(secret, blob, hashlib.sha256).digest()):
+        return None
+    try:
+        return pickle.loads(blob)
+    except Exception:
+        return None
+
+
+def _cache_dump(path, obj, secret):
+    blob = pickle.dumps(obj)
+    sig = hmac.new(secret, blob, hashlib.sha256).digest()
+    with open(path, "wb") as fh:
+        fh.write(sig + blob)
+
+
+def _build_retrievers(chunks, backend, data_dir, sig, namespace="default"):
+    lexical = BM25Retriever()
+    lexical.index(chunks)
+    dense = None
+    if backend in ("auto", "hybrid", "chroma"):
+        try:
+            dense = ChromaRetriever(data_dir, sig, namespace)
+            dense.index(chunks)
+        except Exception:
+            if backend == "chroma":
+                raise
+            dense = None
+    return lexical, dense
+
+
+def record_repo(data_dir, source, meta):
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        f = os.path.join(data_dir, "repos.json")
+        reg = json.load(open(f)) if os.path.exists(f) else []
+        reg = [e for e in reg if e.get("source") != source]
+        reg.insert(0, {"source": source, "name": meta.name, "commit": meta.commit[:12]})
+        json.dump(reg[:20], open(f, "w"), indent=2)
+    except Exception:
+        pass
+
+
+def recent_repos(data_dir):
+    try:
+        f = os.path.join(data_dir, "repos.json")
+        return json.load(open(f)) if os.path.exists(f) else []
+    except Exception:
+        return []
+
+
+def build_index(source, config=CONFIG, progress=None, use_cache=None, register=True):
+    def log(m):
+        if progress:
+            progress(m)
+
+    if use_cache is None:
+        use_cache = config.use_cache
+    log("Ingesting repository ...")
+    meta, code_files, doc_files = ingest(source, config.data_dir)
+    files = code_files + doc_files
+    sig = _signature(meta, files)
+    cache = _cache_file(config.data_dir, meta, sig)
+
+    secret = _cache_secret(config.data_dir)
+    parsed = graph = chunks = None
+    if use_cache and os.path.exists(cache):
+        log("Loading cached parse/graph/chunks ...")
+        loaded = _cache_load(cache, secret)       # HMAC-verified; None on miss/tamper
+        if loaded is not None:
+            parsed, graph, chunks = loaded
+
+    if parsed is None:
+        log(f"Parsing {len(code_files)} code + {len(doc_files)} doc files ...")
+        parsed = [parse_file(rel, ab) for rel, ab in files]
+        log("Building code graph ...")
+        graph = build_graph(parsed)
+        log("Chunking ...")
+        chunks = make_chunks(parsed, meta.commit, config.chunk_max_lines)
+        if use_cache:
+            try:
+                _cache_dump(cache, (parsed, graph, chunks), secret)
+            except Exception:
+                pass
+
+    log("Building retrievers ...")
+    lexical, dense = _build_retrievers(chunks, config.embed_backend, config.data_dir, sig,
+                                       namespace=meta.name or "repo")
+    if register:
+        record_repo(config.data_dir, source, meta)
+    log("Done.")
+    return RepoIndex(meta, parsed, graph, chunks, lexical, dense, config)
