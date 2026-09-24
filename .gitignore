@@ -36,7 +36,10 @@ build/
 .claude/
 
 # ───────────── Docs — kept local, not committed (per request) ─────────────
-/docs/
+# Except the architecture decision records in docs/decisions/, which are tracked.
+# "/docs/*" (not "/docs/") so git still looks inside docs/ and the "!" rule can apply.
+/docs/*
+!/docs/decisions/
 /*.docx
 /*.pptx
 /*.xlsx
