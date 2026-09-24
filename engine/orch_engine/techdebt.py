@@ -9,8 +9,36 @@ import textwrap
 import tokenize as pytok
 from collections import defaultdict
 
-from .index import tokenize
 from .insights import repo_insights, _reachable_symbols
+
+_WORD = re.compile(r"[A-Za-z0-9]+")
+_CAMEL = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z][a-z]+|[a-z]+|[A-Z]+|\d+")
+
+
+def _stem(t):
+    if len(t) > 4 and t.endswith("ing"):
+        return t[:-3]
+    if len(t) > 4 and t.endswith("ed"):
+        return t[:-2]
+    if len(t) > 4 and t.endswith("es"):
+        return t[:-2]
+    if len(t) > 3 and t.endswith("s") and not t.endswith("ss"):
+        return t[:-1]
+    if len(t) > 4 and t.endswith("ly"):
+        return t[:-2]
+    return t
+
+
+def tokenize(text):
+    """Split identifiers and words into lower-case, lightly stemmed tokens (camelCase aware)."""
+    toks = []
+    for raw in _WORD.findall(text or ""):
+        for p in (_CAMEL.findall(raw) or [raw]):
+            p = p.lower()
+            if len(p) >= 2:
+                toks.append(_stem(p))
+    return toks
+
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 

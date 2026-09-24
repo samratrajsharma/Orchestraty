@@ -1,9 +1,7 @@
 """Shared pytest fixtures for the Legend test suite.
 
-The fixtures build a real RepoIndex over the bundled ``sample_repo`` using a
-**BM25-only** config so the suite is fast, fully offline, and deterministic
-(no chromadb embedding, no network, no LLM). Optional-dependency code paths are
-tested separately for their graceful-degradation behaviour.
+The fixtures build a real RepoIndex over the bundled ``sample_repo`` with caching off,
+so the suite is fast, fully offline and deterministic (no network, no model).
 """
 from __future__ import annotations
 
@@ -36,23 +34,22 @@ def sample_repo_path() -> str:
 
 
 @pytest.fixture(scope="session")
-def bm25_config(tmp_path_factory) -> Config:
-    """A BM25-only, no-cache, no-LLM config writing into a throwaway data dir."""
+def engine_config(tmp_path_factory) -> Config:
+    """A no-cache config writing into a throwaway data dir."""
     data_dir = tmp_path_factory.mktemp("legend_data")
-    return Config(embed_backend="bm25", data_dir=str(data_dir),
-                  use_cache=False, llm_model="", llm_provider="")
+    return Config(data_dir=str(data_dir), use_cache=False)
 
 
 @pytest.fixture(scope="session")
-def idx(sample_repo_path, bm25_config):
-    """A built RepoIndex over sample_repo (BM25 lexical only, dense=None)."""
-    return build_index(sample_repo_path, config=bm25_config, register=False)
+def idx(sample_repo_path, engine_config):
+    """A built RepoIndex over sample_repo."""
+    return build_index(sample_repo_path, config=engine_config, register=False)
 
 
 @pytest.fixture
 def build_repo(tmp_path_factory):
     """Factory: write a dict of {relpath: source} to a temp dir and build a
-    BM25-only RepoIndex over it. Useful for exercising features that sample_repo
+    RepoIndex over it. Useful for exercising features that sample_repo
     does not cover (HTTP routes, ORM models, import cycles, near-duplicates)."""
     def _make(files, name="synthetic"):
         d = tmp_path_factory.mktemp(name)
@@ -60,8 +57,7 @@ def build_repo(tmp_path_factory):
             p = d / rel
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(content, encoding="utf-8")
-        cfg = Config(embed_backend="bm25", data_dir=str(d / "_data"),
-                     use_cache=False, llm_model="")
+        cfg = Config(data_dir=str(d / "_data"), use_cache=False)
         return build_index(str(d), config=cfg, register=False)
     return _make
 

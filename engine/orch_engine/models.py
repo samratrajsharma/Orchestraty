@@ -37,20 +37,6 @@ class ParsedFile:
 
 
 @dataclass
-class Chunk:
-    id: str
-    file: str
-    kind: str               # "symbol" | "module" | "doc"
-    name: str
-    start_line: int
-    end_line: int
-    text: str
-    node_id: str            # graph node this chunk derives from (load-bearing provenance)
-    commit: str             # {graph node, commit} — enables Phase 4 deltas later
-    symbol_id: Optional[str] = None
-
-
-@dataclass
 class RepoMeta:
     name: str
     path: str
@@ -58,10 +44,3 @@ class RepoMeta:
     branch: str = ""
     is_git: bool = False
     n_commits: int = 0
-
-
-@dataclass
-class Retrieved:
-    chunk: Chunk
-    score: float
-    via: str                # "semantic" | "graph" | "both"

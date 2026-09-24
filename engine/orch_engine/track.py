@@ -188,19 +188,3 @@ def learning_delta(d, explored):
         "new_files": sorted(set(d["files_added"]) - explored),
         "removed_files": sorted(set(d["files_removed"]) & explored),
     }
-
-
-def narrate_llm(d, model, extra=None):
-    if not model:
-        return None
-    try:
-        from . import llm
-        prompt = ("Write a short, friendly changelog (5-8 bullets) describing how this "
-                  "codebase changed, grouping related edits and noting likely intent.\n\n"
-                  f"Structured diff:\n{json.dumps(d, indent=2)[:3500]}")
-        r = llm._complete(model, [
-            {"role": "system", "content": "You summarize code changes for engineers."},
-            {"role": "user", "content": prompt}], extra=extra, temperature=0.3, timeout=60)
-        return r["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        return f"[LLM unavailable: {type(e).__name__}: {e}]"

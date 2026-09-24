@@ -10,7 +10,7 @@ Design notes:
   this module imports (and is testable) even when the optional ``mcp`` package is absent.
   Only ``build_server()`` / ``run()`` import ``mcp`` and wire the functions as MCP tools.
 * All tools are READ-ONLY. Graph analysis needs only parse + graph (pure stdlib), so the
-  index is built with the BM25 backend and no LLM — the server needs no chromadb/litellm.
+  index is structural only (no embeddings, no model).
 * Never write to stdout: MCP stdio uses stdout for the JSON-RPC channel. Index-build
   progress is routed to stderr.
 """
@@ -39,13 +39,11 @@ def _log(msg: str) -> None:
 
 
 def _get_index():
-    """Build (or reuse) the index for the target repo. BM25 backend, no LLM."""
+    """Build (or reuse) the structural index for the target repo."""
     global _IDX, _IDX_REPO
     repo = _repo_path()
     if _IDX is None or _IDX_REPO != repo:
         cfg = Config(
-            embed_backend="bm25",           # graph tools need no embeddings
-            llm_provider="", llm_model="",   # ...and no model
             data_dir=os.environ.get("LEGEND_DATA_DIR") or str(Path.home() / ".legend" / "cache"),
         )
         _log(f"indexing {repo} …")

@@ -9,8 +9,7 @@ from orch_engine.config import Config
 
 
 def _cfg(tmp_path):
-    return Config(embed_backend="bm25", data_dir=str(tmp_path / "data"),
-                  use_cache=False, llm_model="")
+    return Config(data_dir=str(tmp_path / "data"), use_cache=False)
 
 
 def test_is_git(git_repo, tmp_path):
@@ -79,7 +78,3 @@ def test_learning_delta(git_repo, tmp_path):
     ld = track.learning_delta(d, explored=["a.py"])
     assert "a.py" in ld["re_learn"]            # studied & it changed
     assert "c.py" in ld["new_files"]
-
-
-def test_narrate_llm_without_model():
-    assert track.narrate_llm({"files_added": []}, model="") is None

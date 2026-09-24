@@ -1,7 +1,6 @@
-"""Legend — Phase 0: ingest → parse → code graph → retrieval → eval.
+"""The effect engine: ingest a repository, parse it, and build the code graph that the
+impact, tracking, tech-debt, context and check analyses read from.
 
-Dependency-light core (stdlib only). Optional accelerators activate when installed:
-  - chromadb  → semantic embeddings (else built-in BM25)
-  - litellm   → LLM answer synthesis (else returns retrieved context only)
+Pure standard library. tree-sitter adds parsing for more languages when installed.
 """
-__version__ = "0.0.1-phase0"
+__version__ = "0.1.0"

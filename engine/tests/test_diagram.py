@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from orch_engine.diagram import (architecture_dot, architecture_mermaid, callflow_dot,
-                            class_dot, explain_view_llm, focused_dot, knowledge_dot,
+                            class_dot, focused_dot, knowledge_dot,
                             mindmap_dot, mindmap_tree, neighborhood,
                             neighborhood_mermaid, node_roles, path_between,
                             pyvis_html)
@@ -116,8 +116,3 @@ def test_mindmap_dot(idx):
     out = mindmap_dot(idx, "__repo__", nodes, tree, roles, repo_name="sample_repo")
     assert out.startswith("digraph G {")
     assert "sample_repo  (repo)" in out
-
-
-def test_explain_view_llm_without_model(idx):
-    nodes, edges = neighborhood(idx, PREDICT, depth=1)
-    assert explain_view_llm(idx, nodes, edges, PREDICT, model="") is None

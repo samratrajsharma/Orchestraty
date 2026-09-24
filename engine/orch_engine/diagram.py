@@ -340,26 +340,6 @@ def path_between(idx, a, b, etypes=("calls", "imports")):
     return list(reversed(path))
 
 
-def explain_view_llm(idx, nodes, edges, focus, model, extra=None):
-    if not model:
-        return None
-    try:
-        from . import llm
-        g = idx.graph
-        nn = [g.get(n)["data"].get("qualname", n) for n in list(nodes)[:30]]
-        ee = [f"{g.get(s)['data'].get('qualname', s)} -{t}-> {g.get(d)['data'].get('qualname', d)}"
-              for s, d, t in edges[:40]]
-        prompt = ("Explain this part of a codebase to a new engineer in <120 words. "
-                  f"Focus: {g.get(focus)['data'].get('qualname', focus)}.\n"
-                  f"Components: {nn}\nRelationships: {ee}")
-        r = llm._complete(model, [
-            {"role": "system", "content": "You teach codebases clearly and concisely."},
-            {"role": "user", "content": prompt}], extra=extra, temperature=0.2, timeout=60)
-        return r["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        return f"[LLM unavailable: {type(e).__name__}: {e}]"
-
-
 # ============================ Mind map (compact branching tree) ============================
 _DEPTH_FILL = ["#1F3864", "#2E75B6", "#5B9BD5", "#9DC3E6", "#CFE0F1"]
 

@@ -8,11 +8,12 @@ import py_compile
 import pytest
 
 LEGEND_MODULES = [
-    "orch_engine", "orch_engine.config", "orch_engine.models", "orch_engine.providers",
-    "orch_engine.ingest", "orch_engine.parsing", "orch_engine.graph", "orch_engine.chunking",
-    "orch_engine.index", "orch_engine.retrieval", "orch_engine.llm", "orch_engine.insights",
-    "orch_engine.diagram", "orch_engine.teach", "orch_engine.track", "orch_engine.techdebt",
-    "orch_engine.engmemory", "orch_engine.media", "orch_engine.pipeline", "orch_engine.eval_harness",
+    "orch_engine", "orch_engine.config", "orch_engine.models", "orch_engine.ingest",
+    "orch_engine.parsing", "orch_engine.treesitter_parser", "orch_engine.graph",
+    "orch_engine.impact", "orch_engine.insights", "orch_engine.techdebt",
+    "orch_engine.coverage", "orch_engine.config_map", "orch_engine.diagram",
+    "orch_engine.track", "orch_engine.check", "orch_engine.context",
+    "orch_engine.mcp_server", "orch_engine.pipeline",
 ]
 
 
@@ -22,9 +23,7 @@ def test_module_imports(mod):
 
 
 @pytest.mark.parametrize("script", [
-    "app.py",
-    "scripts/run_eval.py",
-    "scripts/make_demo_history.py",
+    "scripts/verify_treesitter.py",
 ])
 def test_entrypoints_compile(project_root, script):
     path = project_root / script

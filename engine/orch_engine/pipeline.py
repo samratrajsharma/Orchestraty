@@ -10,26 +10,18 @@ from .config import CONFIG
 from .ingest import ingest
 from .parsing import parse_file
 from .graph import build_graph
-from .chunking import make_chunks
-from .index import BM25Retriever, ChromaRetriever
-from .retrieval import hybrid_search, assemble_context
-from .llm import synthesize, synthesize_stream
 
 
 class RepoIndex:
-    def __init__(self, meta, parsed_files, graph, chunks, lexical, dense, config):
+    """Everything the engine knows about one repository at one commit: the parsed files
+    and the code graph built from them."""
+
+    def __init__(self, meta, parsed_files, graph, config):
         self.meta = meta
         self.parsed_files = parsed_files
         self.graph = graph
-        self.chunks = chunks
-        self.lexical = lexical
-        self.dense = dense
         self.config = config
         self.memo = {}          # per-index cache for pure analyses (insights, overview, ...)
-        self.chunks_by_id = {c.id: c for c in chunks}
-        self.chunks_by_node = defaultdict(list)
-        for c in chunks:
-            self.chunks_by_node[c.node_id].append(c)
 
     def stats(self):
         s = self.graph.stats()
@@ -39,37 +31,10 @@ class RepoIndex:
             "python_files": sum(1 for p in self.parsed_files
                                 if p.language in ("python", "javascript", "typescript")),
             "parse_errors": sum(1 for p in self.parsed_files if p.error),
-            "symbols": s["node_types"].get("symbol", 0), "chunks": len(self.chunks),
+            "symbols": s["node_types"].get("symbol", 0),
             "graph_nodes": s["nodes"], "graph_edges": s["edges"],
             "edge_types": s["edge_types"],
-            "retriever": "bm25 + chroma (hybrid RRF)" if self.dense is not None else "bm25",
         }
-
-    def search(self, query):
-        return hybrid_search(query, self.lexical, self.dense, self.graph,
-                             self.chunks_by_node, k=self.config.top_k,
-                             expand=self.config.graph_expand)
-
-    def ask(self, query, model=None, llm_kwargs=None):
-        # model/llm_kwargs are per-request overrides passed by value - NOT written back to
-        # self.config, so concurrent asks with different models can't cross-contaminate (#49).
-        m = model or self.config.llm_model
-        kw = llm_kwargs if llm_kwargs is not None else self.config.llm_kwargs
-        retrieved = self.search(query)
-        context = assemble_context(retrieved, model=m)
-        answer, used = synthesize(query, context, m, kw)
-        return {"question": query, "answer": answer, "used_llm": used,
-                "retrieved": retrieved, "context": context}
-
-    def ask_stream(self, query, model=None, llm_kwargs=None):
-        """Streaming variant of ask(): returns (retrieved, context, token_generator)."""
-        m = model or self.config.llm_model
-        kw = llm_kwargs if llm_kwargs is not None else self.config.llm_kwargs
-        retrieved = self.search(query)
-        context = assemble_context(retrieved, model=m)
-        tokens = synthesize_stream(query, context, m, kw)
-        return retrieved, context, tokens
-
 
 # ---------------- cache + multi-repo registry ----------------
 def _signature(meta, files):
@@ -150,21 +115,6 @@ def _cache_dump(path, obj, secret):
         fh.write(sig + blob)
 
 
-def _build_retrievers(chunks, backend, data_dir, sig, namespace="default"):
-    lexical = BM25Retriever()
-    lexical.index(chunks)
-    dense = None
-    if backend in ("auto", "hybrid", "chroma"):
-        try:
-            dense = ChromaRetriever(data_dir, sig, namespace)
-            dense.index(chunks)
-        except Exception:
-            if backend == "chroma":
-                raise
-            dense = None
-    return lexical, dense
-
-
 def record_repo(data_dir, source, meta):
     try:
         os.makedirs(data_dir, exist_ok=True)
@@ -199,30 +149,25 @@ def build_index(source, config=CONFIG, progress=None, use_cache=None, register=T
     cache = _cache_file(config.data_dir, meta, sig)
 
     secret = _cache_secret(config.data_dir)
-    parsed = graph = chunks = None
+    parsed = graph = None
     if use_cache and os.path.exists(cache):
-        log("Loading cached parse/graph/chunks ...")
+        log("Loading cached parse/graph ...")
         loaded = _cache_load(cache, secret)       # HMAC-verified; None on miss/tamper
-        if loaded is not None:
-            parsed, graph, chunks = loaded
+        if loaded is not None and len(loaded) >= 2:   # older caches also hold chunks: ignored
+            parsed, graph = loaded[0], loaded[1]
 
     if parsed is None:
         log(f"Parsing {len(code_files)} code + {len(doc_files)} doc files ...")
         parsed = [parse_file(rel, ab) for rel, ab in files]
         log("Building code graph ...")
         graph = build_graph(parsed)
-        log("Chunking ...")
-        chunks = make_chunks(parsed, meta.commit, config.chunk_max_lines)
         if use_cache:
             try:
-                _cache_dump(cache, (parsed, graph, chunks), secret)
+                _cache_dump(cache, (parsed, graph), secret)
             except Exception:
                 pass
 
-    log("Building retrievers ...")
-    lexical, dense = _build_retrievers(chunks, config.embed_backend, config.data_dir, sig,
-                                       namespace=meta.name or "repo")
     if register:
         record_repo(config.data_dir, source, meta)
     log("Done.")
-    return RepoIndex(meta, parsed, graph, chunks, lexical, dense, config)
+    return RepoIndex(meta, parsed, graph, config)

@@ -108,7 +108,6 @@ def main(argv=None) -> int:
     if repo != "." and "://" not in repo:
         repo = str(Path(repo).resolve())
     cfg = Config(
-        embed_backend="bm25", llm_provider="", llm_model="",
         data_dir=args.data_dir or os.environ.get("LEGEND_DATA_DIR") or str(Path.home() / ".legend" / "cache"),
     )
     idx = build_index(repo, cfg, progress=lambda m: print(m, file=sys.stderr, flush=True), register=False)
