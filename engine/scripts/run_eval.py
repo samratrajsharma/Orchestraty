@@ -10,9 +10,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from legend.pipeline import build_index          # noqa: E402
-from legend.config import CONFIG                  # noqa: E402
-from legend.eval_harness import load_questions, run_eval   # noqa: E402
+from orch_engine.pipeline import build_index          # noqa: E402
+from orch_engine.config import CONFIG                  # noqa: E402
+from orch_engine.eval_harness import load_questions, run_eval   # noqa: E402
 
 
 def main():

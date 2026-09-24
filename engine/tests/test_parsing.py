@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 
-from legend.parsing import parse_file, parse_js, parse_python
+from orch_engine.parsing import parse_file, parse_js, parse_python
 
 
 def _sym(pf, qualname):

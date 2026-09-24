@@ -19,12 +19,12 @@ except Exception:
     pd = None
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from legend.config import Config                          # noqa: E402
-from legend.pipeline import build_index, recent_repos     # noqa: E402
-from legend.eval_harness import load_questions, run_eval  # noqa: E402
-from legend.retrieval import assemble_context             # noqa: E402
-from legend import insights, diagram, llm, providers, teach, track, techdebt, engmemory, media, research, portfolio  # noqa: E402
-from legend import progress, coverage, impact, config_map, export_site  # noqa: E402
+from orch_engine.config import Config                          # noqa: E402
+from orch_engine.pipeline import build_index, recent_repos     # noqa: E402
+from orch_engine.eval_harness import load_questions, run_eval  # noqa: E402
+from orch_engine.retrieval import assemble_context             # noqa: E402
+from orch_engine import insights, diagram, llm, providers, teach, track, techdebt, engmemory, media, research, portfolio  # noqa: E402
+from orch_engine import progress, coverage, impact, config_map, export_site  # noqa: E402
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_REPO = os.environ.get("LEGEND_REPO") or os.path.join(APP_DIR, "sample_repo")

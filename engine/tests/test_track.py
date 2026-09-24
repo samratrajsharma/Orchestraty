@@ -4,8 +4,8 @@ Uses the synthetic two-commit ``git_repo`` fixture; skips if git is unavailable.
 """
 from __future__ import annotations
 
-from legend import track
-from legend.config import Config
+from orch_engine import track
+from orch_engine.config import Config
 
 
 def _cfg(tmp_path):

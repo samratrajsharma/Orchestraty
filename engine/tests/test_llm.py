@@ -5,7 +5,7 @@ short-circuit path so the suite stays offline and deterministic.
 """
 from __future__ import annotations
 
-from legend.llm import explain_file, judge, synthesize
+from orch_engine.llm import explain_file, judge, synthesize
 
 
 def test_synthesize_without_model():

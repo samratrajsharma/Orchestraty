@@ -22,7 +22,7 @@ def test_app_renders_every_tab_without_error(project_root, monkeypatch):
         pytest.skip("streamlit AppTest API not available")
 
     # Force BM25-only: build_index('auto') swallows the Chroma failure.
-    import legend.pipeline as pipeline
+    import orch_engine.pipeline as pipeline
     monkeypatch.setattr(pipeline, "ChromaRetriever", _no_chroma)
 
     at = AppTest.from_file(str(project_root / "app.py"), default_timeout=120)

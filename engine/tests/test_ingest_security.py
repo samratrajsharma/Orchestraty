@@ -11,7 +11,7 @@ import tempfile
 
 import pytest
 
-from legend import ingest
+from orch_engine import ingest
 
 
 # ── transport allowlist (blocks ext:: RCE, file:// SSRF, arg injection) ──────────

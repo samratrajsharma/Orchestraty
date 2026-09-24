@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 
-from legend.eval_harness import _kw_coverage, load_questions, run_eval
-from legend.models import Chunk, Retrieved
+from orch_engine.eval_harness import _kw_coverage, load_questions, run_eval
+from orch_engine.models import Chunk, Retrieved
 
 
 # --------------------------------------------------------------------------- #

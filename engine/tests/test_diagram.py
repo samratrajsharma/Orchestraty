@@ -1,7 +1,7 @@
 """Tests for legend.diagram — Mermaid/Graphviz generators and graph views."""
 from __future__ import annotations
 
-from legend.diagram import (architecture_dot, architecture_mermaid, callflow_dot,
+from orch_engine.diagram import (architecture_dot, architecture_mermaid, callflow_dot,
                             class_dot, explain_view_llm, focused_dot, knowledge_dot,
                             mindmap_dot, mindmap_tree, neighborhood,
                             neighborhood_mermaid, node_roles, path_between,

@@ -26,13 +26,13 @@ from __future__ import annotations
 import os
 import sys
 
-# make `import legend...` work whether run from repo root or from engine/
+# make `import orch_engine...` work whether run from repo root or from engine/
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ENGINE = os.path.dirname(_HERE)
 if _ENGINE not in sys.path:
     sys.path.insert(0, _ENGINE)
 
-from legend import treesitter_parser as ts  # noqa: E402
+from orch_engine import treesitter_parser as ts  # noqa: E402
 
 # Each fixture: a class/struct holding two functions where one calls the other, plus
 # (some languages) a free function. We assert the function names come through, and -

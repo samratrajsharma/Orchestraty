@@ -1,8 +1,8 @@
 """Tests for legend.retrieval — RRF fusion, hybrid search, context assembly."""
 from __future__ import annotations
 
-from legend.models import Retrieved
-from legend.retrieval import _rrf, assemble_context, hybrid_search
+from orch_engine.models import Retrieved
+from orch_engine.retrieval import _rrf, assemble_context, hybrid_search
 
 
 class _Chunk:

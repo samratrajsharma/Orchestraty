@@ -4,8 +4,8 @@ from __future__ import annotations
 import glob
 import os
 
-from legend import engmemory
-from legend.config import Config
+from orch_engine import engmemory
+from orch_engine.config import Config
 
 
 def _cfg(tmp_path):

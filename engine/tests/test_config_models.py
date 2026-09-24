@@ -1,8 +1,8 @@
 """Tests for legend.config.Config and legend.models dataclasses."""
 from __future__ import annotations
 
-from legend.config import Config
-from legend.models import Chunk, ParsedFile, RepoMeta, Retrieved, Symbol
+from orch_engine.config import Config
+from orch_engine.models import Chunk, ParsedFile, RepoMeta, Retrieved, Symbol
 
 
 def test_config_overrides_apply():

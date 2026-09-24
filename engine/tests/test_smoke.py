@@ -8,11 +8,11 @@ import py_compile
 import pytest
 
 LEGEND_MODULES = [
-    "legend", "legend.config", "legend.models", "legend.providers",
-    "legend.ingest", "legend.parsing", "legend.graph", "legend.chunking",
-    "legend.index", "legend.retrieval", "legend.llm", "legend.insights",
-    "legend.diagram", "legend.teach", "legend.track", "legend.techdebt",
-    "legend.engmemory", "legend.media", "legend.pipeline", "legend.eval_harness",
+    "orch_engine", "orch_engine.config", "orch_engine.models", "orch_engine.providers",
+    "orch_engine.ingest", "orch_engine.parsing", "orch_engine.graph", "orch_engine.chunking",
+    "orch_engine.index", "orch_engine.retrieval", "orch_engine.llm", "orch_engine.insights",
+    "orch_engine.diagram", "orch_engine.teach", "orch_engine.track", "orch_engine.techdebt",
+    "orch_engine.engmemory", "orch_engine.media", "orch_engine.pipeline", "orch_engine.eval_harness",
 ]
 
 

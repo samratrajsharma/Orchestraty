@@ -1,7 +1,7 @@
 """Tests for legend.teach — learning path, flashcards, quizzes, interview, gaps."""
 from __future__ import annotations
 
-from legend.teach import (flashcards, interview, learning_gaps, learning_path,
+from orch_engine.teach import (flashcards, interview, learning_gaps, learning_path,
                           quiz)
 
 

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import os
 
-from legend.config import Config
-from legend.pipeline import (RepoIndex, _signature, build_index, recent_repos,
+from orch_engine.config import Config
+from orch_engine.pipeline import (RepoIndex, _signature, build_index, recent_repos,
                              record_repo)
 
 

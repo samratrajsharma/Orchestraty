@@ -1,8 +1,8 @@
 """Tests for legend.chunking — provenance chunks for code / module / doc."""
 from __future__ import annotations
 
-from legend.chunking import _truncate, make_chunks
-from legend.parsing import parse_file, parse_js
+from orch_engine.chunking import _truncate, make_chunks
+from orch_engine.parsing import parse_file, parse_js
 
 
 def test_chunk_kinds_and_counts(idx):

@@ -11,12 +11,12 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from legend.config import Config
-from legend.pipeline import build_index
-from legend import (insights, diagram, teach, techdebt, engmemory, research,
+from orch_engine.config import Config
+from orch_engine.pipeline import build_index
+from orch_engine import (insights, diagram, teach, techdebt, engmemory, research,
                     portfolio, progress, coverage, impact, config_map, media,
                     export_site, providers)
-from legend.eval_harness import load_questions, run_eval
+from orch_engine.eval_harness import load_questions, run_eval
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAMPLE = os.path.join(ROOT, "sample_repo")
@@ -175,7 +175,7 @@ class FixtureTests(unittest.TestCase):
     def test_track_git(self):
         if not shutil.which("git"):
             self.skipTest("git not available")
-        from legend import track
+        from orch_engine import track
         d = os.path.join(self.tmp, "g")
         os.makedirs(d)
         run = lambda *a: subprocess.run(["git", *a], cwd=d, capture_output=True)

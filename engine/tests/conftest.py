@@ -20,8 +20,8 @@ SAMPLE = ROOT / "sample_repo"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from legend.config import Config          # noqa: E402
-from legend.pipeline import build_index   # noqa: E402
+from orch_engine.config import Config          # noqa: E402
+from orch_engine.pipeline import build_index   # noqa: E402
 
 
 @pytest.fixture(scope="session")

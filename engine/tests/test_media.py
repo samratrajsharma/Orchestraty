@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 
-from legend.media import (audio_script, build_pptx, mindmap_markdown,
+from orch_engine.media import (audio_script, build_pptx, mindmap_markdown,
                           script_to_text, slide_outline, synthesize_audio)
 
 

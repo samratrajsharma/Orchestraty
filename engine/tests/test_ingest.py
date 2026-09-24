@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from legend.ingest import clone_or_local, ingest, list_files, repo_meta
+from orch_engine.ingest import clone_or_local, ingest, list_files, repo_meta
 
 
 def test_repo_meta_local_non_git(sample_repo_path):

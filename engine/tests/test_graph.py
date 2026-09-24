@@ -1,8 +1,8 @@
 """Tests for legend.graph — CodeGraph structure and build_graph relationships."""
 from __future__ import annotations
 
-from legend.graph import CodeGraph, build_graph
-from legend.parsing import parse_python
+from orch_engine.graph import CodeGraph, build_graph
+from orch_engine.parsing import parse_python
 
 
 def test_stats_match_sample_repo(idx):
