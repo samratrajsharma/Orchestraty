@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify the optional tree-sitter backend after installing it.
 
-The tree-sitter backend (engine/legend/treesitter_parser.py) adds symbol + call
+The tree-sitter backend (engine/orch_engine/treesitter_parser.py) adds symbol + call
 extraction for Go, Java, Rust, C#, Ruby, PHP, C and C++. It is OFF until you install
 the grammars, and it's written to degrade to `None` (caller falls back to plain-text
 indexing) on any grammar quirk rather than crash. This script proves it actually works

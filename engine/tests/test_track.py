@@ -1,4 +1,4 @@
-"""Tests for legend.track — git log, structural snapshots, and diffs over commits.
+"""Tests for orch_engine.track — git log, structural snapshots, and diffs over commits.
 
 Uses the synthetic two-commit ``git_repo`` fixture; skips if git is unavailable.
 """

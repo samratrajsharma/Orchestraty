@@ -1,4 +1,4 @@
-"""Tests for legend.techdebt — dead code, duplicates, cycles, hotspots, god files."""
+"""Tests for orch_engine.techdebt — dead code, duplicates, cycles, hotspots, god files."""
 from __future__ import annotations
 
 from orch_engine.techdebt import (_normalize_py, complexity_hotspots, dead_code,

@@ -88,7 +88,7 @@ _CODE_LANGS = ("python", "javascript", "typescript")
 
 
 def architecture_dot(idx, max_nodes=80):
-    """File dependency graph as Graphviz DOT (rendered natively by Streamlit)."""
+    """File dependency graph as Graphviz DOT."""
     g = idx.graph
     files = [nid for nid, n in g.nodes.items()
              if n["type"] == "file" and n["data"].get("language") in _CODE_LANGS]

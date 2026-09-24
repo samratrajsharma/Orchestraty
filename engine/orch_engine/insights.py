@@ -134,7 +134,7 @@ def file_summary(idx, file_rel):
     }
 
 
-# ---------------- Phase 3: language breakdown, API & DB maps ----------------
+# ---------------- language breakdown, API & DB maps ----------------
 import re as _re
 from collections import defaultdict as _dd
 

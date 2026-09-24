@@ -1,6 +1,6 @@
 # Sample Detector Service
 
-A tiny DETR-style object detection service used to demo Legend Phase 0.
+A tiny DETR-style object detection service used as the engine's test fixture.
 
 - `model.py` — the `Detector` model (initialized in `Detector.__init__`)
 - `data.py` — image loading and preprocessing

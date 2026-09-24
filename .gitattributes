@@ -1,6 +1,6 @@
 # The repo is always LF. The working tree may be CRLF (Windows/editors/sync clients).
 # Without this, a line-ending flip shows up as a whole-file diff and can be committed
-# as one — which is how app.py picked up a 2891-line phantom diff.
+# as one.
 * text=auto eol=lf
 
 # Windows-only scripts stay CRLF on checkout

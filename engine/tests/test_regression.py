@@ -1,4 +1,4 @@
-"""Legend regression suite — stdlib unittest only (no pytest, no network, no secrets).
+"""Regression suite — stdlib unittest only (no pytest, no network, no secrets).
 Run from the repo root:  python -m unittest discover -s tests -v
 """
 import io

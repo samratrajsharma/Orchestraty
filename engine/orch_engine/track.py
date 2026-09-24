@@ -1,4 +1,4 @@
-"""Phase 4 — Track. Snapshot a repo at commits and diff the structure over time:
+"""Track. Snapshot a repo at commits and diff the structure over time:
 changelog, architecture delta, and learning delta. Uses git (worktrees) — works on any
 git repo; structural by default, with optional LLM narration."""
 from __future__ import annotations

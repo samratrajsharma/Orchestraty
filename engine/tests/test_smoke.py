@@ -1,5 +1,5 @@
 """Smoke tests: every module imports, and the non-importable entry points
-(the Streamlit app, helper scripts) at least compile cleanly."""
+(helper scripts) at least compile cleanly."""
 from __future__ import annotations
 
 import importlib
@@ -7,7 +7,7 @@ import py_compile
 
 import pytest
 
-LEGEND_MODULES = [
+ENGINE_MODULES = [
     "orch_engine", "orch_engine.config", "orch_engine.models", "orch_engine.ingest",
     "orch_engine.parsing", "orch_engine.treesitter_parser", "orch_engine.graph",
     "orch_engine.impact", "orch_engine.insights", "orch_engine.techdebt",
@@ -17,7 +17,7 @@ LEGEND_MODULES = [
 ]
 
 
-@pytest.mark.parametrize("mod", LEGEND_MODULES)
+@pytest.mark.parametrize("mod", ENGINE_MODULES)
 def test_module_imports(mod):
     assert importlib.import_module(mod) is not None
 

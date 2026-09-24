@@ -1,4 +1,4 @@
-"""Tests for legend.diagram — Mermaid/Graphviz generators and graph views."""
+"""Tests for orch_engine.diagram — Mermaid/Graphviz generators and graph views."""
 from __future__ import annotations
 
 from orch_engine.diagram import (architecture_dot, architecture_mermaid, callflow_dot,

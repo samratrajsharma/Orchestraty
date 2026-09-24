@@ -1,4 +1,4 @@
-"""Tests for legend.parsing — Python (ast) and JS/TS (regex) extraction."""
+"""Tests for orch_engine.parsing — Python (ast) and JS/TS (regex) extraction."""
 from __future__ import annotations
 
 import os

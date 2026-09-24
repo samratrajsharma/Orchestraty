@@ -1,4 +1,4 @@
-"""Legend MCP server — deterministic code-graph intelligence for coding agents.
+"""Orchestraty MCP server — deterministic code-graph intelligence for coding agents.
 
 Exposes the graph operations an agent *cannot* cheaply derive by grepping: reachability
 (blast radius), resolved callers/callees, change impact, structural diffs between refs,
@@ -31,11 +31,11 @@ _IDX_REPO = None
 
 
 def _repo_path() -> str:
-    return os.environ.get("LEGEND_MCP_REPO") or os.getcwd()
+    return os.environ.get("ORCH_MCP_REPO") or os.getcwd()
 
 
 def _log(msg: str) -> None:
-    print(f"[legend-mcp] {msg}", file=sys.stderr, flush=True)
+    print(f"[orch-mcp] {msg}", file=sys.stderr, flush=True)
 
 
 def _get_index():
@@ -44,7 +44,7 @@ def _get_index():
     repo = _repo_path()
     if _IDX is None or _IDX_REPO != repo:
         cfg = Config(
-            data_dir=os.environ.get("LEGEND_DATA_DIR") or str(Path.home() / ".legend" / "cache"),
+            data_dir=os.environ.get("ORCH_DATA_DIR") or str(Path.home() / ".orchestraty" / "cache"),
         )
         _log(f"indexing {repo} …")
         _IDX = build_index(repo, cfg, progress=_log, register=False)
@@ -255,7 +255,7 @@ def impact_of_change(file: str) -> dict:
 def structural_diff(base: str, head: str = "HEAD") -> dict:
     """What changed STRUCTURALLY between two git refs — symbols/imports added, removed, or
     modified, plus complexity deltas — not a line diff. Refs are anything git accepts
-    (SHA, branch, tag, HEAD~5). Legend indexes history; most tools only see HEAD."""
+    (SHA, branch, tag, HEAD~5). The engine indexes history; most tools only see HEAD."""
     idx = _get_index()
     try:
         b = track.snapshot(idx.meta.path, base, idx.config)
@@ -383,12 +383,11 @@ def build_server():
         from mcp.server.fastmcp import FastMCP
     except ImportError as e:
         raise SystemExit(
-            "Legend's MCP server needs the 'mcp' package, which isn't installed.\n"
-            "Install it with:  pip install \"legend-lens[mcp]\"\n"
-            "or run directly:  uvx --from \"legend-lens[mcp]\" legend mcp"
+            "The MCP server needs the 'mcp' package, which isn't installed.\n"
+            "Install it with:  pip install \"mcp>=1.2,<2\""
         ) from e
 
-    server = FastMCP("legend")
+    server = FastMCP("orchestraty")
     for fn in TOOLS:
         server.tool()(fn)
     return server
@@ -397,24 +396,24 @@ def build_server():
 def run() -> None:
     """Serve MCP over stdio. The index builds lazily on the first tool call — tool listing
     needs no index — so the client connects instantly even on a large repo."""
-    _log(f"legend MCP server ready; will index {_repo_path()} on first tool call")
+    _log(f"MCP server ready; will index {_repo_path()} on first tool call")
     build_server().run()
 
 
 def main(argv=None) -> int:
     import argparse
     p = argparse.ArgumentParser(
-        prog="legend mcp",
-        description="Legend MCP server — deterministic code-graph tools for agents, over stdio.",
+        prog="python -m orch_engine.mcp_server",
+        description="Orchestraty MCP server — deterministic code-graph tools for agents, over stdio.",
     )
     p.add_argument("--repo", default=None, help="repo (or git URL) to index (default: current folder)")
-    p.add_argument("--data-dir", default=None, help="index cache dir (default: ~/.legend/cache)")
+    p.add_argument("--data-dir", default=None, help="index cache dir (default: ~/.orchestraty/cache)")
     args = p.parse_args(argv)
     if args.repo:
         src = args.repo
-        os.environ["LEGEND_MCP_REPO"] = src if "://" in src else str(Path(src).resolve())
+        os.environ["ORCH_MCP_REPO"] = src if "://" in src else str(Path(src).resolve())
     if args.data_dir:
-        os.environ["LEGEND_DATA_DIR"] = args.data_dir
+        os.environ["ORCH_DATA_DIR"] = args.data_dir
     run()
     return 0
 

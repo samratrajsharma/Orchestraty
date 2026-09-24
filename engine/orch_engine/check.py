@@ -1,4 +1,4 @@
-"""`legend check` — fail CI when a change introduces a structural regression.
+"""Structural check — fail CI when a change introduces a structural regression.
 
 Compares the working tree against a base ref (default `main`) over the code graph and exits
 non-zero if the change:
@@ -6,8 +6,8 @@ non-zero if the change:
   * removes a public symbol (breaking the API surface), (blocking)
   * spikes a symbol's complexity past a threshold.      (warning; blocking with --strict)
 
-    legend check --base main
-    legend check --base origin/main --strict
+    python -m orch_engine.check --base main
+    python -m orch_engine.check --base origin/main --strict
 
 Exit codes: 0 = clean, 1 = regression, 2 = error (e.g. base ref not found).
 """
@@ -69,7 +69,7 @@ def run_checks(idx, base: str, strict: bool = False, complexity_threshold: int =
 
 
 def _report(idx, res: dict) -> str:
-    L = [f"legend check: {idx.meta.name}  base={res['base']}  head={res['head']}", ""]
+    L = [f"check: {idx.meta.name}  base={res['base']}  head={res['head']}", ""]
     if res["cycles_introduced"]:
         L.append(f"FAIL  Import cycles introduced ({len(res['cycles_introduced'])}):")
         for c in res["cycles_introduced"]:
@@ -93,7 +93,7 @@ def _report(idx, res: dict) -> str:
 def main(argv=None) -> int:
     import argparse
     p = argparse.ArgumentParser(
-        prog="legend check",
+        prog="python -m orch_engine.check",
         description="Fail (exit non-zero) when a change introduces a structural regression vs a base ref.",
     )
     p.add_argument("--base", default="main", help="git ref to compare against (default: main)")
@@ -101,21 +101,21 @@ def main(argv=None) -> int:
     p.add_argument("--strict", action="store_true", help="also fail on complexity regressions")
     p.add_argument("--complexity-threshold", type=int, default=5,
                    help="min complexity increase to flag (default: 5)")
-    p.add_argument("--data-dir", default=None, help="index cache dir (default: ~/.legend/cache)")
+    p.add_argument("--data-dir", default=None, help="index cache dir (default: ~/.orchestraty/cache)")
     args = p.parse_args(argv)
 
     repo = args.repo
     if repo != "." and "://" not in repo:
         repo = str(Path(repo).resolve())
     cfg = Config(
-        data_dir=args.data_dir or os.environ.get("LEGEND_DATA_DIR") or str(Path.home() / ".legend" / "cache"),
+        data_dir=args.data_dir or os.environ.get("ORCH_DATA_DIR") or str(Path.home() / ".orchestraty" / "cache"),
     )
     idx = build_index(repo, cfg, progress=lambda m: print(m, file=sys.stderr, flush=True), register=False)
 
     try:
         res = run_checks(idx, args.base, strict=args.strict, complexity_threshold=args.complexity_threshold)
     except Exception as e:  # noqa: BLE001 — base ref missing, not a git repo, etc.
-        print(f"legend check: error — could not compare against {args.base!r}: {e}", file=sys.stderr)
+        print(f"check: error — could not compare against {args.base!r}: {e}", file=sys.stderr)
         return 2
 
     print(_report(idx, res))

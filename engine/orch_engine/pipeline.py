@@ -4,7 +4,6 @@ import hmac
 import json
 import os
 import pickle
-from collections import defaultdict
 
 from .config import CONFIG
 from .ingest import ingest

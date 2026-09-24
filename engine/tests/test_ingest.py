@@ -1,4 +1,4 @@
-"""Tests for legend.ingest — repo metadata, file walking, and source resolution."""
+"""Tests for orch_engine.ingest — repo metadata, file walking, and source resolution."""
 from __future__ import annotations
 
 import os

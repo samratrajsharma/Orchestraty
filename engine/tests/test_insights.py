@@ -1,4 +1,4 @@
-"""Tests for legend.insights — repo insights, file summaries, language/API/DB maps."""
+"""Tests for orch_engine.insights — repo insights, file summaries, language/API/DB maps."""
 from __future__ import annotations
 
 from orch_engine.insights import (api_map, db_map, file_summary, language_breakdown,

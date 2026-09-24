@@ -24,7 +24,7 @@ build/
 
 # ───────────── App runtime state & caches ─────────────
 .cache/
-.knowit_cache/
+.orch_cache/
 *.log
 
 # ───────────── Secrets & local env ─────────────
@@ -48,7 +48,7 @@ Thumbs.db
 *.swp
 
 # ───────────── This workspace only (never pushed) ─────────────
-# Old local git folders set aside when Legend was merged in (2026-09)
+# Old local git folders set aside (2026-09)
 /.git-*/
 # Local working folders
 /planning-research/

@@ -1,4 +1,4 @@
-"""Tests for legend.pipeline — build_index, RepoIndex, cache, and registry."""
+"""Tests for orch_engine.pipeline — build_index, RepoIndex, cache, and registry."""
 from __future__ import annotations
 
 import os

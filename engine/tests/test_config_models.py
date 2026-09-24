@@ -1,4 +1,4 @@
-"""Tests for legend.config.Config and legend.models dataclasses."""
+"""Tests for orch_engine.config.Config and orch_engine.models dataclasses."""
 from __future__ import annotations
 
 from orch_engine.config import Config

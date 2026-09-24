@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the Legend test suite.
+"""Shared pytest fixtures for the engine test suite.
 
 The fixtures build a real RepoIndex over the bundled ``sample_repo`` with caching off,
 so the suite is fast, fully offline and deterministic (no network, no model).
@@ -36,7 +36,7 @@ def sample_repo_path() -> str:
 @pytest.fixture(scope="session")
 def engine_config(tmp_path_factory) -> Config:
     """A no-cache config writing into a throwaway data dir."""
-    data_dir = tmp_path_factory.mktemp("legend_data")
+    data_dir = tmp_path_factory.mktemp("engine_data")
     return Config(data_dir=str(data_dir), use_cache=False)
 
 
@@ -82,7 +82,7 @@ def git_repo(tmp_path_factory):
     _git(["init", "-q"], repo)
     # Local identity so commits succeed in CI / clean environments.
     _git(["config", "user.email", "test@example.com"], repo)
-    _git(["config", "user.name", "Legend Test"], repo)
+    _git(["config", "user.name", "Engine Test"], repo)
     _git(["config", "commit.gpgsign", "false"], repo)
 
     # --- base commit ---

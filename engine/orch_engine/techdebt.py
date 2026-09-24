@@ -1,4 +1,4 @@
-"""Phase 5 — technical-debt analysis. Pure structural functions over a RepoIndex:
+"""Technical-debt analysis. Pure structural functions over a RepoIndex:
 dead code, near-duplicates (normalized structural shingles), import cycles, complexity
 hotspots, god-files, and undocumented symbols. No external dependencies; fully offline."""
 from __future__ import annotations

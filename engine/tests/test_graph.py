@@ -1,4 +1,4 @@
-"""Tests for legend.graph — CodeGraph structure and build_graph relationships."""
+"""Tests for orch_engine.graph — CodeGraph structure and build_graph relationships."""
 from __future__ import annotations
 
 from orch_engine.graph import CodeGraph, build_graph

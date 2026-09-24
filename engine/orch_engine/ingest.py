@@ -10,7 +10,7 @@ import time
 import urllib.parse
 from .models import RepoMeta
 
-SKIP_DIRS = {".git", ".cache", ".legend_cache", "__pycache__", "node_modules", ".venv",
+SKIP_DIRS = {".git", ".cache", ".orch_cache", "__pycache__", "node_modules", ".venv",
              "venv", "env", "ENV", "build", "dist", ".mypy_cache", ".pytest_cache",
              ".ruff_cache", "site-packages", ".ipynb_checkpoints", ".idea", ".vscode"}
 CODE_EXTS = {".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
@@ -283,7 +283,7 @@ def clone_or_local(source, data_dir):
                 # A real clone is sitting here and git is complaining about it. Use it.
                 # Re-cloning would delete working code to chase an error that would
                 # simply reappear on the new copy.
-                sys.stderr.write("[legend] reusing %s despite a git error: %s\n" % (dest, detail))
+                sys.stderr.write("[orch] reusing %s despite a git error: %s\n" % (dest, detail))
                 return os.path.abspath(dest)
             _rm(dest)                            # 'broken' / 'mismatch': safe to clear
 
@@ -368,7 +368,7 @@ def list_files(path, max_files=20000):
                 docs.append((rel, abs_p))
         if len(code) + len(docs) > max_files:
             import sys as _sys
-            _sys.stderr.write("[legend] file cap (%d) hit in %s - indexing a partial repo; "
+            _sys.stderr.write("[orch] file cap (%d) hit in %s - indexing a partial repo; "
                               "raise list_files(max_files=) for very large repos\n"
                               % (max_files, path))
             break

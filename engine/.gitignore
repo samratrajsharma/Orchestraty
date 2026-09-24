@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────
-# Legend — .gitignore
+# Engine — .gitignore
 # NOTE: git has no inline comments. Every comment must be on its own line;
 # "pattern   # comment" would be treated as a literal pattern.
 # ─────────────────────────────────────────────────────────────
@@ -29,10 +29,9 @@ dist/
 .env.*
 !.env.example
 *.key
-.streamlit/secrets.toml
 
-# Legend runtime data (regenerable — keep out of git)
-.legend_cache/
+# Engine runtime data (regenerable — keep out of git)
+.orch_cache/
 data/
 .cache/
 
