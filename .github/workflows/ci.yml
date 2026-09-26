@@ -1,5 +1,5 @@
-# Runs the engine test suite on every push and pull request.
-# The engine's core is standard library only, so pytest is the one dependency.
+# Runs the engine and spike test suites on every push and pull request.
+# Both are standard library only, so pytest is the one dependency.
 name: CI
 
 on:
@@ -47,4 +47,46 @@ jobs:
 
       # No -q here: engine/pytest.ini already adds -q, and a second -q hides the "N passed" line.
       - name: Run the engine tests
+        run: python -m pytest
+
+  spike-tests:
+    name: spike tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 3.9 is here because the scanner must run on older Pythons (macOS ships 3.9).
+          # Pinned to ubuntu-24.04: ubuntu-latest moves to 26.04 from 2026-10-19, and no
+          # 3.9 build exists for 26.04. ubuntu-22.04 is deprecated, so it is not used.
+          - os: ubuntu-24.04
+            python-version: "3.9"
+          - os: ubuntu-latest
+            python-version: "3.10"
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
+    defaults:
+      run:
+        working-directory: spikes
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # On 3.9 this range resolves to pytest 8.x; pytest 9 needs 3.10 or later.
+      - name: Install pytest
+        run: python -m pip install "pytest>=8,<10"
+
+      - name: Run the spike tests
         run: python -m pytest

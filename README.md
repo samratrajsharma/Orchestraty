@@ -7,8 +7,9 @@ This repository holds Orchestraty's effect engine.
 | Path | What it is |
 | --- | --- |
 | `engine/` | The effect engine, Python package `orch_engine`. It ingests a repository, parses it and builds the code graph that the impact, tracking and check analyses read from. [`engine/README.md`](engine/README.md) describes each module. |
+| `spikes/` | Throwaway experiments that are not part of the product. They will be deleted when the experiments end. See [`spikes/README.md`](spikes/README.md). |
 | `docs/decisions/` | Architecture decision records. Start with the [template](docs/decisions/template.md). |
-| `.github/workflows/ci.yml` | Runs the engine tests on Linux (Python 3.10, 3.11 and 3.12) and Windows (Python 3.12) for every push and pull request. |
+| `.github/workflows/ci.yml` | For every push and pull request, runs the engine tests on Linux (Python 3.10, 3.11 and 3.12) and Windows (Python 3.12), and the spike tests on Linux (Python 3.9 to 3.12) and Windows (Python 3.12). |
 
 ## Run the tests
 

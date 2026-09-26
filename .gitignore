@@ -44,6 +44,13 @@ build/
 /*.pptx
 /*.xlsx
 
+# ───────────── Spike outputs (never committed) ─────────────
+# Spikes write results to out/ or data/ folders, or outside the repository.
+spikes/**/out/
+spikes/**/data/
+# Scanner result files, wherever someone runs the scanner.
+orch-scan-*.json
+
 # ───────────── OS / editor junk ─────────────
 .DS_Store
 Thumbs.db
