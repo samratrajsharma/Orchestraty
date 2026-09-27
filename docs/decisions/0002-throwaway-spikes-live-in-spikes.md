@@ -31,9 +31,10 @@ Throwaway experiment code lives in `spikes/` on `main`, one folder per experimen
 5. **Outputs.** Outputs are written outside the repository or to `out/` and `data/` folders, which are gitignored. Fixtures are synthetic.
 6. **Tests.** Every spike has tests, mostly for safety properties. They run in a separate CI job.
 7. **Deletion.** When the experiments end, `spikes/` is deleted in one commit. Anything that should last is rebuilt in its proper home.
-8. **Unique file names** (proposed, pending approval). Python file names are unique across spikes (except `conftest.py`), because all spike tests run in one pytest session.
+8. **Unique file names.** Python file names are unique across spikes (except `conftest.py`), because all spike tests run in one pytest session.
+   Rule 8 was added after the first seven rules were approved, and was accepted on 27 September 2026.
 
-`spikes/test_rules.py` checks rules 2 and 3. It also checks rule 8, which still awaits approval.
+`spikes/test_rules.py` checks rules 2, 3 and 8.
 
 ## Alternatives considered
 
@@ -45,5 +46,5 @@ Throwaway experiment code lives in `spikes/` on `main`, one folder per experimen
 ## Consequences
 
 - Experiment code stays in `main`'s history after the folder is deleted. It must therefore follow the same rules as everything else in the repository: neutral wording, synthetic fixtures, no data.
-- CI runs a second job for spike tests. It uses Python 3.9 to 3.12 on Linux, because the scanner has to run on older Pythons, and 3.12 on Windows. The 3.9 job is pinned to `ubuntu-24.04`, because no 3.9 build exists for the Ubuntu 26.04 image that `ubuntu-latest` moves to from October 2026.
-- The rules test fails as soon as a new folder lacks the status line; a spike imports another spike's folder or modules, the `spikes` package, or reaches out of its folder with a relative import; the engine imports a spike; or two spikes share a Python file name (the proposed rule 8).
+- CI runs separate jobs for spike tests, on each operating system participants use, and on Linux with Python 3.9 to 3.12, because the scanner has to run on older Pythons. The 3.9 job is pinned to `ubuntu-24.04`, because no 3.9 build exists for the Ubuntu 26.04 image that `ubuntu-latest` moves to from October 2026.
+- The rules test fails as soon as a new folder lacks the status line; a spike imports another spike's folder or modules, the `spikes` package, or reaches out of its folder with a relative import; the engine imports a spike; or two spikes share a Python file name (rule 8).

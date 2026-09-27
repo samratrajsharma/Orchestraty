@@ -18,9 +18,9 @@ Each experiment has its own folder, and that folder's README says what it is for
 5. **Outputs stay out of git.** By default, results are written outside the repository, or to an `out/` or `data/` folder, which `.gitignore` excludes. Real data from anyone's machine is never committed. Test fixtures are synthetic.
 6. **Every spike has tests,** mostly for safety properties: for example, that the scanner never opens a session file and never writes anywhere except its output file.
 7. **Deleted at the end.** When the experiments are done, `spikes/` is removed in one commit. Nothing moves from here into product code by copy and paste.
-8. **Unique file names** (proposed, pending approval). All spike tests run in one pytest session, so no two spikes may have a Python file with the same name. `conftest.py` is the one exception. Prefix names with the spike's name, as `scan/scan_collect.py` does.
+8. **Unique file names.** All spike tests run in one pytest session, so no two spikes may have a Python file with the same name. `conftest.py` is the one exception. Prefix names with the spike's name, as `scan/scan_collect.py` does.
 
-`spikes/test_rules.py` checks rules 2 and 3. It also checks rule 8, which still awaits approval.
+`spikes/test_rules.py` checks rules 2, 3 and 8.
 
 ## Run the tests
 
