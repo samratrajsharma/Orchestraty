@@ -1,11 +1,13 @@
-# Runs the engine and spike test suites on every push and pull request, and on demand.
-# Both are standard library only, so pytest is the one dependency.
+# Runs the engine and spike test suites on every push and pull request, on demand, and once a
+# week. Both are standard library only, so pytest is the one dependency.
 name: CI
 
 on:
   push:
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"          # Mondays, 06:00 UTC: also the only automatic macOS run
 
 permissions:
   contents: read
@@ -51,8 +53,24 @@ jobs:
         run: git --version
 
       # No -q here: engine/pytest.ini already adds -q, and a second -q hides the "N passed" line.
+      # No cache and no bytecode, so the leftover check below finds nothing.
       - name: Run the engine tests
-        run: python -m pytest
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m pytest -p no:cacheprovider
+
+      # The tests must leave nothing in the working copy: no __pycache__, no .pytest_cache,
+      # no output files. Runs from the repository root, in bash on every OS.
+      - name: Check that the tests left no files behind
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          leftovers="$(git status --porcelain --ignored -- spikes engine)"
+          if [ -n "$leftovers" ]; then
+            echo "The tests left files in the working copy:"
+            echo "$leftovers"
+            exit 1
+          fi
 
   spike-tests:
     name: spike tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
@@ -97,12 +115,28 @@ jobs:
         run: git --version
 
       - name: Run the spike tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: python -m pytest
 
-  # macOS runs only on pushes to main and on manual runs, to keep macOS minutes down.
+      # The tests must leave nothing in the working copy: no __pycache__, no .pytest_cache,
+      # no output files. Runs from the repository root, in bash on every OS.
+      - name: Check that the tests left no files behind
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          leftovers="$(git status --porcelain --ignored -- spikes engine)"
+          if [ -n "$leftovers" ]; then
+            echo "The tests left files in the working copy:"
+            echo "$leftovers"
+            exit 1
+          fi
+
+  # macOS runs only on manual runs and on the weekly schedule, to keep macOS minutes down.
+  # (Every push here goes to main, so a push trigger would mean every push.)
   spike-tests-macos:
     name: spike tests (macos-latest, Python 3.12)
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: macos-latest
     timeout-minutes: 15
     defaults:
@@ -126,4 +160,19 @@ jobs:
         run: git --version
 
       - name: Run the spike tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: python -m pytest
+
+      # The tests must leave nothing in the working copy: no __pycache__, no .pytest_cache,
+      # no output files. Runs from the repository root, in bash on every OS.
+      - name: Check that the tests left no files behind
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          leftovers="$(git status --porcelain --ignored -- spikes engine)"
+          if [ -n "$leftovers" ]; then
+            echo "The tests left files in the working copy:"
+            echo "$leftovers"
+            exit 1
+          fi
