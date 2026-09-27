@@ -151,6 +151,16 @@ def _isolated_git(empty_gitconfig):
     _GITCONFIG[:] = [empty_gitconfig]
 
 
+# Switches for every fixture git command. Since git 2.47, commit, merge, rebase and the like
+# start automatic maintenance in a detached background process that briefly holds
+# .git/objects/maintenance.lock; a test that snapshots the tree right after a fixture commit
+# would then see that file vanish during the scan. gc.auto=0 covers older git, which runs
+# "gc --auto" in the foreground instead.
+FIXTURE_GIT_SWITCHES = ["-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false",
+                        "-c", "protocol.file.allow=always",
+                        "-c", "maintenance.auto=false", "-c", "gc.auto=0"]
+
+
 def git(repo, *args, env=None, date=None):
     """Run git for building fixtures, ignoring the developer's own git config."""
     e = dict(os.environ)
@@ -161,8 +171,7 @@ def git(repo, *args, env=None, date=None):
         e.update(env)
     if date:
         e["GIT_AUTHOR_DATE"] = e["GIT_COMMITTER_DATE"] = date
-    return subprocess.run(["git", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false",
-                           "-c", "protocol.file.allow=always"] + list(args),
+    return subprocess.run(["git"] + FIXTURE_GIT_SWITCHES + list(args),
                           cwd=repo, env=e, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
 
