@@ -45,9 +45,12 @@ What it does:
     git commands with all network access switched off. To tell rebased or
     squash-merged work apart, git compares the changes on active branches in
     memory; no file content is kept.
-  * Reads the MCP helper settings of each app to count the helpers, note what
-    kind of command starts them (npx, docker and so on) and whether it is
-    missing. Helper names, arguments, secrets and program names are not kept.
+  * Opens the MCP helper settings of each app, and Claude Code's settings files
+    (settings.json and any settings your organisation manages), to count the
+    helpers, note what kind of command starts them (npx, docker and so on) and
+    whether it is missing, and count hook settings. These files can contain
+    tokens or passwords. They are read in memory only, and only counts and
+    labels are kept: helper names, arguments, secrets and program names are not.
   * Notes whether hooks are allowed or restricted (on Windows this includes
     Claude Code's policy setting in the registry), whether a repository sets
     its own hooks folder, and how many git hooks are active.
@@ -244,24 +247,69 @@ def run(argv=None, input_fn=input, out=print, is_tty=None):
         if not _yes(_ask(f"\nSave this to {target}? [Y/n] ", input_fn), default=True):
             out("Not saved. Nothing was written.")
             return 0
-    target = _free_path(target)
-    with open(target, "x", encoding="utf-8", newline="\n") as fh:
-        fh.write(text + "\n")
+    target = _save(target, text)
     out(f"\nSaved to {target}")
     out("Please look it over, then email it to the person who sent you the scanner.")
     out("You can delete the file at any time.")
     return 0
 
 
-def main(argv=None):
-    # A console that cannot show a character (for example a user name outside the
-    # console's code page) must not crash the scanner after it has saved the result.
+class _StoppedWhileSaving(Exception):
+    """Ctrl+C landed while the result file was being written."""
+
+
+_SAVED = []      # the result file, once it is completely written
+
+
+def _write_all(fh, text):
+    fh.write(text)
+
+
+def _save(target, text):
+    """Write the result to a new file. If Ctrl+C lands during the write, the partly written
+    file is removed, and the message says exactly what happened."""
+    target = _free_path(target)
+    try:
+        with open(target, "x", encoding="utf-8", newline="\n") as fh:
+            _write_all(fh, text + "\n")
+    except KeyboardInterrupt:
+        try:
+            os.remove(target)
+        except OSError:
+            raise _StoppedWhileSaving(f"Stopped while saving. A partly written file may be left at "
+                                      f"{target}; please delete it.") from None
+        raise _StoppedWhileSaving("Stopped while saving. The partly written file was removed, "
+                                  "so nothing was saved.") from None
+    _SAVED.append(target)
+    return target
+
+
+def _configure_streams():
+    # Line buffering: in Git Bash stdout is a pipe, and without it the progress lines would
+    # appear only at the end. backslashreplace: a console that cannot show a character (for
+    # example a user name outside the console's code page) must not crash the scanner.
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(errors="backslashreplace")
+            stream.reconfigure(errors="backslashreplace", line_buffering=True)
         except (AttributeError, ValueError):
             pass
-    return run(argv)
+
+
+def main(argv=None, **run_options):
+    """Run the scanner. Ctrl+C at any point stops it with exit code 130 and a plain message."""
+    _configure_streams()
+    del _SAVED[:]
+    out = run_options.get("out", print)
+    try:
+        return run(argv, **run_options)
+    except _StoppedWhileSaving as exc:
+        out("\n" + str(exc))
+    except KeyboardInterrupt:
+        if _SAVED:
+            out(f"\nStopped. The result had already been saved to {_SAVED[-1]}.")
+        else:
+            out("\nStopped. Nothing was saved.")
+    return 130
 
 
 if __name__ == "__main__":

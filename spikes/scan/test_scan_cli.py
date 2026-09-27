@@ -30,7 +30,10 @@ class Inputs:
         self.prompts.append(prompt)
         if not self.answers:
             raise EOFError
-        return self.answers.pop(0)
+        answer = self.answers.pop(0)
+        if answer is KeyboardInterrupt:
+            raise KeyboardInterrupt           # the person pressed Ctrl+C at this prompt
+        return answer
 
 
 def _run(machine, argv, answers=(), is_tty=True):
@@ -137,6 +140,102 @@ def test_a_terminal_is_recognised_including_git_bash(monkeypatch):
     assert scan_cli._terminal_available() is False
     monkeypatch.setenv("MSYSTEM", "MINGW64")                         # Git Bash's mintty gives Python a pipe
     assert scan_cli._terminal_available() is (os.name == "nt")
+
+
+def _main(machine, argv, answers=()):
+    lines = []
+    code = scan_cli.main(["--home", str(machine.home), "--system", machine.system, "--root", str(machine.root)]
+                         + argv, input_fn=Inputs(*answers), out=lines.append, is_tty=True)
+    return code, "\n".join(lines)
+
+
+@pytest.mark.parametrize("where, answers, extra", [
+    ("consent prompt", [KeyboardInterrupt], []),
+    ("questions", ["y", "", KeyboardInterrupt], []),
+    ("save prompt", ["y", "", KeyboardInterrupt], ["--no-questions"]),
+])
+def test_ctrl_c_at_a_prompt_stops_cleanly(linux_machine, tmp_path, where, answers, extra):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    code, text = _main(linux_machine, ["--out", str(out_dir)] + extra, answers)
+    assert code == 130, where
+    assert text.strip().endswith("Stopped. Nothing was saved.") and "Traceback" not in text
+    assert list(out_dir.iterdir()) == []
+
+
+def test_ctrl_c_during_the_scan_stops_cleanly(linux_machine, tmp_path, monkeypatch):
+    def interrupted(*a, **k):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(sc, "collect", interrupted)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    code, text = _main(linux_machine, ["--out", str(out_dir), "--yes"])
+    assert code == 130 and text.strip().endswith("Stopped. Nothing was saved.")
+    assert list(out_dir.iterdir()) == []
+
+
+def test_ctrl_c_while_saving_says_what_happened(linux_machine, tmp_path, monkeypatch):
+    def half_then_interrupted(fh, text):
+        fh.write(text[:20])
+        fh.flush()
+        raise KeyboardInterrupt
+    monkeypatch.setattr(scan_cli, "_write_all", half_then_interrupted)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    code, text = _main(linux_machine, ["--out", str(out_dir), "--yes"])
+    assert code == 130
+    assert "Stopped while saving. The partly written file was removed" in text
+    assert list(out_dir.iterdir()) == []
+
+
+def test_ctrl_c_after_saving_does_not_claim_nothing_was_saved(linux_machine, tmp_path, monkeypatch):
+    lines = []
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    def out(line):
+        lines.append(line)
+        if line.startswith("\nSaved to"):
+            raise KeyboardInterrupt
+    code = scan_cli.main(["--home", str(linux_machine.home), "--system", "Linux", "--root", str(linux_machine.root),
+                          "--out", str(out_dir), "--yes"], input_fn=Inputs(), out=out, is_tty=True)
+    saved = list(out_dir.iterdir())
+    assert code == 130 and len(saved) == 1
+    assert lines[-1] == f"\nStopped. The result had already been saved to {saved[0]}."
+
+
+def test_progress_shows_while_the_scan_runs_even_through_a_pipe(linux_machine, tmp_path):
+    # Git Bash gives Python a pipe, not a console. Each progress line must arrive at once,
+    # not when the scan ends; here the scan waits until the line has been seen.
+    import queue
+    import threading
+    code = ("import sys; sys.path.insert(0, %r)\n"
+            "import scan_cli, scan_collect as sc\n"
+            "def slow(env, progress=None, **kwargs):\n"
+            "    progress(1, 2)\n"
+            "    sys.stdin.readline()\n"
+            "    return {'run': {}}\n"
+            "sc.collect = slow\n"
+            "raise SystemExit(scan_cli.main(sys.argv[1:]))\n" % str(HERE))
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    proc = subprocess.Popen([sys.executable, "-c", code, "--yes", "--home", str(linux_machine.home),
+                             "--system", "Linux", "--root", str(linux_machine.root), "--out", str(tmp_path)],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    lines = queue.Queue()
+    threading.Thread(target=lambda: [lines.put(line) for line in proc.stdout], daemon=True).start()
+    seen = False
+    try:
+        while not seen:
+            seen = b"looking at repository 1 of 2" in lines.get(timeout=30)
+    except queue.Empty:
+        pass
+    finally:
+        proc.stdin.write(b"\n")
+        proc.stdin.close()
+        proc.wait(timeout=60)
+    assert seen, "the progress line only arrived after the scan ended"
+    assert proc.returncode == 0
 
 
 def test_minutes_are_stored_exactly_as_entered():

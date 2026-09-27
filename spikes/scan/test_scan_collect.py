@@ -36,15 +36,33 @@ def _strings(obj):
         yield obj
 
 
-def _keys(obj):
-    """Every dict key in a parsed result."""
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            yield k
-            yield from _keys(v)
-    elif isinstance(obj, list):
-        for v in obj:
-            yield from _keys(v)
+def _identity_needles(home, host, user):
+    """The host name, user name and home-folder path parts, which must never reach the output.
+    Words the scanner itself is made of (agent names such as "claude", launchers such as "node",
+    "pi") are not identifiers, whatever the machine or user happens to be called."""
+    source = (HERE / "scan_collect.py").read_text(encoding="utf-8").lower()
+    generic = {"home", "users", "appdata", "local", "temp", "tmp", "var", "private", "folders", "root"}
+    candidates = [host, user] + [part for part in Path(str(home)).parts
+                                 if len(part) > 3 and part.strip("\\/:").lower() not in generic]
+    return [c for c in candidates if c and c.lower() not in source]
+
+
+def _leaks(result, needles):
+    """(needle, string) for every needle found in any string of the result."""
+    return [(n, s) for s in _strings(result) for n in needles if n.lower() in s.lower()]
+
+
+def test_the_leak_check_ignores_scanner_words_but_catches_a_real_host_name(tmp_path):
+    # On a machine called "claude" the output's "claude-code" is not a leak; an unusual host
+    # name in the output still is.
+    result = {"agents": {"claude-code": {"installed": True}}, "mcp": {"by_app": {"cursor": {"commands": {"node": 1}}}},
+              "run": {"os": "Linux"}}
+    for host, user in (("claude", "node"), ("CLAUDE", "pi")):
+        assert _leaks(result, _identity_needles(tmp_path / "home", host, user)) == []
+    needles = _identity_needles(tmp_path / "home", "zqx-build-host-4417", "pi")
+    assert "zqx-build-host-4417" in needles
+    result["run"]["os"] = "Linux on zqx-build-host-4417"
+    assert _leaks(result, needles) == [("zqx-build-host-4417", "Linux on zqx-build-host-4417")]
 
 
 def _symlinks_work(tmp_path):
@@ -228,16 +246,10 @@ def test_output_holds_no_identifiers(machine, make_repo, tmp_path):
     strings = list(_strings(result))
     needles = [SECRET, "acme", "carol-private", "dave-private", "example.com", "secret-merger",
                "internal-payroll-helper", "another-private-helper", "sk-live-123", "private-pkg",
-               "secret-project", "alice.smith", "jira", "payroll", "owner@", platform.node(), getpass.getuser()]
-    generic = {"home", "users", "appdata", "local", "temp", "tmp", "var", "private", "folders", "root"}
-    # Words the output uses itself (agent and app names, field names) are not identifiers.
-    vocabulary = " ".join(str(k) for k in _keys(result)).lower()
-    needles += [part for part in Path(str(m.home)).parts
-                if len(part) > 3 and part.strip("\\/:").lower() not in generic
-                and part.lower() not in vocabulary]
+               "secret-project", "alice.smith", "jira", "payroll", "owner@"]
+    needles += _identity_needles(m.home, platform.node(), getpass.getuser())
+    assert _leaks(result, needles) == []
     for s in strings:
-        for needle in needles:
-            assert needle.lower() not in s.lower(), f"{needle!r} leaked into the output: {s!r}"
         assert not re.search(r"\b[0-9a-f]{32}\b", s), f"a long hex value (a salt?) is in the output: {s!r}"
     assert result["mcp"]["by_app"]["cursor"]["commands"] == {"npx": 1, "other-path": 2, "other": 1}
     ids_1 = {i["id"] for i in result["repos"]["items"]}
@@ -851,6 +863,8 @@ def test_repository_inspection_has_a_time_budget_and_reports_progress(linux_mach
     calls = []
     result = sc.collect(m.env(), days=14, progress=lambda i, n: calls.append((i, n)))
     assert calls == [(1, 2), (2, 2)] and result["repos"]["inspected"] == 2
+    duration = result["run"]["duration_seconds"]
+    assert isinstance(duration, int) and 0 <= duration < 600
     monkeypatch.setattr(sc, "REPO_TIME_BUDGET", -1)
     result = sc.collect(m.env(), days=14)
     assert result["repos"]["inspected"] == 0
@@ -1303,6 +1317,83 @@ def test_one_stream_of_work_counts_once(linux_machine, make_repo):
     commit(repo, "x.py", "carol\n", "carol", days_ago=1)
     item, _ = sc.inspect_repo(repo, linux_machine.env(), 14, sc.Hasher())
     assert item["in_flight_branches"] == 1 and item["cross_author_overlap_pairs"] == 1
+
+
+def _commit_as(repo, path, text, name, email, days_ago, message=None):
+    (repo / path).write_text(text, encoding="utf-8")
+    when = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - days_ago * 86400))
+    git(repo, "add", path)
+    git(repo, "commit", "-q", "-m", message or f"change {path}", date=when,
+        env={"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email})
+
+
+def _two_identity_repo(repo, second_name, second_email):
+    """Alice's branch changes x.py as alice@work.example. After it forked, the default branch
+    gains a squash merge of another pull request that also changes x.py, authored by the
+    second identity."""
+    _commit_as(repo, "x.py", "base\n", "Alice Smith", "alice@work.example", 20)
+    git(repo, "checkout", "-q", "-b", "feat-b")
+    _commit_as(repo, "x.py", "branch b\n", "Alice Smith", "alice@work.example", 3)
+    git(repo, "checkout", "-q", "main")
+    _commit_as(repo, "x.py", "other pr\n", second_name, second_email, 2, "Other PR (#4)")
+
+
+def test_one_person_with_two_addresses_is_not_a_pair(linux_machine, make_repo):
+    # The GitHub web UI squash-merges under the noreply address when email privacy is on.
+    for name, email in (("Alice Smith", "1234567+alice-s@users.noreply.github.com"),   # same name
+                        ("A. S.", "1234567+alicesmith@users.noreply.github.com"),       # the login matches her name
+                        ("alice smith", "alice@home.example")):                        # another machine
+        repo = make_repo(linux_machine.home / "code" / f"ids-{email.split('@')[0][-9:]}")
+        _two_identity_repo(repo, name, email)
+        item, _ = sc.inspect_repo(repo, linux_machine.env(), 14, sc.Hasher())
+        assert item["in_flight_branches"] == 1
+        assert item["cross_author_overlap_pairs"] == 0, (name, email)
+        assert item["cross_email_overlap_pairs"] == 1                  # the strict count still shows it
+        assert item["authors_in_window"] == 2 and item["people_in_window"] == 1
+
+
+def test_two_people_are_still_a_pair(linux_machine, make_repo):
+    repo = make_repo(linux_machine.home / "code" / "two-people")
+    _two_identity_repo(repo, "Carol Jones", "carol@work.example")
+    item, _ = sc.inspect_repo(repo, linux_machine.env(), 14, sc.Hasher())
+    assert item["cross_author_overlap_pairs"] == 1 and item["cross_email_overlap_pairs"] == 1
+    assert item["people_in_window"] == 2
+
+
+def test_two_people_who_share_a_name_count_as_one(linux_machine, make_repo):
+    # A known limit, listed in the README: identities are grouped by name as well as email.
+    repo = make_repo(linux_machine.home / "code" / "same-name")
+    _two_identity_repo(repo, "Alice Smith", "alice.smith@other-company.example")
+    item, _ = sc.inspect_repo(repo, linux_machine.env(), 14, sc.Hasher())
+    assert item["cross_author_overlap_pairs"] == 0 and item["cross_email_overlap_pairs"] == 1
+
+
+def test_mailmap_groups_identities_only_when_safe_to_read(linux_machine, make_repo, tmp_path, monkeypatch):
+    mapping = "Alice Smith <alice@work.example> A. S. <al@laptop.example>\n"
+    repo = make_repo(linux_machine.home / "code" / "mailmap")
+    _two_identity_repo(repo, "A. S.", "al@laptop.example")          # neither name nor email matches
+    item, _ = sc.inspect_repo(repo, linux_machine.env(), 14, sc.Hasher())
+    assert item["mailmap_read"] is True and item["cross_author_overlap_pairs"] == 1
+    (repo / ".mailmap").write_text(mapping, encoding="utf-8")
+    item, _ = sc.inspect_repo(repo, linux_machine.env(), 14, sc.Hasher())
+    assert item["mailmap_read"] is True and item["cross_author_overlap_pairs"] == 0
+    if not _symlinks_work(tmp_path):
+        return
+    (repo / ".mailmap").unlink()
+    outside = tmp_path / "elsewhere.mailmap"
+    outside.write_text(mapping, encoding="utf-8")
+    os.symlink(outside, repo / ".mailmap")          # a link: never handed to git (older git follows it)
+    formats = []
+    real_run = subprocess.run
+
+    def spy(cmd, *a, **k):
+        formats.extend(x for x in cmd if x.startswith("--format="))
+        return real_run(cmd, *a, **k)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    item, _ = sc.inspect_repo(repo, linux_machine.env(), 14, sc.Hasher())
+    assert item["mailmap_read"] is False and item["cross_author_overlap_pairs"] == 1
+    assert not any("%aN" in f or "%aE" in f for f in formats)
 
 
 def _lines(**edits):

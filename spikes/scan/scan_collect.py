@@ -44,8 +44,8 @@ import subprocess
 import time
 from pathlib import Path
 
-SCHEMA = "orch-scan/0"
-SCANNER_VERSION = "0.3.0"
+SCHEMA = "orch-scan/1"
+SCANNER_VERSION = "0.3.1"
 
 MAX_REPOS = 50          # repositories inspected per run
 MAX_REFS = 100          # unmerged branches inspected per repository, newest first
@@ -716,13 +716,16 @@ def discover_repos(env, extra_paths=(), walk_depth=3, counters=None):
 _REF = re.compile(r"^refs/(?!.*\.\.)[^\s~^:?*\[\\\x00-\x1f\x7f]+$")
 # The only output formats git is ever asked for. A format is a program of its own (%G? or
 # %(signature) would run gpg), so only these exact strings are accepted.
-_FMT_WINDOW = "--format=%x01%an <%ae>%x00%(trailers:key=Co-authored-by,valueonly,separator=%x02)"
+# The window log gives each author twice: as recorded, and as the repository's .mailmap maps
+# them (%aN/%aE, used only when .mailmap is safe to let git read; see _mailmap_safe).
+_FMT_WINDOW = "--format=%x01%an <%ae>%x00%an%x00%ae%x00%(trailers:key=Co-authored-by,valueonly,separator=%x02)"
+_FMT_WINDOW_MAILMAP = "--format=%x01%an <%ae>%x00%aN%x00%aE%x00%(trailers:key=Co-authored-by,valueonly,separator=%x02)"
 _FMT_STREAM = "--format=%x01%m%H%x00%P%x00%an%x00%ae%x00%ct%x00%at"
 _FMT_FIRST_PARENT = "--format=%x01%H"
 _FMT_REFS = "--format=%(refname)%00%(committerdate:unix)"
 _LOG_FLAGS = {"--all", "--exclude=refs/stash", "--no-merges", "--no-renames", "--raw", "--no-abbrev", "--cherry-pick",
               "--left-right", "--first-parent", "-m", "--no-show-signature", "--no-ext-diff",
-              "--no-textconv", _FMT_WINDOW, _FMT_STREAM, _FMT_FIRST_PARENT}
+              "--no-textconv", _FMT_WINDOW, _FMT_WINDOW_MAILMAP, _FMT_STREAM, _FMT_FIRST_PARENT}
 _SINCE = re.compile(r"^--since=\d+\.days\.ago$")
 _CONFIG_KEYS = {"core.hooksPath"}
 
@@ -807,6 +810,7 @@ def _git(repo, args, env):
            "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
            "-c", "log.showSignature=false",       # no gpg.program / ssh-keygen runs
            "-c", "log.diffMerges=first-parent",   # -m shows a merge against its first parent only
+           "-c", "log.mailmap=false",             # .mailmap is read only for %aN/%aE (_mailmap_safe)
            "-c", "protocol.allow=never",          # no transport (see GIT_ALLOW_PROTOCOL)
            "-C", str(repo)] + list(args)
     proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -874,11 +878,13 @@ _RAW = re.compile(r"^:\d+ \d+ ([0-9a-f]+) ([0-9a-f]+) [A-Z]\d*\t(.+)$")
 class _Commit:
     """One commit from `git log --raw`: which side it is on, who made it, and for each file
     changed the blob before and after (blob ids only; file contents are never read here)."""
-    __slots__ = ("sha", "right", "merge", "author", "who", "time", "atime", "files")
+    __slots__ = ("sha", "right", "merge", "author", "name", "who", "person", "time", "atime", "files")
 
-    def __init__(self, sha, right, merge, author, who, ctime, atime, files):
+    def __init__(self, sha, right, merge, author, name, ctime, atime, files):
         self.sha, self.right, self.merge = sha, right, merge
-        self.author, self.who, self.time, self.atime, self.files = author, who, ctime, atime, files
+        self.author, self.name, self.who = author, name, f"{name} <{author}>"
+        self.person = author            # replaced by the grouped identity (_People) once known
+        self.time, self.atime, self.files = ctime, atime, files
 
 
 def _raw_files(body):
@@ -914,7 +920,7 @@ def _log_stream(repo, default, ref, since, env, cherry):
             ctime = atime = 0.0
         email = email.strip().lower()
         commits.append(_Commit(mark_sha[1:], mark_sha[0] == ">", len(parents.split()) > 1,
-                               email, f"{name} <{email}>", ctime, atime, _raw_files(body)))
+                               email, name, ctime, atime, _raw_files(body)))
     return commits
 
 
@@ -955,6 +961,77 @@ def _squash_merged(net, theirs):
                              for c in theirs)
 
 
+_NOREPLY = re.compile(r"^(?:\d+\+)?([^@+]+)@users\.noreply\.github\.com$")
+
+
+def _name_node(name):
+    """A name compared without case, spaces or punctuation ("Alice Smith" = "alice.smith")."""
+    key = re.sub(r"[\W_]+", "", name.casefold())
+    return "n:" + key if key else None
+
+
+class _People:
+    """Groups the commit identities of one repository into people.
+
+    Two identities are one person when they share an email address or a name (ignoring case,
+    spaces and punctuation). A GitHub noreply address (<id>+<login>@users.noreply.github.com,
+    used for squash merges made on the web with email privacy on) also counts its login as a
+    name, because an account with no display name commits under its login. Two different
+    people who share a name are therefore counted as one. Nothing here is ever output."""
+
+    def __init__(self):
+        self._parent = {}
+
+    def _find(self, node):
+        self._parent.setdefault(node, node)
+        while self._parent[node] != node:
+            self._parent[node] = self._parent[self._parent[node]]
+            node = self._parent[node]
+        return node
+
+    @staticmethod
+    def _nodes(name, email):
+        email = email.strip().casefold()
+        nodes = ["e:" + email] if email else []
+        for n in (_name_node(name.strip()),):
+            if n:
+                nodes.append(n)
+        m = _NOREPLY.match(email)
+        if m and "[bot]" not in email:
+            login = _name_node(m.group(1))
+            if login:
+                nodes.append(login)
+        return nodes
+
+    def add(self, *identities):
+        """Record that these (name, email) identities belong to one person."""
+        nodes = [n for name, email in identities for n in self._nodes(name, email)]
+        for n in nodes[1:]:
+            a, b = self._find(nodes[0]), self._find(n)
+            if a != b:
+                self._parent[b] = a
+
+    def key(self, name, email):
+        nodes = self._nodes(name, email)
+        return self._find(nodes[0]) if nodes else "?"
+
+    def count(self, identities):
+        return len({self.key(name, email) for name, email in identities})
+
+
+def _mailmap_safe(repo):
+    """True if git may read the repository's .mailmap (for %aN/%aE): it is absent, or a plain
+    file stored on this computer. Git since 2.32 refuses a linked .mailmap by itself; older git
+    would follow the link, possibly to another machine, so a link is never offered to it."""
+    try:
+        st = os.lstat(os.path.join(str(repo), ".mailmap"))
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return not _lstat_is_link(st) and (st.st_mode & 0o170000) == 0o100000 and not _not_local(st)
+
+
 def _rebased_copies(own, theirs):
     """Own commits the default branch already holds as a rebased copy that git could not match
     by patch (lines nearby had changed): same author, same author date, same files. Rebasing
@@ -970,9 +1047,9 @@ def _squash_after_base_moved(net, own, theirs):
     the branch changed, where each file it leaves different was also changed on the default
     side before it. Reported apart from exact squash merges, as probably merged."""
     newest = max(c.time for c in own)
-    authors = {c.author for c in own}
+    authors = {c.person for c in own}
     for s in theirs:
-        if s.time <= newest or s.author not in authors or not set(net) <= set(s.files):
+        if s.time <= newest or s.person not in authors or not set(net) <= set(s.files):
             continue
         moved = {f for c in theirs if c is not s and c.time <= s.time for f in c.files}
         if all(s.files[f][1] == blob or f in moved for f, blob in net.items()):
@@ -980,15 +1057,15 @@ def _squash_after_base_moved(net, own, theirs):
     return False
 
 
-def _authors_by_file(commits):
+def _authors_by_file(commits, key):
     out = {}
     for c in commits:
         for f in c.files:
-            out.setdefault(f, set()).add(c.author)
+            out.setdefault(f, set()).add(getattr(c, key))
     return out
 
 
-def _shared_by_different_people(side_a, side_b):
+def _shared_by_different_people(side_a, side_b, key="person"):
     """Files changed on both sides where someone on one side differs from someone on the other.
 
     Only commits unique to each side are compared, so shared history never counts. Commits
@@ -996,8 +1073,8 @@ def _shared_by_different_people(side_a, side_b):
     """
     sha_a = {c.sha for c in side_a}
     sha_b = {c.sha for c in side_b}
-    by_a = _authors_by_file([c for c in side_a if c.sha not in sha_b and not _is_other_bot(c.who)])
-    by_b = _authors_by_file([c for c in side_b if c.sha not in sha_a and not _is_other_bot(c.who)])
+    by_a = _authors_by_file([c for c in side_a if c.sha not in sha_b and not _is_other_bot(c.who)], key)
+    by_b = _authors_by_file([c for c in side_b if c.sha not in sha_a and not _is_other_bot(c.who)], key)
     return {f for f in set(by_a) & set(by_b)
             if any(x != y for x in by_a[f] for y in by_b[f])}
 
@@ -1104,16 +1181,23 @@ def inspect_repo(repo, env, days, hasher, deadline=None, _via_container=False):
     # Commits in the window on every ref: who made them (agents and other bots) and which
     # agents are credited. Per-agent tallies can count one commit twice (author and trailer);
     # the cloud/local counts never do.
+    mailmap = _mailmap_safe(repo)
     code, out = _git(repo, ["log", "--exclude=refs/stash", "--all", "--no-merges", "--no-show-signature",
-                            f"--since={since}", _FMT_WINDOW], env)
+                            f"--since={since}", _FMT_WINDOW_MAILMAP if mailmap else _FMT_WINDOW], env)
     commits = cloud = local = other_bots = 0
-    bots, trailers, authors = {}, {}, set()
+    bots, trailers, authors, identities = {}, {}, set(), set()
+    people = _People()
     if code == 0:
         for chunk in out.split("\x01")[1:]:
             commits += 1
-            author, _, tr = chunk.partition("\x00")
-            m = re.search(r"<([^>]*)>", author)
-            authors.add((m.group(1) if m else author).strip().lower())
+            author, _, rest = chunk.partition("\x00")
+            mapped_name, _, rest = rest.partition("\x00")
+            mapped_email, _, tr = rest.partition("\x00")
+            name, _, email = author.rpartition(" <")
+            email = email[:-1] if email.endswith(">") else email
+            authors.add(email.strip().lower())
+            identities.add((name, email.strip().lower()))
+            people.add((name, email), (mapped_name, mapped_email))
             by_agent = _match_table(author, BOT_AUTHORS)
             credited = _match_table(tr, AGENT_TRAILERS)
             for key in by_agent:
@@ -1130,6 +1214,8 @@ def inspect_repo(repo, env, days, hasher, deadline=None, _via_container=False):
         errors.append("could not read the commit log")
     item["commits_in_window"] = commits
     item["authors_in_window"] = len(authors)
+    item["people_in_window"] = people.count(identities)
+    item["mailmap_read"] = mailmap
     item["bot_authored_commits"] = bots
     item["agent_trailer_commits"] = trailers
     item["cloud_agent_commits"] = cloud
@@ -1187,6 +1273,8 @@ def inspect_repo(repo, env, days, hasher, deadline=None, _via_container=False):
                 if commits_seen is None:
                     skipped["unreadable"] += 1
                     continue
+                for c in commits_seen:
+                    c.person = people.key(c.name, c.author)
                 on_branch = [c for c in commits_seen if c.right]
                 own = [c for c in on_branch if not c.merge]
                 theirs = [c for c in commits_seen if not c.right and not c.merge]
@@ -1244,14 +1332,16 @@ def inspect_repo(repo, env, days, hasher, deadline=None, _via_container=False):
     item["branch_cap_hit"] = capped
     item["branch_time_limit_hit"] = timed_out
 
-    pairs, shared = 0, set()
+    # Two counts: by person (identities grouped, the measure to use) and strictly by email,
+    # so the data shows how much the grouping changes.
+    counts = {"person": [0, set()], "author": [0, set()]}
 
     def note(side_a, side_b):
-        nonlocal pairs, shared
-        common = _shared_by_different_people(side_a, side_b)
-        if common:
-            pairs += 1
-            shared |= common
+        for key, tally in counts.items():
+            common = _shared_by_different_people(side_a, side_b, key)
+            if common:
+                tally[0] += 1
+                tally[1] |= common
 
     for i, (_, _, own_a, theirs_a) in enumerate(streams):
         note(own_a, theirs_a)                    # the default branch moved under it
@@ -1269,8 +1359,10 @@ def inspect_repo(repo, env, days, hasher, deadline=None, _via_container=False):
                     continue
                 inner.add(key)
                 note(a[2], b[2])
-    item["cross_author_overlap_pairs"] = pairs
-    item["cross_author_overlap_files"] = len(shared)
+    item["cross_author_overlap_pairs"] = counts["person"][0]
+    item["cross_author_overlap_files"] = len(counts["person"][1])
+    item["cross_email_overlap_pairs"] = counts["author"][0]
+    item["cross_email_overlap_files"] = len(counts["author"][1])
     return item, errors
 
 
@@ -1730,6 +1822,7 @@ def collect(env=None, days=14, extra_repos=(), read_claude_json=False, hasher=No
     """Run every collector and return the result as a dict ready for json.dumps.
 
     `progress`, if given, is called as progress(i, n) before the i-th of n repositories."""
+    started_scan = time.monotonic()
     env = env or Env()
     hasher = hasher or Hasher()
     counters = Counters()
@@ -1895,6 +1988,7 @@ def collect(env=None, days=14, extra_repos=(), read_claude_json=False, hasher=No
             "os": env.system,
             "wsl": _is_wsl(env),
             "python": platform.python_version(),
+            "duration_seconds": int(round(time.monotonic() - started_scan)),
         },
         "agents": agents,
         "sessions_summary": sessions_summary,
