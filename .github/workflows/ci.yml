@@ -1,10 +1,11 @@
-# Runs the engine and spike test suites on every push and pull request.
+# Runs the engine and spike test suites on every push and pull request, and on demand.
 # Both are standard library only, so pytest is the one dependency.
 name: CI
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -44,6 +45,10 @@ jobs:
 
       - name: Install pytest
         run: python -m pip install "pytest>=8,<10"
+
+      # Printed so a failure shows which git ran (the fixtures depend on git's behaviour).
+      - name: Show the git version
+        run: git --version
 
       # No -q here: engine/pytest.ini already adds -q, and a second -q hides the "N passed" line.
       - name: Run the engine tests
@@ -87,6 +92,38 @@ jobs:
       # On 3.9 this range resolves to pytest 8.x; pytest 9 needs 3.10 or later.
       - name: Install pytest
         run: python -m pip install "pytest>=8,<10"
+
+      - name: Show the git version
+        run: git --version
+
+      - name: Run the spike tests
+        run: python -m pytest
+
+  # macOS runs only on pushes to main and on manual runs, to keep macOS minutes down.
+  spike-tests-macos:
+    name: spike tests (macos-latest, Python 3.12)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: macos-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: spikes
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: python -m pip install "pytest>=8,<10"
+
+      - name: Show the git version
+        run: git --version
 
       - name: Run the spike tests
         run: python -m pytest
