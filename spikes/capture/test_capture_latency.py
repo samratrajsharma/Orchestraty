@@ -59,7 +59,10 @@ def test_a_no_op_measured_against_itself_adds_about_nothing():
                                    parallel=5), "b")
     median = rows["b"]["warm"]["median"]
     added = rows["a"]["added_over_baseline"]["median"]
-    assert abs(added) < max(3.0, 0.2 * median), (added, median)
+    # A check for gross bias only. With n=40 on a shared CI machine, two identical no-ops can
+    # differ by several milliseconds (6 ms on a 24 ms median has been seen). The precise
+    # calibration, a no-op against itself at the full N, belongs in each T1 run's report.
+    assert abs(added) < max(10.0, 0.5 * median), (added, median)
     assert rows["a"]["bad_exit"] == 0 and rows["a"]["printed"] == 0
 
 

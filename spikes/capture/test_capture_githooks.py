@@ -62,7 +62,8 @@ def spool_events(root):
 
 def write_hook(path, body):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\n" + textwrap.dedent(body), encoding="utf-8", newline="\n")
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:     # Path.write_text(newline=) needs 3.10
+        fh.write("#!/bin/sh\n" + textwrap.dedent(body))
     path.chmod(0o755)
 
 
