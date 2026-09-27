@@ -53,8 +53,8 @@ def _leaks(result, needles):
 
 
 def test_the_leak_check_ignores_scanner_words_but_catches_a_real_host_name(tmp_path):
-    # On a machine called "claude" the output's "claude-code" is not a leak; an unusual host
-    # name in the output still is.
+    # A host or user name that is also a word the scanner uses (an agent name, a launcher) is not
+    # a leak when that word appears in the output; an unusual host name in the output still is.
     result = {"agents": {"claude-code": {"installed": True}}, "mcp": {"by_app": {"cursor": {"commands": {"node": 1}}}},
               "run": {"os": "Linux"}}
     for host, user in (("claude", "node"), ("CLAUDE", "pi")):
@@ -945,7 +945,7 @@ def test_every_git_command_carries_the_safety_switches(linux_machine, make_repo,
     for cmd, genv in seen:
         assert os.path.isabs(cmd[0])
         for switch in ("core.fsmonitor=false", "core.untrackedCache=false", "log.showSignature=false",
-                       "protocol.allow=never"):
+                       "protocol.allow=never", "log.mailmap=false", "mailmap.file=", "mailmap.blob="):
             assert switch in cmd, f"{switch} missing from {cmd[3:]}"
         assert genv["GIT_NO_LAZY_FETCH"] == "1" and genv["GIT_ALLOW_PROTOCOL"] == "none"
         assert genv["GIT_OPTIONAL_LOCKS"] == "0" and genv["GIT_CONFIG_NOSYSTEM"] == "1"
@@ -1341,7 +1341,7 @@ def _two_identity_repo(repo, second_name, second_email):
 def test_one_person_with_two_addresses_is_not_a_pair(linux_machine, make_repo):
     # The GitHub web UI squash-merges under the noreply address when email privacy is on.
     for name, email in (("Alice Smith", "1234567+alice-s@users.noreply.github.com"),   # same name
-                        ("A. S.", "1234567+alicesmith@users.noreply.github.com"),       # the login matches her name
+                        ("AS Web", "1234567+alicesmith@users.noreply.github.com"),      # the login matches her name
                         ("alice smith", "alice@home.example")):                        # another machine
         repo = make_repo(linux_machine.home / "code" / f"ids-{email.split('@')[0][-9:]}")
         _two_identity_repo(repo, name, email)
@@ -1361,17 +1361,50 @@ def test_two_people_are_still_a_pair(linux_machine, make_repo):
 
 
 def test_two_people_who_share_a_name_count_as_one(linux_machine, make_repo):
-    # A known limit, listed in the README: identities are grouped by name as well as email.
+    # A known limit, listed in the README: identities are grouped by name as well as email
+    # (except placeholder names such as "root").
     repo = make_repo(linux_machine.home / "code" / "same-name")
     _two_identity_repo(repo, "Alice Smith", "alice.smith@other-company.example")
     item, _ = sc.inspect_repo(repo, linux_machine.env(), 14, sc.Hasher())
     assert item["cross_author_overlap_pairs"] == 0 and item["cross_email_overlap_pairs"] == 1
 
 
+def test_placeholder_and_very_short_names_never_make_two_people_one(linux_machine, make_repo):
+    # Machine accounts and git's defaults are shared by many different people.
+    for name in ("root", "Ubuntu", "ec2-user", "Your Name", "me"):
+        repo = make_repo(linux_machine.home / "code" / f"ph-{name.replace(' ', '')}")
+        _commit_as(repo, "x.py", "base\n", name, "one@first-company.example", 20)
+        git(repo, "checkout", "-q", "-b", "feat")
+        _commit_as(repo, "x.py", "branch\n", name, "one@first-company.example", 3)
+        git(repo, "checkout", "-q", "main")
+        _commit_as(repo, "x.py", "other\n", name, "two@second-company.example", 2)
+        item, _ = sc.inspect_repo(repo, linux_machine.env(), 14, sc.Hasher())
+        assert item["people_in_window"] == 2, name
+        assert item["cross_author_overlap_pairs"] == 1 and item["cross_email_overlap_pairs"] == 1, name
+
+
+def test_mailmap_files_named_in_the_persons_git_config_are_never_read(linux_machine, make_repo, tmp_path):
+    # mailmap.file (or mailmap.blob) in the person's global config could point anywhere; git is
+    # told to ignore both, so only the repository's own, checked .mailmap is used.
+    outside = tmp_path / "outside.mailmap"
+    outside.write_text("Alice Smith <alice@work.example> Al S <al@laptop.example>\n", encoding="utf-8")
+    user_home = tmp_path / "git-home"
+    user_home.mkdir()
+    (user_home / ".gitconfig").write_text(f"[mailmap]\n\tfile = {outside.as_posix()}\n\tblob = HEAD:.mailmap\n",
+                                          encoding="utf-8")
+    repo = make_repo(linux_machine.home / "code" / "global-mailmap")
+    _two_identity_repo(repo, "Al S", "al@laptop.example")
+    env = linux_machine.env(HOME=str(user_home), USERPROFILE=str(user_home))
+    item, _ = sc.inspect_repo(repo, env, 14, sc.Hasher())
+    assert item["mailmap_read"] is True
+    assert item["cross_author_overlap_pairs"] == 1, "a mailmap named in the global config was used"
+
+
 def test_mailmap_groups_identities_only_when_safe_to_read(linux_machine, make_repo, tmp_path, monkeypatch):
-    mapping = "Alice Smith <alice@work.example> A. S. <al@laptop.example>\n"
+    # No trailing punctuation in the name: older git (2.34) strips a trailing "." when it commits.
+    mapping = "Alice Smith <alice@work.example> Al S <al@laptop.example>\n"
     repo = make_repo(linux_machine.home / "code" / "mailmap")
-    _two_identity_repo(repo, "A. S.", "al@laptop.example")          # neither name nor email matches
+    _two_identity_repo(repo, "Al S", "al@laptop.example")           # neither name nor email matches
     item, _ = sc.inspect_repo(repo, linux_machine.env(), 14, sc.Hasher())
     assert item["mailmap_read"] is True and item["cross_author_overlap_pairs"] == 1
     (repo / ".mailmap").write_text(mapping, encoding="utf-8")

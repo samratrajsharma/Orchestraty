@@ -45,7 +45,7 @@ import time
 from pathlib import Path
 
 SCHEMA = "orch-scan/1"
-SCANNER_VERSION = "0.3.1"
+SCANNER_VERSION = "0.3.2"
 
 MAX_REPOS = 50          # repositories inspected per run
 MAX_REFS = 100          # unmerged branches inspected per repository, newest first
@@ -811,6 +811,9 @@ def _git(repo, args, env):
            "-c", "log.showSignature=false",       # no gpg.program / ssh-keygen runs
            "-c", "log.diffMerges=first-parent",   # -m shows a merge against its first parent only
            "-c", "log.mailmap=false",             # .mailmap is read only for %aN/%aE (_mailmap_safe)
+           # and never from a file or blob named in the person's own git config, which could
+           # point anywhere (a network share, a cloud placeholder): only the checked .mailmap.
+           "-c", "mailmap.file=", "-c", "mailmap.blob=",
            "-c", "protocol.allow=never",          # no transport (see GIT_ALLOW_PROTOCOL)
            "-C", str(repo)] + list(args)
     proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -964,10 +967,21 @@ def _squash_merged(net, theirs):
 _NOREPLY = re.compile(r"^(?:\d+\+)?([^@+]+)@users\.noreply\.github\.com$")
 
 
+# Names that many different people commit under: machine and container accounts, and git's
+# unedited defaults. They never make two identities one person (their email addresses still
+# can). Compared after normalising, as _name_node does ("ec2-user" -> "ec2user").
+PLACEHOLDER_NAMES = {"root", "ubuntu", "admin", "administrator", "user", "runner", "ec2user", "vagrant",
+                     "pi", "git", "dev", "developer", "test", "unknown", "yourname"}
+MIN_NAME_LENGTH = 3     # after normalising; shorter names ("me", "a") say too little
+
+
 def _name_node(name):
-    """A name compared without case, spaces or punctuation ("Alice Smith" = "alice.smith")."""
+    """A name compared without case, spaces or punctuation ("Alice Smith" = "alice.smith"), or
+    None for a placeholder or very short name, which must not group identities."""
     key = re.sub(r"[\W_]+", "", name.casefold())
-    return "n:" + key if key else None
+    if len(key) < MIN_NAME_LENGTH or key in PLACEHOLDER_NAMES:
+        return None
+    return "n:" + key
 
 
 class _People:
@@ -976,8 +990,9 @@ class _People:
     Two identities are one person when they share an email address or a name (ignoring case,
     spaces and punctuation). A GitHub noreply address (<id>+<login>@users.noreply.github.com,
     used for squash merges made on the web with email privacy on) also counts its login as a
-    name, because an account with no display name commits under its login. Two different
-    people who share a name are therefore counted as one. Nothing here is ever output."""
+    name, because an account with no display name commits under its login. Placeholder and
+    very short names never group (PLACEHOLDER_NAMES). Two different people who share any
+    other name are counted as one. Nothing here is ever output."""
 
     def __init__(self):
         self._parent = {}
