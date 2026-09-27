@@ -32,9 +32,6 @@ build/
 .env.*
 !.env.example
 
-# ───────────── Local agent config (not shared) ─────────────
-.claude/
-
 # ───────────── Docs — kept local, not committed (per request) ─────────────
 # Except the architecture decision records in docs/decisions/, which are tracked.
 # "/docs/*" (not "/docs/") so git still looks inside docs/ and the "!" rule can apply.
@@ -56,13 +53,3 @@ orch-scan-*.json
 Thumbs.db
 ~$*
 *.swp
-
-# ───────────── This workspace only (never pushed) ─────────────
-# Old local git folders set aside (2026-09)
-/.git-*/
-# Local working folders
-/planning-research/
-/_migration/
-# Google Drive sync scratch folders
-.tmp.driveupload/
-.tmp.drivedownload/
