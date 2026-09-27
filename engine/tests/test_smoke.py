@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import py_compile
 
 import pytest
 
@@ -28,5 +27,6 @@ def test_module_imports(mod):
 def test_entrypoints_compile(project_root, script):
     path = project_root / script
     assert path.exists(), f"missing {script}"
-    # raises py_compile.PyCompileError on a syntax error
-    py_compile.compile(str(path), doraise=True)
+    # Compiled in memory: raises SyntaxError on a syntax error, and writes no bytecode
+    # (py_compile would write __pycache__ even with PYTHONDONTWRITEBYTECODE set).
+    compile(path.read_text(encoding="utf-8"), str(path), "exec")
