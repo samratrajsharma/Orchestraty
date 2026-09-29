@@ -1,6 +1,7 @@
 """Track. Snapshot a repo at commits and diff the structure over time:
-changelog, architecture delta, and learning delta. Uses git (worktrees) — works on any
-git repo; structural by default, with optional LLM narration."""
+changelog, architecture delta, and learning delta. Snapshots read each commit from git's
+object store (no worktree, nothing written into the repository) — works on any git repo;
+structural by default, with optional LLM narration."""
 from __future__ import annotations
 import hashlib
 import json
@@ -17,11 +18,14 @@ def _git(args, cwd, timeout=120):
     #   user and exits non-zero ("detected dubious ownership") - common on Windows
     #   for folders written by a service/other shell. Our clones are ours; trust them.
     # core.longpaths: deep paths blow past Windows' 260-char limit.
+    # encoding: git writes UTF-8; decoding with the locale (cp1252 on Windows) crashed
+    #   git_log on the first non-ASCII author or subject.
     env = dict(os.environ)
     env["GIT_TERMINAL_PROMPT"] = "0"        # never block on a credential prompt
     return subprocess.run(
         ["git", "-c", "safe.directory=*", "-c", "core.longpaths=true"] + args,
-        cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
+        cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=timeout, env=env)
 
 
 def git_probe(path):
@@ -85,34 +89,35 @@ def fingerprint(idx, commit):
             "imports": imports, "calls": calls}
 
 
-def snapshot(source_path, commit, config=CONFIG):
-    """Build a structural fingerprint of the repo at `commit` (cached as JSON)."""
-    from .pipeline import build_index
-    snaps = os.path.join(config.data_dir, "snapshots")
-    os.makedirs(snaps, exist_ok=True)
-    cache = os.path.join(snaps, f"{commit[:12]}.json")
-    if os.path.exists(cache):
+def snapshot(source_path, commit, config=CONFIG, use_cache=None):
+    """Build a structural fingerprint of the repo at `commit` (any ref git accepts).
+
+    The commit is read from git's object store: no worktree is created and nothing is
+    written into the repository. The ref is resolved to its full SHA first; the JSON cache
+    is keyed by that SHA alone, which fixes the content, so a moved branch, a ref with a
+    slash, a 12-character prefix clash or another repository can't be served a wrong
+    entry. With use_cache off (config.use_cache by default) nothing is read or written."""
+    from .ingest import resolve_commit
+    from .pipeline import build_index_at
+    if use_cache is None:
+        use_cache = config.use_cache
+    sha = resolve_commit(source_path, commit)
+    cache = os.path.join(config.data_dir, "snapshots", f"{sha}.json")
+    if use_cache and os.path.exists(cache):
         try:
-            return json.load(open(cache))
+            with open(cache, "r", encoding="utf-8") as fh:
+                return json.load(fh)
         except Exception:
             pass
-    # Absolute path: `git worktree add` runs with cwd=source_path, but build_index(wt)
-    # below runs from the process cwd. A relative data_dir (e.g. "./.cache") would make
-    # git create the worktree under source_path while build_index looks for it under the
-    # process cwd -> "Not a directory". abspath keeps both in agreement.
-    wt = os.path.abspath(os.path.join(config.data_dir, "worktrees", commit[:12]))
-    add = _git(["worktree", "add", "--detach", "--force", wt, commit], source_path)
-    if add.returncode != 0:
-        raise RuntimeError(f"git worktree failed: {add.stderr.strip()[:300]}")
-    try:
-        idx = build_index(wt, config, use_cache=False, register=False)
-        fp = fingerprint(idx, commit)
-    finally:
-        _git(["worktree", "remove", "--force", wt], source_path)
-    try:
-        json.dump(fp, open(cache, "w"))
-    except Exception:
-        pass
+    idx = build_index_at(source_path, sha, config, use_cache=False, register=False)
+    fp = fingerprint(idx, sha)
+    if use_cache:
+        try:
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            with open(cache, "w", encoding="utf-8") as fh:
+                json.dump(fp, fh)
+        except Exception:
+            pass
     return fp
 
 

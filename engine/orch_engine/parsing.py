@@ -583,9 +583,11 @@ def parse_js(rel_path, source, language):
 
 
 # ---------------- dispatch ----------------
-def parse_file(rel_path, abs_path):
+def parse_file(rel_path, abs_path, text=None):
+    """Parse one file. `text`, when given, is used instead of reading `abs_path` (a file
+    read from git's object store has no path on disk)."""
     ext = os.path.splitext(rel_path)[1].lower()
-    src = _read(abs_path)
+    src = _read(abs_path) if text is None else text
     if ext == ".py":
         return parse_python(rel_path, src)          # stdlib ast - always, most reliable
     if ext in JS_EXTS:

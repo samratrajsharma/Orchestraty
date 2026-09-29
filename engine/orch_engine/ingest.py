@@ -156,9 +156,12 @@ def _run_git(args, cwd=None, timeout=60):
     #   thinks a repo belongs to another user. These are OUR clones in OUR cache, so
     #   the guard buys nothing and silently breaks every git call we make.
     # core.longpaths: deep node_modules paths blow past Windows' 260-char limit.
+    # encoding: git writes UTF-8; the locale default (cp1252 on Windows) crashed on the
+    #   first non-ASCII author or message.
     return subprocess.run(
         ["git", "-c", "safe.directory=*", "-c", "core.longpaths=true"] + args,
-        cwd=cwd, capture_output=True, text=True, timeout=timeout, env=_git_env())
+        cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=timeout, env=_git_env())
 
 
 def _capture(args, cwd, timeout=20):
@@ -326,8 +329,21 @@ def clone_or_local(source, data_dir):
     return path
 
 
+def git_toplevel(path):
+    """The top folder of the git working tree `path` belongs to, or "" when it is in none.
+    Asks git (`rev-parse`) instead of looking for a .git folder, which a linked worktree
+    doesn't have (its .git is a file)."""
+    top = _git(["rev-parse", "--show-toplevel"], path)
+    return os.path.normpath(top) if top else ""
+
+
+def _same_path(a, b):
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
 def repo_meta(path, name=None):
-    is_git = os.path.isdir(os.path.join(path, ".git"))
+    top = git_toplevel(path)
+    is_git = bool(top) and _same_path(top, path)      # the top of a work tree, not a subfolder
     commit = _git(["rev-parse", "HEAD"], path) if is_git else ""
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], path) if is_git else ""
     n = _git(["rev-list", "--count", "HEAD"], path) if is_git else ""
@@ -341,9 +357,28 @@ def repo_meta(path, name=None):
     )
 
 
-def list_files(path, max_files=20000):
+def posix_rel(abs_p, root):
+    """The repo-relative id of a path: always POSIX ('pkg/sub/mod.py'), on every OS, so
+    ids match git's paths, PR paths and the same repo indexed on another machine."""
+    return os.path.relpath(abs_p, root).replace(os.sep, "/")
+
+
+def _kind(rel):
+    """'code', 'doc' or None for a repo-relative path, by extension."""
+    ext = os.path.splitext(rel)[1].lower()
+    if ext in CODE_EXTS:
+        return "code"
+    if ext in DOC_EXTS or ext in CONFIG_EXTS:
+        return "doc"
+    return None
+
+
+def list_files(path, max_files=20000, not_analysed=None):
+    """(code, docs) as sorted [(posix rel, abs)]. When a list is passed as `not_analysed`,
+    every folder and link the walk skips is appended to it as {"path", "reason"}."""
     code, docs = [], []
     root_real = os.path.realpath(path)
+    skipped = not_analysed if not_analysed is not None else []
 
     def _contained(p):
         rp = os.path.realpath(p)
@@ -353,35 +388,176 @@ def list_files(path, max_files=20000):
     # symlinked FILE (evil.py -> /etc/passwd) would still be listed and later read back
     # to the caller / LLM. Skip any symlink, and any path whose realpath escapes the repo.
     for root, dirs, files in os.walk(path):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS
-                   and not os.path.islink(os.path.join(root, d))
-                   and _contained(os.path.join(root, d))]
+        kept = []
+        for d in dirs:
+            full = os.path.join(root, d)
+            if d in SKIP_DIRS:
+                if d != ".git":
+                    skipped.append({"path": posix_rel(full, path) + "/", "reason": "skipped folder"})
+            elif os.path.islink(full) or not _contained(full):
+                skipped.append({"path": posix_rel(full, path),
+                                "reason": "symlink" if os.path.islink(full) else "outside the repository"})
+            else:
+                kept.append(d)
+        dirs[:] = kept
         for f in files:
             abs_p = os.path.join(root, f)
             if os.path.islink(abs_p) or not _contained(abs_p):
+                skipped.append({"path": posix_rel(abs_p, path),
+                                "reason": "symlink" if os.path.islink(abs_p) else "outside the repository"})
                 continue
-            ext = os.path.splitext(f)[1].lower()
-            rel = os.path.relpath(abs_p, path)
-            if ext in CODE_EXTS:
-                code.append((rel, abs_p))
-            elif ext in DOC_EXTS or ext in CONFIG_EXTS:
-                docs.append((rel, abs_p))
+            kind = _kind(f)
+            if kind == "code":
+                code.append((posix_rel(abs_p, path), abs_p))
+            elif kind == "doc":
+                docs.append((posix_rel(abs_p, path), abs_p))
         if len(code) + len(docs) > max_files:
             import sys as _sys
             _sys.stderr.write("[orch] file cap (%d) hit in %s - indexing a partial repo; "
                               "raise list_files(max_files=) for very large repos\n"
                               % (max_files, path))
+            skipped.append({"path": "", "reason": "file cap (%d) reached: the rest of the repo" % max_files})
             break
     code.sort()
     docs.sort()
+    skipped.sort(key=lambda e: (e["path"], e["reason"]))
     return code, docs
 
 
-def ingest(source, data_dir):
+def ingest(source, data_dir, not_analysed=None):
     """source -> (RepoMeta, list[(rel, abs)] code files, list[(rel, abs)] doc files)."""
     path = clone_or_local(source, data_dir)
     # for a URL the folder may be name-keyed; the display name comes from the url
     name = name_from_url(source) if is_git_source(source) else None
     meta = repo_meta(path, name=name)
-    code, docs = list_files(path)
+    code, docs = list_files(path, not_analysed=not_analysed)
     return meta, code, docs
+
+
+# ---------------- a commit, read from git's object store ----------------
+# Reads any commit without checking it out: `ls-tree` lists its files and `cat-file --batch`
+# reads them. No worktree, no archive and no write into the repository's .git, so a
+# volunteer's repository is left exactly as it was; export-ignore attributes don't apply.
+MAX_BLOB_BYTES = 2_000_000          # larger files are listed as not analysed, never parsed
+_FULL_SHA = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
+
+
+def _git_bytes(args, cwd, stdin=None, timeout=300):
+    """(returncode, stdout bytes, stderr text) for a read-only git command. Bytes, so no
+    locale decoding ever touches paths or file contents."""
+    env = _git_env()
+    env["GIT_OPTIONAL_LOCKS"] = "0"            # never take the index lock, never refresh it
+    try:
+        r = subprocess.run(["git", "-c", "safe.directory=*", "-c", "core.longpaths=true"] + args,
+                           cwd=cwd, input=stdin, capture_output=True, timeout=timeout, env=env)
+    except FileNotFoundError:
+        return 127, b"", "git is not installed or not on PATH."
+    return r.returncode, r.stdout, r.stderr.decode("utf-8", "replace").strip()
+
+
+def resolve_commit(path, ref):
+    """The full SHA of the commit `ref` names in the repository at `path`. Raises ValueError
+    for anything that isn't a commit (or looks like an option)."""
+    ref = (ref or "").strip()
+    if not ref or ref.startswith("-"):
+        raise ValueError("invalid git ref: %r" % (ref,))
+    rc, out, err = _git_bytes(["rev-parse", "--verify", "--quiet", "--end-of-options", ref + "^{commit}"], path,
+                              timeout=60)
+    sha = out.decode("ascii", "replace").strip()
+    if rc != 0 or not _FULL_SHA.match(sha):
+        raise ValueError("not a commit in %s: %r%s" % (path, ref, (" (%s)" % err) if err else ""))
+    return sha
+
+
+def commit_files(path, sha, max_bytes=MAX_BLOB_BYTES, max_files=20000):
+    """(code, docs, not_analysed) for commit `sha`: code and docs as sorted [(posix rel,
+    blob sha)], chosen by the same rules as list_files, and not_analysed as
+    [{"path", "reason"}] for symlinks, submodules, oversized files and skipped folders."""
+    rc, out, err = _git_bytes(["ls-tree", "-r", "-z", "-l", "--full-tree", sha], path)
+    if rc != 0:
+        raise RuntimeError("git ls-tree failed for %s: %s" % (sha, err[:300]))
+    code, docs, skipped, skipped_dirs, capped = [], [], [], set(), False
+    for record in out.split(b"\0"):
+        if not record:
+            continue
+        meta, _, raw_path = record.partition(b"\t")
+        parts = meta.split()
+        if len(parts) != 4:
+            continue
+        mode, otype, obj, size = (p.decode("ascii", "replace") for p in parts)
+        rel = raw_path.decode("utf-8", "replace")
+        comps = rel.split("/")
+        hit = next((i for i, c in enumerate(comps[:-1]) if c in SKIP_DIRS), None)
+        if hit is not None:
+            folder = "/".join(comps[:hit + 1]) + "/"
+            if folder not in skipped_dirs:
+                skipped_dirs.add(folder)
+                skipped.append({"path": folder, "reason": "skipped folder"})
+            continue
+        if otype == "commit":
+            skipped.append({"path": rel, "reason": "submodule"})
+            continue
+        if mode == "120000":
+            skipped.append({"path": rel, "reason": "symlink"})
+            continue
+        kind = _kind(rel)
+        if otype != "blob" or kind is None:
+            continue
+        if size.isdigit() and int(size) > max_bytes:
+            skipped.append({"path": rel, "reason": "oversized (%s bytes)" % size})
+            continue
+        if len(code) + len(docs) >= max_files:
+            if not capped:
+                capped = True
+                skipped.append({"path": "", "reason": "file cap (%d) reached: the rest of the commit" % max_files})
+            continue
+        (code if kind == "code" else docs).append((rel, obj))
+    code.sort()
+    docs.sort()
+    skipped.sort(key=lambda e: (e["path"], e["reason"]))
+    return code, docs, skipped
+
+
+def read_blobs(path, shas):
+    """{blob sha: bytes} for the given blobs, in one `git cat-file --batch` call."""
+    wanted = sorted(set(shas))
+    if not wanted:
+        return {}
+    rc, out, err = _git_bytes(["cat-file", "--batch"], path, stdin="".join(s + "\n" for s in wanted).encode())
+    if rc != 0:
+        raise RuntimeError("git cat-file failed: %s" % err[:300])
+    blobs, pos = {}, 0
+    for sha in wanted:
+        nl = out.index(b"\n", pos)
+        header = out[pos:nl].split()
+        if len(header) != 3 or header[0].decode() != sha:
+            raise RuntimeError("unexpected git cat-file output for %s" % sha)
+        size = int(header[2])
+        blobs[sha] = out[nl + 1:nl + 1 + size]
+        pos = nl + 1 + size + 1                    # the content is followed by one newline
+    return blobs
+
+
+def blob_text(data):
+    """File text as the working-tree reader sees it: UTF-8 with replacement characters, and
+    universal newlines (open() in text mode turns \\r\\n and \\r into \\n)."""
+    return data.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def ingest_commit(source, ref, data_dir, max_bytes=MAX_BLOB_BYTES):
+    """(RepoMeta, code, docs, not_analysed) for commit `ref` of a git repository, read from
+    its object store at the repository's top folder. code and docs are [(posix rel, blob sha)]."""
+    path = clone_or_local(source, data_dir)
+    top = git_toplevel(path)
+    if not top:
+        raise ValueError("not a git repository: %s" % path)
+    sha = resolve_commit(top, ref)
+    code, docs, skipped = commit_files(top, sha, max_bytes=max_bytes)
+    full_ref = _git(["rev-parse", "--verify", "--quiet", "--symbolic-full-name", ref], top)  # ref checked above
+    branch = full_ref[len("refs/heads/"):] if full_ref.startswith("refs/heads/") else ""
+    n = _git(["rev-list", "--count", sha], top)
+    name = name_from_url(source) if is_git_source(source) else None
+    meta = RepoMeta(name=name or os.path.basename(top.rstrip("/\\")) or top, path=top, commit=sha,
+                    branch=branch, is_git=True,
+                    n_commits=int(n) if n.isdigit() else 0)
+    return meta, code, docs, skipped

@@ -17,6 +17,8 @@ Design notes:
 from __future__ import annotations
 
 import os
+import posixpath
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -52,6 +54,42 @@ def _get_index():
         s = _IDX.stats()
         _log(f"ready: {s['files_parsed']} files, {s['symbols']} symbols, {s['graph_edges']} edges")
     return _IDX
+
+
+# ── path normalisation at the boundary ─────────────────────────────────────────
+_ABS_WINDOWS = re.compile(r"^[A-Za-z]:[\\/]|^[\\/]{2}")
+
+
+def _norm_path(idx, path):
+    """A file id as the index stores it (repo-relative, POSIX) from whatever an agent
+    passes: 'api\\routes.py', './api/routes.py', 'api//routes.py', or an absolute path
+    inside the repository. Anything else comes back POSIX-cleaned but otherwise unchanged,
+    so it simply matches nothing."""
+    if not isinstance(path, str):
+        return path
+    s = path.strip()
+    if s and (os.path.isabs(s) or _ABS_WINDOWS.match(s)):
+        try:
+            rel = os.path.relpath(s, idx.meta.path)
+            if rel != os.curdir and not rel.startswith(os.pardir):
+                s = rel
+        except ValueError:                        # another drive on Windows
+            pass
+    s = s.replace("\\", "/")
+    if not s:
+        return s
+    s = posixpath.normpath(s)
+    while s.startswith("./"):
+        s = s[2:]
+    return s
+
+
+def _norm_symbol(idx, symbol):
+    """A symbol query with its file part (before '::') normalised like a path."""
+    if isinstance(symbol, str) and "::" in symbol:
+        file_part, _, qual = symbol.partition("::")
+        return _norm_path(idx, file_part) + "::" + qual.strip()
+    return symbol.strip() if isinstance(symbol, str) else symbol
 
 
 # ── graph helpers ──────────────────────────────────────────────────────────────
@@ -147,7 +185,7 @@ def _area(fid: str) -> str:
 
 def _changed_files(idx, files, base) -> set[str]:
     if files:
-        return set(files)
+        return {_norm_path(idx, f) for f in files}
     if base:
         b = track.snapshot(idx.meta.path, base, idx.config)
         h = track.fingerprint(idx, idx.meta.commit)
@@ -174,6 +212,8 @@ def overview() -> dict:
         "entry_points": ins["entry_files"],
         "hub_files": ins["hub_files"][:10],
         "most_complex": ins["complex_symbols"][:10],
+        "not_analysed": idx.not_analysed[:50],
+        "not_analysed_count": len(idx.not_analysed),
     }
 
 
@@ -181,6 +221,7 @@ def find_symbol(name: str) -> dict:
     """Resolve a symbol name to its graph node(s). Accepts a bare name ('refund'), a
     qualified name ('RefundService.refund'), or a full id ('api/refunds.py::RefundService.refund')."""
     idx = _get_index()
+    name = _norm_symbol(idx, name)
     hits = _resolve(idx, name)
     if not hits:
         return {"query": name, "matches": [], "hint": "no match — check spelling or call overview()"}
@@ -191,6 +232,7 @@ def callers_of(symbol: str, transitive: bool = False, max_depth: int = 6) -> dic
     """Who calls this symbol, from resolved call edges (not text matches). transitive=True
     walks callers-of-callers up to max_depth."""
     idx = _get_index()
+    symbol = _norm_symbol(idx, symbol)
     hits = _resolve(idx, symbol)
     if not hits:
         return {"error": f"symbol not found: {symbol!r}", "hint": "call find_symbol(name) to see options"}
@@ -205,6 +247,7 @@ def callers_of(symbol: str, transitive: bool = False, max_depth: int = 6) -> dic
 def callees_of(symbol: str, transitive: bool = False, max_depth: int = 6) -> dict:
     """What this symbol calls, from resolved call edges. transitive=True walks callees-of-callees."""
     idx = _get_index()
+    symbol = _norm_symbol(idx, symbol)
     hits = _resolve(idx, symbol)
     if not hits:
         return {"error": f"symbol not found: {symbol!r}", "hint": "call find_symbol(name) to see options"}
@@ -221,6 +264,7 @@ def blast_radius(symbol: str) -> dict:
     (recursively) plus files that import its home file. One deterministic call instead of
     ~15 greps. Call this BEFORE editing any function."""
     idx = _get_index()
+    symbol = _norm_symbol(idx, symbol)
     hits = _resolve(idx, symbol)
     if not hits:
         return {"error": f"symbol not found: {symbol!r}", "hint": "call find_symbol(name) to see options"}
@@ -236,6 +280,7 @@ def impact_of_change(file: str) -> dict:
     """Blast radius of editing a whole file: the union of the impact of every symbol it
     defines, plus the files that depend on it. Use a repo-relative path (see overview)."""
     idx = _get_index()
+    file = _norm_path(idx, file)
     syms = [nid for nid, n in idx.graph.nodes.items()
             if n["type"] == "symbol" and n["data"].get("file") == file]
     if not syms:
@@ -332,6 +377,7 @@ def public_surface(file: str | None = None) -> dict:
     called from OTHER files. Pass file=<rel path> for just that file's cross-file API."""
     idx = _get_index()
     if file:
+        file = _norm_path(idx, file)
         fs = insights.file_summary(idx, file)
         if not fs:
             return {"error": f"file not found: {file!r}"}

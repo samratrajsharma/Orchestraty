@@ -6,20 +6,23 @@ import os
 import pickle
 
 from .config import CONFIG
-from .ingest import ingest
+from .ingest import MAX_BLOB_BYTES, blob_text, ingest, ingest_commit, read_blobs
 from .parsing import parse_file
 from .graph import build_graph
 
 
 class RepoIndex:
     """Everything the engine knows about one repository at one commit: the parsed files
-    and the code graph built from them."""
+    and the code graph built from them. `not_analysed` lists what the index left out
+    (skipped folders, symlinks, submodules, oversized files) as {"path", "reason"}, so a
+    gap is stated rather than read as "nothing there"."""
 
-    def __init__(self, meta, parsed_files, graph, config):
+    def __init__(self, meta, parsed_files, graph, config, not_analysed=None):
         self.meta = meta
         self.parsed_files = parsed_files
         self.graph = graph
         self.config = config
+        self.not_analysed = list(not_analysed or [])
         self.memo = {}          # per-index cache for pure analyses (insights, overview, ...)
 
     def stats(self):
@@ -142,18 +145,19 @@ def build_index(source, config=CONFIG, progress=None, use_cache=None, register=T
     if use_cache is None:
         use_cache = config.use_cache
     log("Ingesting repository ...")
-    meta, code_files, doc_files = ingest(source, config.data_dir)
+    not_analysed = []
+    meta, code_files, doc_files = ingest(source, config.data_dir, not_analysed=not_analysed)
     files = code_files + doc_files
-    sig = _signature(meta, files)
-    cache = _cache_file(config.data_dir, meta, sig)
 
-    secret = _cache_secret(config.data_dir)
     parsed = graph = None
-    if use_cache and os.path.exists(cache):
-        log("Loading cached parse/graph ...")
-        loaded = _cache_load(cache, secret)       # HMAC-verified; None on miss/tamper
-        if loaded is not None and len(loaded) >= 2:   # older caches also hold chunks: ignored
-            parsed, graph = loaded[0], loaded[1]
+    if use_cache:                                 # with use_cache off, nothing is written to data_dir
+        cache = _cache_file(config.data_dir, meta, _signature(meta, files))
+        secret = _cache_secret(config.data_dir)
+        if os.path.exists(cache):
+            log("Loading cached parse/graph ...")
+            loaded = _cache_load(cache, secret)       # HMAC-verified; None on miss/tamper
+            if loaded is not None and len(loaded) >= 2:   # older caches also hold chunks: ignored
+                parsed, graph = loaded[0], loaded[1]
 
     if parsed is None:
         log(f"Parsing {len(code_files)} code + {len(doc_files)} doc files ...")
@@ -169,4 +173,49 @@ def build_index(source, config=CONFIG, progress=None, use_cache=None, register=T
     if register:
         record_repo(config.data_dir, source, meta)
     log("Done.")
-    return RepoIndex(meta, parsed, graph, config)
+    return RepoIndex(meta, parsed, graph, config, not_analysed)
+
+
+def build_index_at(source, ref="HEAD", config=CONFIG, progress=None, use_cache=None, register=False,
+                   max_bytes=MAX_BLOB_BYTES):
+    """Index commit `ref` of a git repository straight from its object store, at the
+    repository's top folder. Nothing is checked out and nothing is written into the
+    repository: no worktree, no archive. The commit is resolved to its full SHA first, and
+    that SHA (never a ref name or a prefix) keys the cache, so a moved branch or another
+    clone can never be served a stale entry. `use_cache` is honoured both ways."""
+    def log(m):
+        if progress:
+            progress(m)
+
+    if use_cache is None:
+        use_cache = config.use_cache
+    log("Reading commit %s from git objects ..." % ref)
+    meta, code_files, doc_files, not_analysed = ingest_commit(source, ref, config.data_dir, max_bytes=max_bytes)
+    files = code_files + doc_files
+    cache = os.path.join(config.data_dir, "cache", "commit-%s-%d.pkl" % (meta.commit, max_bytes))
+
+    parsed = graph = None
+    if use_cache:
+        secret = _cache_secret(config.data_dir)
+        if os.path.exists(cache):
+            log("Loading cached parse/graph ...")
+            loaded = _cache_load(cache, secret)       # HMAC-verified; None on miss/tamper
+            if loaded is not None and len(loaded) >= 2:
+                parsed, graph = loaded[0], loaded[1]
+
+    if parsed is None:
+        log(f"Parsing {len(code_files)} code + {len(doc_files)} doc files ...")
+        blobs = read_blobs(meta.path, [sha for _, sha in files])
+        parsed = [parse_file(rel, None, text=blob_text(blobs[sha])) for rel, sha in files]
+        log("Building code graph ...")
+        graph = build_graph(parsed)
+        if use_cache:
+            try:
+                _cache_dump(cache, (parsed, graph), secret)
+            except Exception:
+                pass
+
+    if register:
+        record_repo(config.data_dir, source, meta)
+    log("Done.")
+    return RepoIndex(meta, parsed, graph, config, not_analysed)
