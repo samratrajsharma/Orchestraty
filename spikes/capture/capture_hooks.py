@@ -4,9 +4,11 @@ Status: throwaway (Phase 0). Not part of the product.
 
     python capture_hooks.py [--root <phase-0 folder>] [--python <absolute python>] [--async] [--headsup]
 
-It writes only inside the phase-0 folder (%LOCALAPPDATA%\\orch-phase0, or
+It writes only inside the phase-0 folder (%USERPROFILE%\\orch-phase0 on Windows, or
 ~/.local/state/orch-phase0 on WSL2 and macOS):
-  * profiles/claude/settings.json: the hooks, merged into any settings already there;
+  * profiles/claude/settings.json: the hooks, merged into any settings already there, and
+    DISABLE_AUTOUPDATER=1 in its env block, so the pinned Claude Code stays at its version
+    (and never updates any other install);
   * shim/capture_shim.py: a copy of the shim, read back once after writing (a first read of a
     freshly written file was slow, probably on-access scanning);
   * spool/claude/: the folder the shim appends to;
@@ -32,10 +34,11 @@ SHIM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "capture_shim.py
 HEADSUP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "capture_headsup.py")
 HEADSUP_MATCHER = "Edit|Write|MultiEdit"
 WRITABLE = ("profiles", "shim", "spool", "headsup")
-# Claude Code events captured. PreToolUse is the pre-edit heads-up read (--headsup).
-EVENTS = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure",
-          "Stop", "SubagentStop"]
-TOOL_EVENTS = {"PostToolUse", "PostToolUseFailure"}          # take a tool matcher
+# Claude Code events captured. PreToolUse is captured for Edit, Write and MultiEdit only, the
+# calls the pre-edit heads-up (--headsup) answers, so that its events can be counted too.
+EVENTS = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
+          "Stop", "SubagentStop", "StopFailure"]           # StopFailure: a turn that ended in an API error
+MATCHERS = {"PreToolUse": HEADSUP_MATCHER, "PostToolUse": "*", "PostToolUseFailure": "*"}
 TIMEOUT_SECONDS = 10
 
 
@@ -44,9 +47,42 @@ class Refused(Exception):
 
 
 def default_root():
+    """%USERPROFILE%\\orch-phase0 on Windows, ~/.local/state/orch-phase0 elsewhere. On Windows it is
+    kept out of AppData: a packaged app's writes there go to its own private copy of AppData,
+    which other programs don't see, so the folder would split in two."""
     if os.name == "nt":
-        return os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), ROOT_NAME)
+        return os.path.join(os.environ.get("USERPROFILE") or os.path.expanduser("~"), ROOT_NAME)
     return os.path.join(os.path.expanduser("~"), ".local", "state", ROOT_NAME)
+
+
+def pinned_program(root, name):
+    """The pinned copy of an agent's command-line program under <root>/tools/<name>, or None.
+    The daily install on PATH is never used for the isolated profiles."""
+    base = os.path.join(root, "tools", name)
+    exe = name + ".exe" if os.name == "nt" else name
+    for rel in (exe, os.path.join("bin", exe), os.path.join("node_modules", ".bin", name + ".cmd"),
+                os.path.join("node_modules", ".bin", name)):
+        path = os.path.join(base, rel)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+# PowerShell ends a single-quoted string at any of these, not only at the ASCII apostrophe.
+PS_SINGLE_QUOTES = "'" + "".join(chr(c) for c in (0x2018, 0x2019, 0x201A, 0x201B))
+
+
+def ps_quote(value):
+    """A PowerShell single-quoted string holding exactly `value`."""
+    return "'" + "".join(c + c if c in PS_SINGLE_QUOTES else c for c in value) + "'"
+
+
+def login_lines(variable, profile, program):
+    """One line each for PowerShell and bash that start the pinned program with its profile
+    variable set, and leave nothing set afterwards (bash sets it for that one command only)."""
+    sh_profile, sh_program = profile.replace("'", "'\"'\"'"), program.replace("'", "'\"'\"'")
+    return [f"$env:{variable} = {ps_quote(profile)}; & {ps_quote(program)}; Remove-Item Env:{variable}",
+            f"{variable}='{sh_profile}' '{sh_program}'"]
 
 
 def _is_link(path):
@@ -85,8 +121,8 @@ def hook_entry(python, shim, spool, event, use_async):
     if use_async:
         hook["async"] = True
     entry = {"hooks": [hook]}
-    if event in TOOL_EVENTS:
-        entry["matcher"] = "*"
+    if event in MATCHERS:
+        entry["matcher"] = MATCHERS[event]
     return entry
 
 
@@ -109,10 +145,12 @@ def merged_settings(existing, python, shim, spool, use_async, headsup=None):
     for event in EVENTS:
         kept = [e for e in hooks.get(event, []) if isinstance(e, dict) and not ours(e)]
         hooks[event] = kept + [hook_entry(python, shim, spool, event, use_async)]
-    if headsup:
-        kept = [e for e in hooks.get("PreToolUse", []) if isinstance(e, dict) and not ours(e)]
-        hooks["PreToolUse"] = kept + [headsup_entry(python, headsup[0], headsup[1])]
+        if event == "PreToolUse" and headsup:
+            hooks[event].append(headsup_entry(python, headsup[0], headsup[1]))
     settings["hooks"] = hooks
+    env = dict(settings.get("env") or {})
+    env["DISABLE_AUTOUPDATER"] = "1"                 # the pinned version stays pinned
+    settings["env"] = env
     return settings
 
 
@@ -163,6 +201,7 @@ def main(argv=None):
     p.add_argument("--python", default=sys.executable, help="absolute path of the Python the hooks run")
     p.add_argument("--async", dest="use_async", action="store_true", help="mark every captured hook async")
     p.add_argument("--headsup", action="store_true", help="also install the pre-edit heads-up hook")
+    p.add_argument("--claude", help="the pinned Claude Code program (default: found under <root>/tools/claude)")
     args = p.parse_args(argv)
     try:
         settings_path = install(args.root, os.path.abspath(args.python) if args.python else args.python,
@@ -172,9 +211,14 @@ def main(argv=None):
         return 2
     profile = os.path.dirname(settings_path)
     print(f"wrote {settings_path}")
-    print("log in to the isolated profile with:")
-    print(f"  PowerShell:  $env:CLAUDE_CONFIG_DIR = '{profile}'; claude")
-    print(f"  bash:        CLAUDE_CONFIG_DIR='{profile}' claude")
+    program = args.claude or pinned_program(args.root, "claude")
+    if program is None:
+        print(f"no pinned Claude Code under {os.path.join(args.root, 'tools', 'claude')}: install it there first")
+        return 0
+    powershell, bash = login_lines("CLAUDE_CONFIG_DIR", profile, os.path.abspath(program))
+    print("log in to the isolated profile with the pinned Claude Code (nothing stays set afterwards):")
+    print(f"  PowerShell:  {powershell}")
+    print(f"  bash:        {bash}")
     return 0
 
 

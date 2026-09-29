@@ -10,11 +10,16 @@ with the hook's own stdin (pre-push and post-rewrite get ref lines there). It ap
 line to <spool_dir>/git/<YYYY-MM-DD>.jsonl:
 
     {"ts": <ns>, "pid": <pid>, "agent": "git", "event": "<hook>", "cwd": "...", "head": "...",
-     "args": [...], "refs": [[...], ...]}
+     "repo": "...", "commit": "...", "args": [...], "refs": [[...], ...]}
 
   * cwd: the working tree the hook ran in (git runs hooks from its top folder);
   * head: the branch HEAD names (refs/heads/...), or the commit id when HEAD is detached,
     read from the HEAD file only;
+  * repo: the repository's shared git folder (for a linked worktree, the main one's), so a
+    commit keeps its repository even after its worktree is removed;
+  * commit: post-commit and post-merge only, the commit HEAD now points at, read from the
+    branch's ref file or from packed-refs ("" if neither has it). These two hooks get no
+    commit id as an argument, and the linker (capture_link.py) needs it;
   * args: only commit ids, the flags git passes (0 or 1, amend or rebase) and a remote's
     name. A remote's URL is never kept, since it can carry a user name or a token;
   * refs: for pre-push, [local ref, local id, remote ref, remote id] per line; for
@@ -33,6 +38,8 @@ import capture_shim  # noqa: E402
 
 HOOKS = ("post-commit", "pre-push", "post-checkout", "post-merge", "post-rewrite")
 MAX_REF_LINES = 1000
+MAX_PACKED_REFS = 4 << 20
+WITH_COMMIT = ("post-commit", "post-merge")      # hooks that get no commit id as an argument
 _HEX = b"0123456789abcdef"
 _REF_CHARS = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/-"
 
@@ -86,8 +93,8 @@ def ref_lines(hook, data):
     return rows
 
 
-def head_of(cwd):
-    """The branch HEAD names, or the detached commit id, from the HEAD file; b"" if unknown."""
+def git_dir_of(cwd):
+    """The working tree's git folder (for a linked worktree, its own folder under the main one)."""
     git_dir = os.environ.get("GIT_DIR") or os.path.join(cwd, ".git")
     if not os.path.isabs(git_dir):
         git_dir = os.path.join(cwd, git_dir)
@@ -95,8 +102,13 @@ def head_of(cwd):
         with open(git_dir, "rb") as fh:
             target = fh.read(4096).strip()
         if not target.startswith(b"gitdir:"):
-            return b""
+            raise ValueError("not a git folder link")
         git_dir = os.path.join(cwd, target[7:].strip().decode("utf-8", "replace"))
+    return git_dir
+
+
+def head_of(git_dir):
+    """The branch HEAD names, or the detached commit id, from the HEAD file; b"" if unknown."""
     with open(os.path.join(git_dir, "HEAD"), "rb") as fh:
         head = fh.read(512).strip()
     if head.startswith(b"ref:"):
@@ -104,14 +116,58 @@ def head_of(cwd):
     return head if is_commit_id(head) else b""
 
 
+def common_dir(git_dir):
+    """The repository's shared git folder: a linked worktree's `commondir`, else its own folder."""
+    try:
+        with open(os.path.join(git_dir, "commondir"), "rb") as fh:
+            return os.path.normpath(os.path.join(git_dir, fh.read(4096).strip().decode("utf-8", "replace")))
+    except OSError:
+        return os.path.normpath(git_dir)
+
+
+def commit_of(git_dir, head):
+    """The commit id head points at: itself when detached, else the ref's file in the shared git
+    folder, else its packed-refs line. b"" if unknown. Reads files only; never runs git."""
+    if is_commit_id(head):
+        return head
+    if not head.startswith(b"refs/") or b".." in head:
+        return b""
+    common = common_dir(git_dir)                      # a linked worktree keeps branches in the main folder
+    try:
+        with open(os.path.join(common, *head.decode("ascii").split("/")), "rb") as fh:
+            value = fh.read(128).strip()
+        return value if is_commit_id(value) else b""
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(common, "packed-refs"), "rb") as fh:
+            data = fh.read(MAX_PACKED_REFS)
+    except OSError:
+        return b""
+    for line in data.splitlines():
+        parts = line.split(b" ")
+        if len(parts) == 2 and parts[1] == head and is_commit_id(parts[0]):
+            return parts[0]
+    return b""
+
+
 def event_line(hook, args, stdin_data, cwd, now_ns, pid):
     hook_b = hook.encode("ascii")
     parts = [b'{"ts":%d,"pid":%d,"agent":"git","event":"%s","cwd":%s' % (now_ns, pid, hook_b, json_string(cwd))]
     try:
-        head = head_of(cwd)
+        git_dir = git_dir_of(cwd)
+        head = head_of(git_dir)
     except (OSError, ValueError):
-        head = b""
+        git_dir, head = None, b""
     parts.append(b',"head":"%s"' % head)
+    if git_dir:
+        parts.append(b',"repo":%s' % json_string(common_dir(git_dir)))
+    if hook in WITH_COMMIT:
+        try:
+            commit = commit_of(git_dir, head) if git_dir else b""
+        except (OSError, ValueError):
+            commit = b""
+        parts.append(b',"commit":"%s"' % commit)
     parts.append(b',"args":[%s]' % b",".join(b'"%s"' % a for a in kept_args(hook, args)))
     rows = ref_lines(hook, stdin_data)
     if rows:

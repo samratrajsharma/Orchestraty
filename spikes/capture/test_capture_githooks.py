@@ -103,6 +103,58 @@ def test_the_recorder_line_is_valid_json_for_any_folder_name(tmp_path):
     assert rec.json_string("a\x01\ud800b") == b'"a\\u0001\\ud800b"'
 
 
+def test_the_recorder_reads_the_commit_from_loose_packed_and_worktree_refs(tmp_path):
+    main_dir = tmp_path / "repo" / ".git"
+    (main_dir / "refs" / "heads" / "feat").mkdir(parents=True)
+    (main_dir / "HEAD").write_bytes(b"ref: refs/heads/main\n")
+    (main_dir / "refs" / "heads" / "main").write_bytes(b"a" * 40 + b"\n")
+    (main_dir / "packed-refs").write_bytes(b"# pack-refs with: peeled fully-peeled sorted \n"
+                                           + b"b" * 40 + b" refs/heads/feat/x\n^" + b"c" * 40 + b"\n")
+    assert rec.commit_of(str(main_dir), rec.head_of(str(main_dir))) == b"a" * 40
+    assert rec.commit_of(str(main_dir), b"refs/heads/feat/x") == b"b" * 40          # packed only
+    assert rec.commit_of(str(main_dir), b"refs/heads/gone") == b""
+    # Only a commit id ever reaches the spool: never other bytes from a ref file, never a file
+    # outside the git folder.
+    (main_dir / "refs" / "heads" / "odd").write_bytes(b'ref: "C:\\secret path"\n')
+    assert rec.commit_of(str(main_dir), b"refs/heads/odd") == b""
+    (main_dir / "packed-refs").write_bytes(b"zz" * 20 + b" refs/heads/feat/y\n")
+    assert rec.commit_of(str(main_dir), b"refs/heads/feat/y") == b""
+    (tmp_path / "outside").write_bytes(b"e" * 40 + b"\n")
+    assert rec.commit_of(str(main_dir), b"refs/heads/../../../../outside") == b""  # to tmp_path
+    (main_dir / "packed-refs").write_bytes(b"# pack-refs with: peeled fully-peeled sorted \n"
+                                           + b"b" * 40 + b" refs/heads/feat/x\n^" + b"c" * 40 + b"\n")
+    assert rec.commit_of(str(main_dir), b"d" * 40) == b"d" * 40                      # detached
+    wt_dir = main_dir / "worktrees" / "wt"                                           # a linked worktree
+    wt_dir.mkdir(parents=True)
+    (wt_dir / "HEAD").write_bytes(b"ref: refs/heads/feat/x\n")
+    (wt_dir / "commondir").write_bytes(b"../..\n")
+    work = tmp_path / "wt"
+    work.mkdir()
+    (work / ".git").write_bytes(b"gitdir: " + str(wt_dir).encode() + b"\n")
+    event = json.loads(rec.event_line("post-commit", [], b"", str(work), 1, 2))
+    assert event["head"] == "refs/heads/feat/x" and event["commit"] == "b" * 40
+    assert "commit" not in json.loads(rec.event_line("post-checkout", [], b"", str(work), 1, 2))
+
+
+def test_post_commit_lines_carry_the_new_commit_in_a_checkout_and_a_worktree(phase0):
+    root, repo, _ = phase0
+    gh.install(str(root), str(repo), sys.executable)
+    (repo / "b.txt").write_text("2\n", encoding="utf-8")
+    git(repo, "add", "b.txt")
+    git(repo, "commit", "-q", "-m", "second")
+    first = git(repo, "rev-parse", "HEAD").stdout.decode().strip()
+    worktree = root / "repos" / "scratch-wt"
+    git(repo, "worktree", "add", "-q", "-b", "feat", str(worktree))
+    (worktree / "c.txt").write_text("3\n", encoding="utf-8")
+    git(worktree, "add", "c.txt")
+    git(worktree, "commit", "-q", "-m", "in the worktree")
+    second = git(worktree, "rev-parse", "HEAD").stdout.decode().strip()
+    commits = [(e["head"], e["commit"], os.path.normcase(e["cwd"])) for e in spool_events(root)
+               if e["event"] == "post-commit"]
+    assert commits == [("refs/heads/main", first, os.path.normcase(str(repo))),
+                       ("refs/heads/feat", second, os.path.normcase(str(worktree)))]
+
+
 def test_the_recorder_is_silent_and_fails_open(tmp_path):
     blocked = tmp_path / "spool-is-a-file"
     blocked.write_text("x", encoding="utf-8")

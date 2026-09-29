@@ -104,7 +104,8 @@ def test_the_writer_writes_only_inside_the_phase0_headsup_folder(tmp_path):
 
 def test_the_installed_headsup_hook_runs_end_to_end(root):
     settings = json.loads(Path(capture_hooks.install(str(root), sys.executable, headsup=True)).read_text(encoding="utf-8"))
-    [entry] = settings["hooks"]["PreToolUse"]
+    capture, entry = settings["hooks"]["PreToolUse"]                 # the capture shim, then the heads-up
+    assert capture["hooks"][0]["args"][2].endswith("capture_shim.py")
     assert entry["matcher"] == "Edit|Write|MultiEdit" and "async" not in entry["hooks"][0]
     hook = entry["hooks"][0]
     w.put(str(root), "/w/src/x.py", "x.py is imported by y.py")
@@ -113,7 +114,7 @@ def test_the_installed_headsup_hook_runs_end_to_end(root):
     assert json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"] == "x.py is imported by y.py"
     # Installing again, with or without the heads-up, never duplicates it.
     settings = json.loads(Path(capture_hooks.install(str(root), sys.executable, headsup=True)).read_text(encoding="utf-8"))
-    assert len(settings["hooks"]["PreToolUse"]) == 1
+    assert len(settings["hooks"]["PreToolUse"]) == 2
 
 
 def test_the_bench_prints_numbers_only(root):

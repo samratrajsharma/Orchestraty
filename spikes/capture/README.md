@@ -16,11 +16,15 @@ Records coding-agent hook events and git hook firings as one short line each, so
 | `capture_headsup.py` | The pre-edit heads-up hook: returns the ready-made context for the file about to be edited, or nothing. |
 | `capture_headsup_writer.py` | Writes the ready-made heads-up files, and times the hook's read (`bench`). |
 | `capture_latency.py` | The latency harness: the time a hook command adds over a no-op of the same form. It prints numbers only. |
+| `capture_count.py` | The loss and coverage counter: compares the spool with the agents' own session records. It prints numbers only. |
+| `capture_link.py` | The minimal linker: links each session to its commits, and checks the links against a ground truth. It prints ids and numbers only. |
+| `capture_refprobe.py` | The custom-ref probe: can a remote keep `refs/orchestraty/<person>/<device>`, and if not, a dedicated branch? |
 | `test_capture_*.py` | Tests. Every payload is synthetic. |
 
 ## The shim
 
 - **Fields kept:** `session_id`, `hook_event_name`, `tool_name`, `tool_use_id`, `cwd` and `transcript_path`, plus `ts`, `pid`, `agent`, `event` and `len` (the payload's size in bytes). They are found with `bytes.find`, not parsed. A field whose value is not a valid JSON string (a bad escape, a control character, bad UTF-8, over 4 KB) is left out, so every line is valid JSON.
+- **Which occurrence.** Set from payloads recorded from Claude Code 2.1.283. `session_id`, `transcript_path`, `cwd`, `hook_event_name` and `tool_name` always come before `tool_input` and `tool_response`, so their first occurrence is the top-level one. `tool_use_id` comes after them, so it is taken from its last occurrence: a nested key of that name in a tool's input or output would come first. `tool_name` and `tool_use_id` are read only for tool events (PreToolUse, PostToolUse, PostToolUseFailure).
 - **Atomic append.** On Windows the file is opened with `FILE_APPEND_DATA` only, so the kernel puts every write at the end even with several writers; plain `O_APPEND` through the C runtime lost events with 5 writers. On POSIX it is `O_APPEND` with one `write` per line.
 - **Silent and fail-open.** It prints nothing and always exits 0. An internal failure appends one `{"shim_error": "<exception class>"}` line instead (to the session's file, or `shim_errors.jsonl`), so failures show up in the data.
 - **Where it writes.** The spool folder comes from the hook's arguments, because Claude Code does not pass `CLAUDE_CONFIG_DIR` to hooks. The agent name and session id are reduced to letters, digits, `-` and `_`, so no payload can move the file outside the spool.
@@ -31,13 +35,13 @@ Records coding-agent hook events and git hook firings as one short line each, so
 python capture_hooks.py [--root <phase-0 folder>] [--python <absolute python>] [--async]
 ```
 
-- **Default folder:** `%LOCALAPPDATA%\orch-phase0` on Windows, and `~/.local/state/orch-phase0` on WSL2 and macOS. The folder must be named `orch-phase0`.
+- **Default folder:** `%USERPROFILE%\orch-phase0` on Windows, and `~/.local/state/orch-phase0` on WSL2 and macOS. The folder must be named `orch-phase0`. On Windows it stays out of AppData: a packaged app's writes under AppData go to its own private copy, which other programs don't see, so the folder would split in two.
 - **What it writes:** `profiles/claude/settings.json` (merged into any settings already there, and idempotent), a copy of the shim in `shim/`, and the folder `spool/claude/`.
 - **What it refuses:** any target outside `<root>/profiles`, `<root>/shim` and `<root>/spool`, and any path that goes through a link. So it never writes to the daily profile (`~/.claude`), nor to a repository's `.claude/` or `.codex/`.
 - **Hook form.** Every hook is in exec form, with no shell: `command` is the absolute path to Python (a real `.exe` on Windows), and `args` is `["-S", "-I", <shim>, <spool>, "claude", <event>]`.
-- **Events:** SessionStart, SessionEnd, UserPromptSubmit, PostToolUse, PostToolUseFailure, Stop and SubagentStop. `--async` marks them all async, because loss is measured with async on and off.
-- **`--headsup`** also installs a PreToolUse hook for Edit, Write and MultiEdit that runs `capture_headsup.py`. It is never async, because its output has to reach the agent.
-- **Logging in.** After writing, it prints the one-line command to log in to the isolated profile.
+- **Events:** SessionStart, SessionEnd, UserPromptSubmit, PreToolUse (Edit, Write and MultiEdit only, the calls the heads-up answers), PostToolUse, PostToolUseFailure, Stop, SubagentStop and StopFailure (a turn that ended in an API error fires StopFailure instead of Stop). `--async` marks them all async, because loss is measured with async on and off.
+- **`--headsup`** also installs a PreToolUse hook for Edit, Write and MultiEdit that runs `capture_headsup.py`, after the capture hook. It is never async, because its output has to reach the agent.
+- **Logging in.** After writing, it prints one line each for PowerShell and bash that start the pinned Claude Code (found under `<root>/tools/claude`, or given with `--claude`) with `CLAUDE_CONFIG_DIR` set, and leave nothing set afterwards. It never uses the daily `claude` on PATH; with no pinned copy it says so and prints no login line.
 
 ## Codex
 
@@ -47,8 +51,9 @@ python capture_codex.py [--root <phase-0 folder>] [--python <absolute python>] [
 
 - **What it writes:** `profiles/codex/hooks.json` (merged into any hooks already there, and idempotent), the shim copy, and `spool/codex/`, with the same checks as `capture_hooks.py`.
 - **Events:** SessionStart, SessionEnd, UserPromptSubmit, PostToolUse, Stop and SubagentStop. Codex has no PostToolUseFailure, and allows at most 3 seconds for SessionEnd hooks.
-- **Hook form.** Codex runs every hook `command` through a shell; it has no exec form. On Windows that is PowerShell by default (the command starts with PowerShell's call operator `&`), or cmd with `--windows-shell cmd`; elsewhere it is `sh -c`. The payload arrives on stdin either way.
-- **Trust.** Codex runs a new user hook only after the person has reviewed and trusted it (`/hooks`). The generator never writes that trust state.
+- **Hook form.** Codex runs every hook `command` through a shell; it has no exec form. On Windows that is PowerShell by default (the command starts with PowerShell's call operator `&`), or cmd with `--windows-shell cmd`; elsewhere it is `sh -c`. The payload arrives on stdin either way. cmd has no quoting that is safe for every path, so with `--windows-shell cmd` a path holding any of `& | < > ^ % ! "` is refused.
+- **Trust.** Codex runs a new user hook only after the person has reviewed and trusted it (`/hooks`). The generator never writes that trust state, and nothing here uses the flag that skips the review.
+- **Logging in.** Like `capture_hooks.py`, it prints the login lines for the pinned Codex (under `<root>/tools/codex`, or `--codex`) with `CODEX_HOME` set.
 
 ## Git hooks
 
@@ -61,7 +66,7 @@ python capture_githooks.py uninstall <repo> [--root <phase-0 folder>]
 - **The chain.** Git runs the hooks of one folder: `core.hooksPath` when set (husky sets `.husky/_`), else `.git/hooks` (where lefthook and pre-commit install theirs). The installer points `core.hooksPath` at a new folder inside the repository's git folder, `orch-capture-hooks`, with one small sh script per hook:
   - post-commit, pre-push, post-checkout, post-merge and post-rewrite first run `capture_githook.py`, with its output discarded and its exit code ignored, then run the hook that was there before with the same arguments and stdin, and exit with that hook's code. A failing pre-push hook therefore still stops the push;
   - every other hook the earlier folder had only runs the earlier hook.
-- **What is recorded** (`<spool>/git/<date>.jsonl`): the hook, the working tree, the branch HEAD names (or the detached commit id), commit ids and flags from the arguments, and the ref lines of pre-push and post-rewrite. A remote's URL is never kept, because it can carry a user name or a token.
+- **What is recorded** (`<spool>/git/<date>.jsonl`): the hook, the working tree, the branch HEAD names (or the detached commit id), commit ids and flags from the arguments, and the ref lines of pre-push and post-rewrite. For post-commit and post-merge, which get no commit id as an argument, it also records the commit HEAD now points at, read from the branch's ref file or from `packed-refs` (never by running git). Only a commit id is ever copied from those files. A remote's URL is never kept, because it can carry a user name or a token.
 - **Uninstall** puts the earlier `core.hooksPath` back and removes the chain folder.
 
 ## The pre-edit heads-up
@@ -85,6 +90,43 @@ python capture_latency.py --cmd shim='["<abs python>", "-S", "-I", "<shim>", "<s
 - **Checks:** non-zero exits and any printed output are counted.
 - **No pass marks:** it prints numbers only.
 
+## The loss and coverage counter
+
+```
+python capture_count.py --spool <root>/spool --manifest <run manifest.json> \
+                        [--claude-projects <profile>/projects] [--codex-sessions <CODEX_HOME>/sessions] \
+                        [--timeout-minutes 30] [--now <unix seconds>] [--json <out file>]
+```
+
+- **What it reads.** From the spool, its own lines. From each session record (a Claude Code transcript, with its subagent files, or a Codex rollout file) only ids, entry types, tool names, timestamps and error flags, and whether a tool result is a permission denial, which it recognises by a fixed phrase. No prompt, tool input or output, or file content reaches its output.
+- **The manifest** lists every session of the run with its agent, id, kind (`scripted`, `parallel`, `interactive`, `cockpit`, `killed` or `noop`), environment and async setting. The harness writes it.
+- **Expected counts** follow T1 section 6.3: one SessionStart (plus one per compaction) and one SessionEnd; one UserPromptSubmit per prompt; one PreToolUse per Edit, Write or MultiEdit call; one Post event per tool call, less permission-denied calls and calls rejected at input validation; one SubagentStop per subagent run that was not denied.
+- **Turns.** A prompt opens a turn. A turn that ends normally expects a Stop; one that ends in an API error expects a StopFailure instead; one the user interrupts expects neither. Interrupt markers, compact summaries and slash-command echoes are user entries in the transcript but not prompts.
+- **Rows.** Lost and extra events per environment, session kind, async setting and event. Killed sessions get their own row: missing SessionEnd and Stop, and whether each was closed by a SessionEnd, by the timeout rule, is still open, or was never captured. A kill forgives a missing Stop only for a turn that was still running at the kill. Permission-denied calls, counted only when the record shows the denial, get their own row too. Coverage is records against captured sessions per kind, leaving out the `noop` sessions. The count of `shim_error` lines comes last.
+
+## The linker
+
+```
+python capture_link.py --spool <root>/spool [--truth <ground truth.json>] [--pr 12=feature-x ...] \
+                       [--grace-seconds 120] [--merge-seconds 10] [--json <out file>]
+```
+
+- **Commits** come from the git lines: post-commit (with its commit id), the new commits of a rebase (post-rewrite), and merge commits (post-merge, when the commit has two parents and was made at that moment). A commit that an amend or a rebase replaced is dropped, and the new one keeps the original's session. The replays of an aborted rebase (made on a detached HEAD, kept by nothing) are listed as unreachable. Each git line carries its repository (`repo`), so a commit keeps it after its worktree is removed.
+- **Link rule.** A commit goes to the session in the same working tree that was open at that time, or had ended at most `--grace-seconds` before it (a commit the harness makes right after the session), on a branch the session started on or was seen on while open. An open session wins over one in its grace period. Working trees are keyed by the folder git runs the hooks from, so a nested worktree keeps its own sessions after it is removed.
+- **Squash merges.** A commit whose subject ends in `(#N)` is linked through pull request N only: to the sessions linked to commits on the PR's branch. The branch is given with `--pr N=branch`, or found by tree (the squash commit's tree equals a linked commit's tree). A tree that matches more than one branch is reported as ambiguous and linked to nothing. Only commits in the squash commit's own repository, made before it, count. A commit ending in `(#N)` with no PR behind it is linked as an ordinary commit.
+- **Link rate.** With `--truth`, each session's linked commits are compared with its ground-truth commits: linked right, wrong links and missed commits, split by who made the commits (the agent or the harness). Subjects and trees are read with read-only `git log`; they never reach the output.
+
+## The custom-ref probe
+
+```
+python capture_refprobe.py --repo <root>/repos/<clone> --remote <name, path or URL> --person <p> --device <d> \
+                           [--allow-network] [--also-fallback] [--json <out file>]
+```
+
+- **Steps.** It makes a probe commit with `commit-tree` (one file holding a random nonce, under a probe identity, never the user's). If the ref is already on the remote it reports `exists` and stops: it never overwrites or deletes a ref it did not push. Otherwise it pushes the commit to `refs/orchestraty/<person>/<device>` with `--no-verify` (the clone's own pre-push hooks are not what is probed), checks `ls-remote`, fetches it into a new empty repository as a second device would and checks the nonce, then deletes the remote ref, checks it is gone, and removes the temporary repository. The deletion runs whatever fails after the push. If the remote refuses the ref (or with `--also-fallback`), the dedicated branch `refs/heads/orchestraty/<person>/<device>` is probed the same way.
+- **Network.** A local remote must be a bare repository. Any other remote, including `file://host/...` and `\\server\share` paths, is a network remote and is refused unless `--allow-network` is given. Every network step of T1 is run by the owner, with that flag. The tests use a local bare repository, with a `pre-receive` hook that refuses `refs/orchestraty/*` for the fallback.
+- **Scratch clones only:** under `<root>/repos`, like the git hooks.
+
 ## Safety properties, and the tests that check them
 
 | Property | Test |
@@ -104,12 +146,21 @@ python capture_latency.py --cmd shim='["<abs python>", "-S", "-I", "<shim>", "<s
 | The heads-up hook returns the ready-made bytes on a hit, and nothing on a miss or bad input | `test_a_hit_returns_the_ready_made_bytes_unchanged`, `test_a_miss_prints_nothing_and_writes_nothing` |
 | Different paths never share a heads-up | `test_different_paths_never_share_a_key` |
 | The writer replaces atomically and reads each file back once | `test_the_writer_replaces_atomically_reads_back_once_and_cuts_long_text` |
+| The default folder is outside AppData on Windows; the login line starts the pinned program and leaves nothing set | `test_the_default_root_is_outside_appdata_on_windows`, `test_the_login_line_uses_the_pinned_program_and_leaves_nothing_set`, `test_the_command_line_prints_the_pinned_login_line` |
+| cmd is never given a path it would read specially | `test_cmd_refuses_paths_with_characters_it_treats_specially` |
+| Only a commit id is copied from a ref file, and never from outside the git folder | `test_the_recorder_reads_the_commit_from_loose_packed_and_worktree_refs`, `test_post_commit_lines_carry_the_new_commit_in_a_checkout_and_a_worktree` |
+| The counter's and the linker's output hold numbers and ids only | `test_the_report_holds_numbers_and_ids_only`, `test_the_output_holds_ids_and_numbers_only` |
+| Lost, extra, denied and killed are counted exactly | `test_known_gaps_are_counted_exactly`, `test_permission_denied_calls_come_from_the_record_and_are_not_lost`, `test_a_missing_post_event_is_never_read_as_a_denial`, `test_killed_sessions_get_their_own_rows_and_the_timeout_close` |
+| A squash merge links through its PR; an ambiguous tree links nothing | `test_a_squash_merge_links_through_its_pr_by_tree`, `test_the_pr_branch_can_be_given_when_the_tree_is_ambiguous` |
+| The probe never uses the user's identity, never reaches a network remote without the flag, and leaves no ref or folder behind | `test_an_accepted_custom_ref_is_pushed_listed_fetched_and_removed`, `test_a_network_remote_is_refused_without_the_flag_and_nothing_is_written`, `test_a_refused_custom_ref_falls_back_to_a_branch` |
 
 ## Limits
 
-- **Fields are found, not parsed.** The first `"key": "..."` in the payload is used. A key inside a string value cannot match, because its quotes are escaped there. A nested object with a key of the same name, placed before the top-level one, would be taken instead.
+- **Fields are found, not parsed.** A key inside a string value cannot match, because its quotes are escaped there. The first-or-last rule rests on the key order Claude Code 2.1.283 uses; a version that reorders its payloads needs the rule checked again (the L1 recording step does that).
 - **POSIX appends** rely on the local file system keeping one `write` of a short line whole under `O_APPEND`. Local file systems do (the test runs on every CI job); network file systems may not, and the spool is never on one.
 - **A hook manager that reinstalls itself replaces the chain.** For example, `npm install` running husky, or `lefthook install`, resets `core.hooksPath` or the hooks folder. Install the chain after the managers.
 - **Codex on Windows runs hooks through PowerShell,** whose start-up alone costs far more than Python's.
 - **The heads-up works for Claude Code's Edit, Write and MultiEdit,** which name the file in `file_path`. Codex edits files with `apply_patch`, whose input carries a patch, not a `file_path`.
-- **The recorder reads HEAD from the HEAD file only.** It records the branch name, not the commit a branch points to, so linking to commits uses the times and the ref lines.
+- **The recorder reads refs from files.** A repository that stores refs in the newer reftable format gets an empty `commit` field.
+- **The counter's reading of the session records** (entry types, denial phrases, Codex call ids) follows the formats seen in the docs and is confirmed against recorded sessions at the start of T1.
+- **The linker needs the spool's git lines,** so the git-hook chain must be installed in every scratch repository and worktree before its sessions. Found by tree, a squash merge links only when main did not move between the branch's last push and the merge; `--pr` covers the other case.

@@ -30,6 +30,15 @@ import sys
 import time
 
 FIELDS = (b"session_id", b"hook_event_name", b"tool_name", b"tool_use_id", b"cwd", b"transcript_path")
+# Where the keys sit in real payloads (recorded from Claude Code 2.1.283): session_id,
+# transcript_path, cwd, hook_event_name and tool_name always come before tool_input and
+# tool_response, so their first occurrence is the top-level one. tool_use_id comes after them,
+# so a nested key of that name inside tool_input or tool_response would come first: it is taken
+# from its last occurrence. Only tool events carry tool_name and tool_use_id at top level; for
+# any other known event they are not read (Stop's background_tasks may nest them).
+LAST = (b"tool_use_id",)
+TOOL_FIELDS = (b"tool_name", b"tool_use_id")
+TOOL_EVENTS = (b"PreToolUse", b"PostToolUse", b"PostToolUseFailure")
 MAX_FIELD = 4096            # bytes; longer values are left out
 _ESCAPES = b'"\\/bfnrtu'
 _HEX = b"0123456789abcdefABCDEF"
@@ -67,14 +76,15 @@ def _string_token(raw, j):
     return None
 
 
-def field(raw, key):
-    """The raw JSON string value of the first `"key": "..."` in raw, quotes included, or None.
-    A "key" that is not followed by a colon and a string (for example the word used as a value)
-    is skipped. Keys inside string values cannot match: their quotes are escaped there."""
+def field(raw, key, last=False):
+    """The raw JSON string value of the first (or, with last=True, the last) `"key": "..."` in
+    raw, quotes included, or None. A "key" that is not followed by a colon and a string (for
+    example the word used as a value) is skipped. Keys inside string values cannot match: their
+    quotes are escaped there."""
     needle = b'"' + key + b'"'
-    start = 0
+    start, end = 0, len(raw)
     while True:
-        i = raw.find(needle, start)
+        i = raw.rfind(needle, 0, end) if last else raw.find(needle, start)
         if i < 0:
             return None
         j = i + len(needle)
@@ -87,7 +97,10 @@ def field(raw, key):
             if j < len(raw) and raw[j] == 34:
                 return _string_token(raw, j)
             return None
-        start = i + 1
+        if last:
+            end = i
+        else:
+            start = i + 1
 
 
 def safe_name(value, limit, fallback):
@@ -100,8 +113,11 @@ def event_line(raw, agent, event, now_ns, pid):
     """(session file name, spool line) for one payload."""
     parts = [b'{"ts":%d,"pid":%d,"agent":"%s","event":"%s","len":%d' % (now_ns, pid, agent, event, len(raw))]
     session = b""
+    not_a_tool_event = bool(event) and event not in TOOL_EVENTS
     for key in FIELDS:
-        token = field(raw, key)
+        if not_a_tool_event and key in TOOL_FIELDS:
+            continue
+        token = field(raw, key, last=key in LAST)
         if token is not None:
             parts.append(b',"%s":%s' % (key, token))
             if key == b"session_id":

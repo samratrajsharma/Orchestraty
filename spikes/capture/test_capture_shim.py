@@ -108,6 +108,54 @@ def test_fields_are_taken_from_keys_not_from_text_that_looks_like_them():
     assert capture_shim.field(raw, b"tool_name") is None
 
 
+def recorded_order(event, tool_input, tool_response=None, tail=()):
+    """A payload with the top-level key order recorded from Claude Code 2.1.283 (T1)."""
+    top = [("session_id", "top-session"), ("transcript_path", "/t/top.jsonl"), ("cwd", "/top"),
+           ("prompt_id", "p-1"), ("permission_mode", "acceptEdits"), ("effort", "medium"),
+           ("hook_event_name", event), ("tool_name", "mcp__x__y"), ("tool_input", tool_input)]
+    if tool_response is not None:
+        top.append(("tool_response", tool_response))
+    top += [("tool_use_id", "toolu_TOP")] + list(tail)
+    return json.dumps(dict(top)).encode()
+
+
+DECOY = {"session_id": "nested-session", "cwd": "/nested", "hook_event_name": "Nested", "tool_name": "nested",
+         "tool_use_id": "toolu_NESTED", "transcript_path": "/nested.jsonl"}
+
+
+@pytest.mark.parametrize("event,raw", [
+    ("PreToolUse", recorded_order("PreToolUse", {"args": DECOY})),
+    ("PostToolUse", recorded_order("PostToolUse", {"args": DECOY}, {"result": [DECOY, {"deeper": DECOY}]},
+                                   [("duration_ms", 12)])),
+    ("PostToolUseFailure", recorded_order("PostToolUseFailure", {"args": DECOY}, None,
+                                          [("error", "boom"), ("is_interrupt", False), ("duration_ms", 3)])),
+], ids=["pre", "post", "post-failure"])
+def test_nested_decoy_keys_never_replace_the_top_level_values(tmp_path, event, raw):
+    run_shim([tmp_path, "claude", event], raw)
+    [(name, line)] = spool_lines(tmp_path)
+    assert name == "top-session.jsonl"
+    assert {k: line[k] for k in FIELDS} == {"session_id": "top-session", "transcript_path": "/t/top.jsonl",
+                                            "cwd": "/top", "hook_event_name": event, "tool_name": "mcp__x__y",
+                                            "tool_use_id": "toolu_TOP"}
+
+
+def test_tool_fields_are_read_only_for_tool_events(tmp_path):
+    stop = json.dumps({"session_id": "s-stop", "transcript_path": "/t.jsonl", "cwd": "/w", "hook_event_name": "Stop",
+                       "stop_hook_active": False, "last_assistant_message": "done",
+                       "background_tasks": [{"tool_name": "Bash", "tool_use_id": "toolu_BG"}]}).encode()
+    run_shim([tmp_path, "claude", "Stop"], stop)
+    [(_, line)] = spool_lines(tmp_path)
+    assert "tool_name" not in line and "tool_use_id" not in line and line["session_id"] == "s-stop"
+
+
+def test_the_last_occurrence_skips_the_word_used_as_a_value():
+    raw = b'{"tool_use_id": "toolu_1", "note": "tool_use_id", "x": {"tool_use_id": 5}, "y": "\\"tool_use_id\\""}'
+    assert capture_shim.field(raw, b"tool_use_id", last=True) is None          # the last key has no string value
+    raw = b'{"a": {"tool_use_id": "nested"}, "tool_use_id": "toolu_2", "note": "tool_use_id"}'
+    assert capture_shim.field(raw, b"tool_use_id", last=True) == b'"toolu_2"'
+    assert capture_shim.field(raw, b"tool_use_id") == b'"nested"'                 # why first would be wrong
+
+
 def test_unicode_and_escapes_survive_as_valid_json(tmp_path):
     data = payload(cwd="C:\\Users\\Женя\\代码 \"quoted\"", transcript_path="/tmp/\u00e9\t\U0001F600.jsonl")
     run_shim([tmp_path, "claude"], data)
