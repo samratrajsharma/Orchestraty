@@ -136,8 +136,8 @@ Orchestraty is in its validation stage. Before the product is built, a short ser
 | Effect engine | [`engine/`](engine/) | Built, and being hardened |
 | Agent-setup scanner | [`spikes/scan/`](spikes/scan/) | Experiment |
 | Capture shim, git-hook chaining and latency harness | [`spikes/capture/`](spikes/capture/) | Experiment |
-| Session-to-commit linker and event counter | [`spikes/capture/`](spikes/capture/) | Experiment, in progress |
-| Change-effects classifier | [`spikes/_shared/`](spikes/_shared/) | Experiment, in progress |
+| Session-to-commit linker, event counter and custom-ref probe | [`spikes/capture/`](spikes/capture/) | Experiment |
+| Change-effects classifier | [`spikes/_shared/`](spikes/_shared/) | Experiment |
 | Local record, briefs, Radar, team sync | | Planned |
 
 Experiment code lives in `spikes/` and will be deleted when the experiments end. Anything worth keeping is rebuilt properly in its long-term home ([ADR-0002](docs/decisions/0002-throwaway-spikes-live-in-spikes.md)).
@@ -227,10 +227,10 @@ Two optional extras add features but aren't needed for the tests:
 
 | Module | What it does |
 | --- | --- |
-| `ingest` | Opens a local folder or clones a repository safely, and lists its files |
+| `ingest` | Opens a local folder or clones a repository safely, lists its files, and reads any commit straight from git's objects |
 | `parsing`, `treesitter_parser` | Symbols, imports, calls and complexity for each file |
 | `graph` | The code graph: files and symbols, joined by contains, imports, calls and method-of edges |
-| `pipeline` | `build_index()`: ingest, parse and build the graph, with a signed cache |
+| `pipeline` | `build_index()`: ingest, parse and build the graph, with a signed cache. `build_index_at()` does the same for any commit without checking it out |
 | `impact` | The blast radius of a symbol or a file |
 | `insights` | Entry points, hub files, routes and data models |
 | `techdebt` | Import cycles, complexity hotspots, dead code and near-duplicates |
