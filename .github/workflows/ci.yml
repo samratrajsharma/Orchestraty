@@ -1,5 +1,12 @@
-# Runs the engine and spike test suites on every push and pull request, on demand, and once a
-# week. Both are standard library only, so pytest is the one dependency.
+# Two kinds of run, from one codebase that is pure Python and standard library only, so
+# nothing is built per operating system; CI only checks that the same code runs everywhere.
+#
+# - Every push and pull request: the quick check, on Windows and Linux with Python 3.12.
+# - Weekly, on manual runs and on release tags (v*): the full matrix, which adds Python 3.9
+#   to 3.11, macOS and the older-Python runs of the experiments.
+#
+# Every job runs all three suites (the main package, the engine and the experiments) and fails
+# if the tests leave any file behind. pytest is the only dependency.
 name: CI
 
 on:
@@ -7,43 +14,32 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    - cron: "0 6 * * 1"          # Mondays, 06:00 UTC: also the only automatic macOS run
+    - cron: "0 6 * * 1"          # Mondays, 06:00 UTC: the weekly full run
 
 permissions:
   contents: read
 
 jobs:
-  engine-tests:
-    name: engine tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
+  quick:
+    name: quick (${{ matrix.os }}, Python 3.12)
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
-      # Report every platform, even when one of them fails.
+      # Report both platforms, even when one of them fails.
       fail-fast: false
       matrix:
-        include:
-          # Versions are quoted: unquoted, YAML reads 3.10 as the number 3.1.
-          - os: ubuntu-latest
-            python-version: "3.10"
-          - os: ubuntu-latest
-            python-version: "3.11"
-          - os: ubuntu-latest
-            python-version: "3.12"
-          - os: windows-latest
-            python-version: "3.12"
-    defaults:
-      run:
-        working-directory: engine
+        # Pinned rather than ubuntu-latest, so a runner image change never breaks a push.
+        os: [windows-latest, ubuntu-24.04]
     steps:
       - name: Check out the repository
         uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.12
         uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
       - name: Install pytest
         run: python -m pip install "pytest>=8,<10"
@@ -52,50 +48,57 @@ jobs:
       - name: Show the git version
         run: git --version
 
-      # No -q here: engine/pytest.ini already adds -q, and a second -q hides the "N passed" line.
       # No cache and no bytecode, so the leftover check below finds nothing.
+      - name: Run the main package tests
+        working-directory: orchestraty
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m pytest
+
       - name: Run the engine tests
+        working-directory: engine
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -m pytest -p no:cacheprovider
 
+      - name: Run the experiment tests
+        working-directory: spikes
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m pytest
+
       # The tests must leave nothing in the working copy: no __pycache__, no .pytest_cache,
       # no output files. Runs from the repository root, in bash on every OS.
       - name: Check that the tests left no files behind
-        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
-          leftovers="$(git status --porcelain --ignored -- spikes engine)"
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes)"
           if [ -n "$leftovers" ]; then
             echo "The tests left files in the working copy:"
             echo "$leftovers"
             exit 1
           fi
 
-  spike-tests:
-    name: spike tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
+  full:
+    name: full (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
-          # 3.9 is here because the scanner must run on older Pythons (macOS ships 3.9).
-          # Pinned to ubuntu-24.04: ubuntu-latest moves to 26.04 from 2026-10-19, and no
-          # 3.9 build exists for 26.04. ubuntu-22.04 is deprecated, so it is not used.
+          # 3.9 runs only the experiments: the scanner must run on older Pythons (macOS ships
+          # 3.9), while the main package and the engine need 3.10 or later. No 3.9 build exists
+          # for the Ubuntu 26.04 image, so the Linux runs stay on ubuntu-24.04.
           - os: ubuntu-24.04
             python-version: "3.9"
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python-version: "3.10"
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python-version: "3.11"
-          - os: ubuntu-latest
+          - os: macos-latest
             python-version: "3.12"
-          - os: windows-latest
-            python-version: "3.12"
-    defaults:
-      run:
-        working-directory: spikes
     steps:
       - name: Check out the repository
         uses: actions/checkout@v7
@@ -114,63 +117,30 @@ jobs:
       - name: Show the git version
         run: git --version
 
-      - name: Run the spike tests
+      - name: Run the main package tests
+        if: matrix.python-version != '3.9'
+        working-directory: orchestraty
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -m pytest
 
-      # The tests must leave nothing in the working copy: no __pycache__, no .pytest_cache,
-      # no output files. Runs from the repository root, in bash on every OS.
-      - name: Check that the tests left no files behind
-        working-directory: ${{ github.workspace }}
-        shell: bash
-        run: |
-          leftovers="$(git status --porcelain --ignored -- spikes engine)"
-          if [ -n "$leftovers" ]; then
-            echo "The tests left files in the working copy:"
-            echo "$leftovers"
-            exit 1
-          fi
+      - name: Run the engine tests
+        if: matrix.python-version != '3.9'
+        working-directory: engine
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m pytest -p no:cacheprovider
 
-  # macOS runs only on manual runs and on the weekly schedule, to keep macOS minutes down.
-  # (Every push here goes to main, so a push trigger would mean every push.)
-  spike-tests-macos:
-    name: spike tests (macos-latest, Python 3.12)
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
-    runs-on: macos-latest
-    timeout-minutes: 15
-    defaults:
-      run:
+      - name: Run the experiment tests
         working-directory: spikes
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - name: Install pytest
-        run: python -m pip install "pytest>=8,<10"
-
-      - name: Show the git version
-        run: git --version
-
-      - name: Run the spike tests
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -m pytest
 
-      # The tests must leave nothing in the working copy: no __pycache__, no .pytest_cache,
-      # no output files. Runs from the repository root, in bash on every OS.
       - name: Check that the tests left no files behind
-        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
-          leftovers="$(git status --porcelain --ignored -- spikes engine)"
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes)"
           if [ -n "$leftovers" ]; then
             echo "The tests left files in the working copy:"
             echo "$leftovers"

@@ -256,13 +256,14 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ### Continuous integration
 
-| Job | Platforms and Python | Runs on |
-| --- | --- | --- |
-| Engine tests | Linux 3.10, 3.11, 3.12; Windows 3.12 | Every push and pull request |
-| Experiment tests | Linux 3.9 to 3.12; Windows 3.12 | Every push and pull request |
-| Experiment tests on macOS | macOS 3.12 | Manual runs, and weekly on Mondays |
+Orchestraty is pure Python and standard library only, so there is one codebase for every operating system and nothing to build per platform. CI checks that the same code runs everywhere.
 
-Every job also fails if the tests leave any file behind.
+| Run | Platforms and Python | When |
+| --- | --- | --- |
+| Quick | Windows 3.12; Linux 3.12 | Every push and pull request |
+| Full | Adds Linux 3.9, 3.10 and 3.11, and macOS 3.12 | Weekly on Mondays, on manual runs, and on release tags (`v*`) |
+
+Every job runs the main package, engine and experiment tests, and fails if the tests leave any file behind. Python 3.9 runs only the experiments, because the scanner must work on older systems. A branch is merged once the quick run is green.
 
 ### Conventions
 
