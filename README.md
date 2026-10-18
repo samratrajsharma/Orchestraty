@@ -2,11 +2,11 @@
 
 # Orchestraty
 
-**See what your coding agents changed, what it affects, and whose work it collides with, before you push.**
+**Run coding agents in parallel without them breaking each other's work.**
 
 [![CI](https://github.com/samratrajsharma/Orchestraty/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/samratrajsharma/Orchestraty/actions/workflows/ci.yml)
 ![Status: pre-release](https://img.shields.io/badge/status-pre--release-CD1C18)
-![Engine: Python 3.10+](https://img.shields.io/badge/engine-Python_3.10%2B-9B1313)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-9B1313)
 ![Experiments: Python 3.9+](https://img.shields.io/badge/experiments-Python_3.9%2B-9B1313)
 ![Platforms: Windows, macOS, Linux](https://img.shields.io/badge/platforms-Windows_%7C_macOS_%7C_Linux-38000A)
 ![Licence: not chosen yet](https://img.shields.io/badge/licence-not_chosen_yet-lightgrey)
@@ -19,84 +19,98 @@
 
 ## Overview
 
-Coding agents now write a large share of the code in many teams. Writing code got cheap; knowing what was written did not. A reviewer sees a diff, not what the change does to the rest of the system. Two people's agents can change the same function on different branches, and nothing warns them until something breaks.
+Many developers now run several coding-agent sessions on one repository at the same time, in separate worktrees or in the same folder. Each session works from a picture of the code that the other sessions are changing underneath it. One session changes a function's signature while another is busy writing new calls to the old one. The two branches touch different files, so git reports no conflict. The break shows up later, in CI or in production.
 
-Orchestraty is the shared record and early-warning system for agent work:
+Orchestraty keeps parallel sessions aware of each other:
 
-- **It captures** sessions from any coding agent that exposes hooks, such as Claude Code and Codex, and links them to the commits and pull requests they produce.
-- **It explains effects, not just diffs:** which contracts changed, whether a change is breaking, and which callers were never updated.
-- **It warns before collisions:** when two people's agents change the same contract on different branches, both hear about it before either merges.
-- **It stays silent until it is useful:** it speaks in the terminal, the pull request or the agent's own context only when something needs a person.
+- **It watches what every session changes,** from the agent's own hooks or, for agents without hooks, from git.
+- **It works out which changes matter to another session,** at the level of functions and contracts: a signature changed, a function deleted that another session still uses, the same function edited twice, callers left behind.
+- **It tells the affected agent first,** before its next edit or before it finishes its turn, so the agent can adapt. You hear only about what the agents could not resolve.
+- **It works with any agent,** at the deepest level that agent supports, and it never calls a model to decide anything. It behaves the same with hosted and self-hosted models.
 
-It sits above the agents and the tools a team already uses, and replaces none of them.
-
-The goal at push is one line when something needs you, and nothing otherwise:
+A note to an agent looks like this:
 
 ```text
-1 breaking change: billing/annual.py:88 still calls the old charge()
+Another session changed payments.charge(): new required argument key.
+billing/annual.py:88 still uses the old form. (worktree refunds, 1 min ago)
 ```
 
+At `git push`, Orchestraty prints one line if something is still unresolved, and nothing otherwise.
+
+Orchestraty does not start, run or display agents. It is not a cockpit and not an agent. It sits beside the agents and tools you already use.
+
 > [!NOTE]
-> Orchestraty is pre-release, and what this page describes is its design. Today, this repository holds the effect engine and the experiments that test the approach. There is no package or installer yet. See [Project status](#project-status).
+> Orchestraty is pre-release, and this page describes its design. Today the repository holds the effect engine, a scaffold for the main package, and the experiments that test the approach. There is no installer yet. See [Project status](#project-status).
 
 ## How it works
 
 ### The loop
 
-Everything Orchestraty does follows one loop. Someone asks for something. An agent works on it in a session, which produces a change. Orchestraty works out what the change does, writes a brief, warns people whose work overlaps, and, after the merge, learns from what happened next.
-
 ```mermaid
 flowchart LR
-    intent["Intent<br/>someone asks for something"]:::tool
-    session["Agent session<br/>Claude Code, Codex, ..."]:::tool
-    change["Change<br/>commit and pull request"]:::tool
-    effect["Effect<br/>what the change does"]:::orch
-    brief["Brief<br/>one line at push, full on demand"]:::orch
-    radar["Radar<br/>overlapping work, before merge"]:::orch
-    outcome["Outcome<br/>reverts and follow-up fixes"]:::orch
-    memory["Team memory<br/>lessons for the next session"]:::orch
-    intent --> session --> change --> effect
-    effect --> brief
-    effect --> radar
-    change --> outcome --> memory
-    memory -.-> session
+    edit["An agent edits<br/>any session, any agent"]:::tool
+    see["Orchestraty sees it<br/>the live map updates"]:::orch
+    effect["Works out the effect<br/>contracts, callers, other sessions"]:::orch
+    tell["Tells the right agent<br/>before its next edit or at turn end"]:::orch
+    adapt["The agent adapts<br/>new contract, fixed callers, or asks"]:::tool
+    you["You hear what is left<br/>one line at push"]:::person
+    edit --> see --> effect --> tell --> adapt
+    adapt -.->|keeps working| edit
+    tell -.->|only if unresolved| you
     classDef tool fill:#F4F4F4,stroke:#B5B5B5,color:#38000A;
     classDef orch fill:#CD1C18,stroke:#9B1313,color:#FFFFFF;
+    classDef person fill:#FFFFFF,stroke:#9B1313,color:#38000A;
 ```
 
-Grey steps happen in the tools you already use. Red steps are Orchestraty.
+Grey steps happen in your agents. Red steps are Orchestraty.
 
-### Three pillars
+### Every kind of agent
 
-| Pillar | What it answers | How |
+Each agent connects at the deepest level it supports. No agent has to change, and plain git always works.
+
+| Level | What the agent needs | What Orchestraty can do |
 | --- | --- | --- |
-| **Know** | What did my agents do? What does it affect? Why is this code here? Am I up to date? | A record of every session, linked to the intent, person, agent, commit and pull request. Effect records for each change. Briefs. Provenance for any commit. |
-| **Coordinate** | Is anyone changing what I depend on? Who is doing what? | Radar, first across your own worktrees, then across people at the contract level. A team board, and a digest for people who don't write code. |
-| **Guard** | Are our agents' tools working and safe? What is this costing? | A doctor for agent tools that fail to start, policies for which tools are allowed, and cost per session. |
+| 0. Plain git | Nothing | Sees which files and functions changed in each worktree; warns the other sessions; prints the push line |
+| 1. Tools (MCP) | MCP support | The agent can ask who is changing a file or function before it edits, and claim an area |
+| 2. Hooks | A hook before and after a tool call, and at the end of a turn | Notes arrive automatically, before edits and at the end of a turn |
+| 3. Rich interface | A Claude Code mod, or an editor extension | A pane of every session, a band for strong overlaps, holding an edit to ask you |
+
+Many agents document hooks today: Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI, OpenCode, Cline and OpenClaw. An agent is called supported only after its own capture test passes.
+
+### How strong an overlap is
+
+| Overlap | Strength | Who hears |
+| --- | --- | --- |
+| The same file changed in two sessions | Weak | Nobody is interrupted; it shows in the status view |
+| The same function changed in both | Medium | Both agents, once |
+| A breaking change in one session, and a use of that contract in the other | Strong | The using session, before its next affected edit |
+| A breaking change whose callers no session has updated | Strong | The changing session, when it tries to finish; the push line if still left |
 
 ### Architecture
 
-Everything runs on the developer's machine first. Teams share distilled records through git; nothing else has to leave the machine.
+Everything runs on your machine. Hooks only append a line and exit, so they never slow an agent down. One process, started on demand, does the work and writes the notes in advance.
 
 ```mermaid
 flowchart TB
     subgraph machine["Your machine"]
         direction TB
-        agents["Coding agents<br/>Claude Code, Codex, any agent with hooks"]:::tool
-        gitrepo["git"]:::tool
+        agents["Coding agents<br/>any agent, any model"]:::tool
+        gitrepo["git and worktrees"]:::tool
         hooks["Agent hooks and git hooks"]:::tool
         shim["Capture shim<br/>one line per event, silent, fail-open"]:::experiment
         spool[("Spool")]:::experiment
-        linker["Ingest and linker<br/>session to commit to pull request"]:::experiment
-        record[("Local record")]:::planned
+        coord["Coordinator and live map<br/>who is changing what, right now"]:::planned
         engine["Effect engine<br/>code graph, contracts, callers"]:::built
-        outputs["Push line, brief, why, local Radar"]:::planned
+        rules["Overlap rules"]:::planned
+        notes["Notes into agents, push line, status"]:::planned
         agents --> hooks
         gitrepo --> hooks
-        hooks --> shim --> spool --> linker --> record --> engine --> outputs
+        hooks --> shim --> spool --> coord
+        gitrepo -.->|agents without hooks| coord
+        coord --> engine --> rules --> notes
+        notes -.-> agents
     end
-    record -.->|distilled, redacted records| sync["Team sync through git"]:::planned
-    sync -.-> team["Team Radar, team board, digest"]:::planned
+    coord -.->|distilled records| sync["Team sync through git"]:::planned
     classDef tool fill:#F4F4F4,stroke:#B5B5B5,color:#38000A;
     classDef built fill:#9B1313,stroke:#38000A,color:#FFFFFF;
     classDef experiment fill:#FFA896,stroke:#CD1C18,color:#38000A;
@@ -112,40 +126,44 @@ flowchart TB
 
 ### Design principles
 
-- **Silent until useful.** There is no new place you have to work. Orchestraty speaks only when something needs a person.
-- **Capture is automatic; sharing is governed.** Raw prompts and transcripts stay on the machine. Only distilled, redacted records are shared, under a policy the team commits to its repository.
-- **Facts first.** Every statement in a brief is deterministic and cites a file, line, commit or rule. Anything written by a model is optional and labelled.
-- **Precision over recall.** A wrong warning costs more than a missed one. Every claim states what it did not analyse.
-- **Never slow the agent down.** Capture hooks return immediately. The only blocking hook reads a file prepared in advance.
-- **Works with what teams already have:** any agent with hooks, any git host, any operating system.
-- **Local-first.** The record lives on each machine, and teams share through git.
-- **Standards, not new formats:** AGENTS.md, MCP and OpenTelemetry.
-- **Understanding is for the team, not for rating people.** A person's own catch-up data is theirs first, and is never used to evaluate performance.
+- **Agents first, people last.** The affected agent hears first. A person hears only what the agents could not resolve, in one line.
+- **Never slow the agent down.** Hooks only append and exit. The one hook that waits reads a note prepared in advance.
+- **Every agent, at the level it supports.** Hooks, MCP, a small helper for homemade agents, or plain git.
+- **Facts first, no model on the hot path.** Every note is deterministic and cites a file and line.
+- **Precision over recall.** A wrong note costs more than a missed one. Every note says how sure it is and what it did not analyse.
+- **Local-first.** For one developer, nothing leaves the machine. Teams share distilled records through git.
+- **Standards, not new formats:** hook events in the shape most agents already use, MCP and AGENTS.md.
+- **Never used to rate people.**
 
 ## Project status
 
-Orchestraty is in its validation stage. Before the product is built, a short series of experiments checks the approach:
+Orchestraty is in its validation stage. Before the product is built out, a short series of experiments checks the approach:
 
-1. **Capture.** Every session, prompt, tool call and commit is recorded on Windows, WSL2 and macOS, without slowing the agent or losing events.
-2. **Briefs.** Short effect summaries help reviewers find real problems faster, without making them trust the summary too much.
-3. **Demand.** Developers really do run several agents at once and run into each other's work.
-4. **History.** A report on the last 30 days of agent work tells a developer something they didn't know and act on.
+1. **Capture.** Hooks record every session event on Windows, WSL2 and macOS without slowing the agent or losing events. Claude Code on Windows has passed; other agents and platforms are next.
+2. **Awareness.** When an agent is told what another session changed, the combined work stops breaking.
+3. **Frequency.** Parallel sessions on real repositories collide often enough to matter.
+4. **Demand.** Developers really do run several sessions on one repository at once.
 
 | Part | Where | State |
 | --- | --- | --- |
 | Effect engine | [`engine/`](engine/) | Built, and being hardened |
+| Main package (`orch` command, coordinator, live map, notes) | [`orchestraty/`](orchestraty/) | Scaffold: the package installs and reports its version; the components are planned |
 | Agent-setup scanner | [`spikes/scan/`](spikes/scan/) | Experiment |
 | Capture shim, git-hook chaining and latency harness | [`spikes/capture/`](spikes/capture/) | Experiment |
 | Session-to-commit linker, event counter and custom-ref probe | [`spikes/capture/`](spikes/capture/) | Experiment |
 | Change-effects classifier | [`spikes/_shared/`](spikes/_shared/) | Experiment |
-| Local record, briefs, Radar, team sync | | Planned |
+| Coordinator, overlap rules, notes, Claude Code mod, editor extension | | Planned |
+| Team sync through git | | Planned |
 
-Experiment code lives in `spikes/` and will be deleted when the experiments end. Anything worth keeping is rebuilt properly in its long-term home ([ADR-0002](docs/decisions/0002-throwaway-spikes-live-in-spikes.md)).
+Experiment code lives in `spikes/` and will be deleted when the experiments end ([ADR-0002](docs/decisions/0002-throwaway-spikes-live-in-spikes.md)). The coordination core is built as product code in `orchestraty/` from the start ([ADR-0003](docs/decisions/0003-coordination-core-is-product-code-from-the-start.md)).
 
 ## Repository layout
 
 ```text
 .
+├── orchestraty/            The main package (Python package orchestraty, command orch)
+│   ├── orchestraty/        Package source: capture, coordinator, live map, rules, delivery, adapters
+│   └── tests/              Package test suite
 ├── engine/                 The effect engine (Python package orch_engine)
 │   ├── orch_engine/        Ingest, parsing, code graph, analyses
 │   ├── tests/              Engine test suite
@@ -165,84 +183,54 @@ Experiment code lives in `spikes/` and will be deleted when the experiments end.
 
 | Need | For |
 | --- | --- |
-| Python 3.10 or later | The engine |
+| Python 3.10 or later | The main package and the engine |
 | Python 3.9 or later | The experiments. The scanner must also run on older systems. |
 | git | Everything |
 | pytest 8 or 9 | The test suites. It is the only dependency. |
 
-### Run the engine tests
+### Run the tests
 
 Windows (PowerShell):
 
 ```powershell
-cd engine
 python -m pip install "pytest>=8,<10"
-python -m pytest
+cd engine;      python -m pytest; cd ..
+cd orchestraty; python -m pytest; cd ..
+cd spikes;      python -m pytest; cd ..
 ```
 
 macOS, Linux and WSL2:
 
 ```bash
-cd engine
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install "pytest>=8,<10"
-python -m pytest
+(cd engine && python -m pytest)
+(cd orchestraty && python -m pytest)
+(cd spikes && python -m pytest)
 ```
 
-On Debian and Ubuntu, including the default WSL2 distribution, `venv` needs the `python3-venv` package first (`sudo apt install python3-venv`).
+On Debian and Ubuntu, including the default WSL2 distribution, `venv` needs the `python3-venv` package first (`sudo apt install python3-venv`). To leave no bytecode caches behind, set `PYTHONDONTWRITEBYTECODE=1` first.
 
-### Run the experiment tests
-
-```bash
-cd spikes
-python -m pytest
-```
-
-To leave no bytecode caches behind, set `PYTHONDONTWRITEBYTECODE=1` first. `spikes/pytest.ini` already turns off pytest's own cache.
-
-### Try the engine
-
-The engine has no packaged command line yet. Its modules run directly:
+### Try what exists
 
 ```bash
-pip install -e ./engine
+pip install -e ./engine -e ./orchestraty
+orch --version
 
 # Structural regression check of the current branch against main
 python -m orch_engine.check --repo . --base main
-
-# Generate an AGENTS.md for a repository, from its code graph
-python -m orch_engine.context --repo path/to/repo --write AGENTS.md
 
 # Read-only graph tools for coding agents, over MCP
 pip install -e "./engine[mcp]"
 python -m orch_engine.mcp_server --repo .
 ```
 
-Two optional extras add features but aren't needed for the tests:
+The engine's optional extras add features but aren't needed for the tests:
 - `treesitter` parses more languages: Go, Java, Rust, C#, Ruby, PHP, C and C++;
 - `mcp` adds the MCP server.
 
-### Engine modules
-
-| Module | What it does |
-| --- | --- |
-| `ingest` | Opens a local folder or clones a repository safely, lists its files, and reads any commit straight from git's objects |
-| `parsing`, `treesitter_parser` | Symbols, imports, calls and complexity for each file |
-| `graph` | The code graph: files and symbols, joined by contains, imports, calls and method-of edges |
-| `pipeline` | `build_index()`: ingest, parse and build the graph, with a signed cache. `build_index_at()` does the same for any commit without checking it out |
-| `impact` | The blast radius of a symbol or a file |
-| `insights` | Entry points, hub files, routes and data models |
-| `techdebt` | Import cycles, complexity hotspots, dead code and near-duplicates |
-| `coverage` | Which symbols the tests reference |
-| `config_map` | The configuration surface |
-| `diagram` | Architecture maps and focused views, as Mermaid or Graphviz |
-| `track` | Structural snapshots of commits, and the differences between them |
-| `check` | A structural regression check between two refs |
-| `context` | An AGENTS.md generated from the graph |
-| `mcp_server` | Read-only graph tools for coding agents |
-
-Settings (`ORCH_DATA_DIR`, `ORCH_USE_CACHE`) are described in [`engine/README.md`](engine/README.md).
+Engine settings (`ORCH_DATA_DIR`, `ORCH_USE_CACHE`) and modules are described in [`engine/README.md`](engine/README.md).
 
 ## Development
 
@@ -274,16 +262,16 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 | Experiment tests | Linux 3.9 to 3.12; Windows 3.12 | Every push and pull request |
 | Experiment tests on macOS | macOS 3.12 | Manual runs, and weekly on Mondays |
 
-Every job also fails if the tests leave any file behind in `engine/` or `spikes/`.
+Every job also fails if the tests leave any file behind.
 
 ### Conventions
 
-- **Engine:** Python 3.10 or later, and standard library only in the core. Optional extras are imported lazily, so a missing extra turns off one feature instead of breaking import.
+- **Main package and engine:** Python 3.10 or later, and standard library only in the core. Optional extras are imported lazily, so a missing extra turns off one feature instead of breaking import.
 - **Experiments:** Python 3.9 or later, standard library only, and a test for every safety property.
+- **Import direction:** the main package may import the engine; neither imports from `spikes/`.
 - **Files:** LF line endings (enforced by `.gitattributes`), UTF-8 without BOM.
 - **Tests leave nothing behind:** no `__pycache__`, no `.pytest_cache`, no output files.
 - **Data:** fixtures are synthetic. Secrets, real transcripts, scan results and other data are never committed.
-- **History:** don't mass-reformat engine files, because it breaks `git blame`.
 - **Decisions:** anything that shapes the design is recorded as an ADR in [`docs/decisions/`](docs/decisions/), starting from the [template](docs/decisions/template.md).
 
 ### Decision records
@@ -292,13 +280,16 @@ Every job also fails if the tests leave any file behind in `engine/` or `spikes/
 | --- | --- |
 | [0001](docs/decisions/0001-effect-engine-starts-from-earlier-core.md) | The effect engine starts from the core of an earlier product. |
 | [0002](docs/decisions/0002-throwaway-spikes-live-in-spikes.md) | Throwaway experiment code lives in `spikes/`. |
+| [0003](docs/decisions/0003-coordination-core-is-product-code-from-the-start.md) | The coordination core is product code from the start, in `orchestraty/`. |
 
 ## Privacy and security
 
-- **Transcripts stay local.** Raw prompts and transcripts never leave the machine by default. Only distilled, redacted records are shared, under the team's own policy.
-- **The scanner reads names and counts, never content.** It never opens session, transcript or history files, and keeps only counts. Names become one-way codes whose key is thrown away after each run. See [`spikes/scan/PRIVACY.md`](spikes/scan/PRIVACY.md).
-- **Capture never disturbs the agent.** Its hooks print nothing and never block or fail the agent; an internal error becomes one line in the log instead.
-- **The engine checks what it loads.** Its cache is signed, so a tampered cache is not trusted, and ingesting a repository is covered by security tests.
+- **Nothing leaves your machine by default.** Raw prompts and transcripts stay where the agent keeps them. Teams share only distilled records (files, functions and contract changes) under a policy committed to their own repository.
+- **Notes are facts, not text from other sessions.** Every note is built from a template filled with structured fields such as a function name, a file and a line, so one session cannot inject instructions into another.
+- **No model calls.** Orchestraty never sends your code to a model to decide anything.
+- **The scanner reads names and counts, never content.** It never opens session, transcript or history files. See [`spikes/scan/PRIVACY.md`](spikes/scan/PRIVACY.md).
+- **Capture never disturbs the agent.** Its hooks print nothing and never block or fail the agent.
+- **The engine checks what it loads.** Its cache is signed, so a tampered cache is not trusted.
 - **No telemetry.** Nothing about how you use it is sent anywhere.
 
 Please report security issues privately to the maintainers, not in a public issue.
