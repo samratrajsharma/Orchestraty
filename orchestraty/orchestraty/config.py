@@ -7,11 +7,13 @@ changes. A missing or unreadable file means the defaults.
   folder (shared by all its worktrees). Sessions elsewhere are read from the spool and dropped.
 * ``idle_seconds``: the coordinator exits after this long with no live session and no new event.
 * ``session_timeout``: a session with no event for this long counts as ended.
+* ``level0_seconds``: how often every live session is refreshed from git and the worktrees
+  without a hooked session are looked at.
 """
 import json
 import os
 
-DEFAULTS = {"repos": [], "idle_seconds": 600, "session_timeout": 1800}
+DEFAULTS = {"repos": [], "idle_seconds": 600, "session_timeout": 1800, "level0_seconds": 5}
 
 
 def _same(a, b):

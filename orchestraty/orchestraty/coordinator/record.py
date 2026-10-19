@@ -48,6 +48,20 @@ CREATE TABLE IF NOT EXISTS sessions (
     state TEXT NOT NULL,
     turn TEXT NOT NULL DEFAULT '',
     note TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS session_files (
+    session_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attributed INTEGER NOT NULL,
+    PRIMARY KEY (session_id, path));
+CREATE TABLE IF NOT EXISTS session_symbols (
+    session_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    change TEXT NOT NULL,
+    contract TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    PRIMARY KEY (session_id, symbol));
 """
 
 EVENT_COLUMNS = ("ts", "agent", "event", "session_id", "tool_name", "tool_use_id", "cwd", "file_path")
@@ -164,6 +178,33 @@ class Record:
             ", ".join(SESSION_COLUMNS), ", ".join("?" * len(SESSION_COLUMNS))),
             [s.get(c, "" if c not in ("repo_id", "base_guessed", "started", "last_seen") else None)
              for c in SESSION_COLUMNS])
+
+    # what each session changed (a projection of the live map, replaced on every change)
+    def put_changes(self, sid, files, unattributed, symbols):
+        """files: {path: status}; unattributed: [path]; symbols: [SymbolChange.as_dict()]."""
+        self.db.execute("DELETE FROM session_files WHERE session_id = ?", (sid,))
+        self.db.execute("DELETE FROM session_symbols WHERE session_id = ?", (sid,))
+        self.db.executemany("INSERT INTO session_files VALUES (?, ?, ?, ?)",
+                            [(sid, p, s, 1) for p, s in files.items()] + [(sid, p, "?", 0) for p in unattributed])
+        self.db.executemany("INSERT INTO session_symbols VALUES (?, ?, ?, ?, ?, ?)",
+                            [(sid, s["symbol"], s["kind"], s["change"], s["contract"],
+                              json.dumps({"reasons": s["reasons"], "file": s["file"], "lines": s["lines"],
+                                          "moved_from": s["moved_from"]}, sort_keys=True)) for s in symbols])
+
+    def changes(self, sid):
+        """({path: status}, [unattributed paths], [symbol dicts]) for one session."""
+        files, unattributed = {}, []
+        for r in self.db.execute("SELECT * FROM session_files WHERE session_id = ? ORDER BY path", (sid,)):
+            if r["attributed"]:
+                files[r["path"]] = r["status"]
+            else:
+                unattributed.append(r["path"])
+        symbols = []
+        for r in self.db.execute("SELECT * FROM session_symbols WHERE session_id = ? ORDER BY symbol", (sid,)):
+            d = json.loads(r["detail"])
+            d.update(symbol=r["symbol"], kind=r["kind"], change=r["change"], contract=r["contract"])
+            symbols.append(d)
+        return files, unattributed, symbols
 
     def sessions(self, states=None, repo_id=None):
         sql, args = "SELECT * FROM sessions", []

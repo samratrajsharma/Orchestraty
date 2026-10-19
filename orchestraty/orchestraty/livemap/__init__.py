@@ -1,1 +1,1 @@
-"""The live map: every live session on a repository, and the files, functions and contract changes it has made since its starting commit."""
+"""The live map: for every live session on a repository, the files it has changed since its base commit, and what those changes do to the code's functions and their contracts."""

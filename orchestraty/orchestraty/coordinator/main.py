@@ -9,7 +9,14 @@ A session is created from its first event: its worktree, repository, branch and 
 event is a fresh SessionStart. Sessions outside watched repositories, or outside git, are
 ignored: their spool lines are read and dropped, their spool files deleted once read, and
 nothing about them is recorded.
+
+Every live session is followed on the live map (``livemap.map``), refreshed after its tool
+calls and on a timer. The timer also looks at the other worktrees of each repository with a
+live session: one with changes and no hooked session becomes a plain-git session (agent
+``git``, level 0), based on its merge base with the main worktree's HEAD, so agents that run
+no hooks, editors and people are seen too.
 """
+import hashlib
 import json
 import logging
 import logging.handlers
@@ -19,8 +26,10 @@ import time
 
 from orchestraty import __version__, config, gitio
 from orchestraty.coordinator.lock import Heartbeat, Lock
-from orchestraty.coordinator.record import Record, SchemaError
+from orchestraty.coordinator.record import Record, SchemaError, repo_key
 from orchestraty.coordinator.spool import SpoolReader
+from orchestraty.livemap import changes as git_changes
+from orchestraty.livemap.map import LiveMap
 
 SCAN_SECONDS = 0.15
 HOUSEKEEPING_SECONDS = 10
@@ -32,6 +41,7 @@ WORKING_EVENTS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseF
 IDLE_EVENTS = ("SessionStart", "Stop", "StopFailure")
 DETAIL_FIELDS = ("source", "reason", "stop_hook_active", "len")
 LOCK_WAIT_SECONDS = 3.0
+LEVEL0_AGENT = "git"
 
 # Exit codes of run()
 OK, ALREADY_RUNNING, NEWER_RECORD, FAILED = 0, 3, 4, 5
@@ -52,10 +62,29 @@ class Coordinator:
         self._cfg_stamp = object()
         self.bad_lines = 0
         self._last_housekeeping = 0
+        self._last_scan = None
+        self.changed = set()               # sessions whose live map changed in the last step
         self.reload_config()
+        self.livemap = LiveMap(state, self.log)
+        self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
+        for session in self.sessions.values():
+            self._track(session)
 
     def close(self):
         self.record.close()
+
+    def _track(self, session):
+        key = self._repo_keys.get(session["repo_id"])
+        if key is None:
+            self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
+            key = self._repo_keys.get(session["repo_id"], "")
+        self.livemap.track(session, key, adopt_existing=session["agent"] == LEVEL0_AGENT)
+
+    def _end(self, session, note):
+        session["state"], session["note"], session["turn"] = "ended", note, ""
+        self.record.put_session(session)
+        self.livemap.forget(session["id"])
+        self.sessions.pop(session["id"], None)
 
     # configuration
     def reload_config(self):
@@ -86,7 +115,78 @@ class Coordinator:
             self._last_housekeeping = now
             self.expire(now)
             self.clean_spool(now)
+        self.update_map()
         return len(lines)
+
+    def update_map(self):
+        """Refresh the live map where needed and record what changed. On the timer every live
+        session is refreshed and the plain-git worktrees are looked at."""
+        mono = time.monotonic()
+        if self._last_scan is None or mono - self._last_scan >= self.cfg["level0_seconds"]:
+            self._last_scan = mono
+            self.livemap.mark_all()
+            self.scan_level0()
+        self.changed = self.livemap.refresh_pending()
+        if self.changed:
+            with self.record.transaction():
+                for sid in sorted(self.changed):
+                    v = self.livemap.views.get(sid)
+                    if v is not None:
+                        self.record.put_changes(sid, v.files, v.unattributed,
+                                                [c.as_dict() for c in v.symbols.values()])
+        return self.changed
+
+    def scan_level0(self):
+        """Plain-git sessions: worktrees of a repository with a live hooked session that have
+        changes and no hooked session of their own."""
+        hooked = [s for s in self.sessions.values() if s["state"] == "live" and s["agent"] != LEVEL0_AGENT]
+        repos = {}
+        for s in hooked:
+            repos.setdefault(s["repo_id"], s)
+        for repo_id, any_session in repos.items():
+            try:
+                trees = git_changes.worktrees(any_session["worktree"])
+            except (gitio.GitError, gitio.UntrustedRepositoryError):
+                continue
+            busy = {os.path.normcase(s["worktree"]) for s in hooked if s["repo_id"] == repo_id}
+            main_head = trees[0]["head"] if trees else ""
+            for i, tree in enumerate(trees):
+                self._scan_tree(repo_id, tree, i == 0, main_head, busy)
+
+    def _scan_tree(self, repo_id, tree, is_main, main_head, busy):
+        path = tree["path"]
+        sid = "git-" + hashlib.sha1(os.path.normcase(path).encode("utf-8", "surrogateescape")).hexdigest()[:12]
+        existing = self.sessions.get(sid)
+        if os.path.normcase(path) in busy:
+            if existing:
+                with self.record.transaction():
+                    self._end(existing, "a hooked session works here")
+            return
+        if existing:
+            base = existing["base_commit"]
+        elif is_main or not main_head:
+            base = tree["head"]
+        else:
+            base = git_changes.merge_base(path, tree["head"], main_head) or tree["head"]
+        try:
+            files = git_changes.changed_files(path, base)
+        except (gitio.GitError, gitio.UntrustedRepositoryError):
+            return
+        with self.record.transaction():
+            if not files:
+                if existing:
+                    self._end(existing, "clean")
+                return
+            now = self.now_ns()
+            if existing is None:
+                existing = {"id": sid, "agent": LEVEL0_AGENT, "repo_id": repo_id, "cwd": path, "worktree": path,
+                            "branch": tree["branch"], "base_commit": base, "base_guessed": 0, "started": now,
+                            "last_seen": now, "state": "live", "turn": "", "note": "plain git"}
+                self.sessions[sid] = existing
+                self._track(existing)
+                self.log.info("plain-git session %s in %s, base %s", sid, path, base[:12])
+            existing["last_seen"] = now
+            self.record.put_session(existing)
 
     def handle(self, agent, raw):
         try:
@@ -117,6 +217,12 @@ class Coordinator:
         self.record.add_event(row, {k: line[k] for k in DETAIL_FIELDS if k in line})
         self.apply(session, event, line, ts)
         self.record.put_session(session)
+        if session["state"] != "live":
+            self.livemap.forget(sid)
+            return
+        if sid not in self.livemap.sessions:
+            self._track(session)
+        self.livemap.note_event(session, event, line)
 
     def session_for(self, sid, agent, line, event, ts):
         if sid in self.ignored:
@@ -139,7 +245,9 @@ class Coordinator:
             self.log.info("ignoring a %s session: %s", agent, why)
             return None
         fresh = event == "SessionStart" and self.now_ns() - ts < FRESH_START_SECONDS * NS
-        session = {"id": sid, "agent": agent, "repo_id": self.record.repo_id(info["common_dir"]), "cwd": cwd,
+        rid = self.record.repo_id(info["common_dir"])
+        self._repo_keys[rid] = repo_key(info["common_dir"])
+        session = {"id": sid, "agent": agent, "repo_id": rid, "cwd": cwd,
                    "worktree": info["top"], "branch": info["branch"], "base_commit": info["head"],
                    "base_guessed": 0 if fresh else 1, "started": ts, "last_seen": ts,
                    "state": "live", "turn": "", "note": ""}
@@ -176,6 +284,7 @@ class Coordinator:
                     self.record.put_session(s)
         for s in stale:
             del self.sessions[s["id"]]
+            self.livemap.forget(s["id"])
 
     def clean_spool(self, now):
         """Delete spool files read to the end whose session is ignored, or ended more than a
@@ -204,8 +313,10 @@ class Coordinator:
                     self.reader.forget(path)
                     self.record.forget_position(path)
 
-    def live_count(self):
-        return sum(1 for s in self.sessions.values() if s["state"] == "live")
+    def live_count(self, hooked_only=False):
+        """Live sessions; with hooked_only, plain-git ones left out (they keep nothing awake)."""
+        return sum(1 for s in self.sessions.values()
+                   if s["state"] == "live" and not (hooked_only and s["agent"] == LEVEL0_AGENT))
 
 
 def _logger(state):
@@ -271,7 +382,8 @@ def run(state, scan_seconds=SCAN_SECONDS):
                     return FAILED
                 time.sleep(1)
                 continue
-            if coordinator.live_count() == 0 and time.monotonic() - last_event > coordinator.cfg["idle_seconds"]:
+            if (coordinator.live_count(hooked_only=True) == 0
+                    and time.monotonic() - last_event > coordinator.cfg["idle_seconds"]):
                 heartbeat.stop(remove=True)   # from here on, a hook starts a new coordinator
                 if coordinator.step():         # ... unless something arrived meanwhile
                     last_event = time.monotonic()

@@ -34,19 +34,21 @@ def _coordinator(state, now):
     return out
 
 
-def _session(s, now):
+def _session(s, now, changes):
+    files, unattributed, symbols = changes
     return {"id": s["id"], "agent": s["agent"], "worktree": s["worktree"], "branch": s["branch"],
             "base_commit": s["base_commit"], "base_guessed": bool(s["base_guessed"]),
             "state": s["state"], "turn": s["turn"], "note": s["note"],
             "started": _iso(s["started"] / NS), "last_event": _iso(s["last_seen"] / NS),
-            "seconds_since_last_event": max(0, int(now - s["last_seen"] / NS))}
+            "seconds_since_last_event": max(0, int(now - s["last_seen"] / NS)),
+            "changes": {"files": files, "unattributed": unattributed, "symbols": symbols}}
 
 
 def collect(state, include_ended=False, now=None):
     now = time.time() if now is None else now
     cfg = config.load(state)
     data = {"schema": STATUS_SCHEMA, "coordinator": _coordinator(state, now), "repositories": []}
-    sessions_by_repo, repo_rows = {}, {}
+    sessions_by_repo, repo_rows, changes = {}, {}, {}
     if os.path.exists(state.record):
         record = Record(state.record, readonly=True)
         try:
@@ -54,6 +56,7 @@ def collect(state, include_ended=False, now=None):
             states = None if include_ended else ("live",)
             for s in record.sessions(states=states):
                 sessions_by_repo.setdefault(s["repo_id"], []).append(s)
+                changes[s["id"]] = record.changes(s["id"])
         finally:
             record.close()
     for common_dir in cfg["repos"]:
@@ -61,8 +64,29 @@ def collect(state, include_ended=False, now=None):
         sessions = sessions_by_repo.get(row["id"], []) if row else []
         data["repositories"].append({
             "name": repo_name(common_dir), "common_dir": common_dir,
-            "sessions": [_session(s, now) for s in sorted(sessions, key=lambda s: (s["started"], s["id"]))]})
+            "sessions": [_session(s, now, changes.get(s["id"], ({}, [], [])))
+                         for s in sorted(sessions, key=lambda s: (s["started"], s["id"]))]})
     return data
+
+
+def _summary(changes, limit=4):
+    """One line: the files a session changed and the functions whose contract it changed."""
+    files, symbols = changes["files"], changes["symbols"]
+    if not files and not changes["unattributed"]:
+        return ""
+    names = sorted(files)
+    parts = ["files: " + ", ".join(names[:limit]) + (f" (+{len(names) - limit} more)" if len(names) > limit else "")]
+    if changes["unattributed"]:
+        parts.append(f"{len(changes['unattributed'])} not attributed")
+    marked = [c for c in symbols if c["contract"] in ("breaking", "review")]
+    modified = [c for c in symbols if c["contract"] not in ("breaking", "review") and c["kind"] != "added"]
+    if marked:
+        shown = [f"{c['symbol'].split('::')[-1]} [{c['contract']}: {'; '.join(c['reasons'][:2])}]"
+                 for c in sorted(marked, key=lambda c: (c["contract"] != "breaking", c["symbol"]))[:limit]]
+        parts.append("contracts: " + ", ".join(shown) + (f" (+{len(marked) - limit} more)" if len(marked) > limit else ""))
+    if modified:
+        parts.append(f"{len(modified)} other functions changed")
+    return "; ".join(parts)
 
 
 def _ago(seconds):
@@ -94,7 +118,12 @@ def render(data):
             rows.append((s["id"][:8], s["agent"], os.path.basename(s["worktree"]) or s["worktree"],
                          s["branch"] or "(detached)", base, _ago(s["seconds_since_last_event"]), state or "-"))
         widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
-        lines += ["  " + "  ".join(v.ljust(w) for v, w in zip(r, widths)).rstrip() for r in rows]
+        lines.append("  " + "  ".join(v.ljust(w) for v, w in zip(rows[0], widths)).rstrip())
+        for row, s in zip(rows[1:], repo["sessions"]):
+            lines.append("  " + "  ".join(v.ljust(w) for v, w in zip(row, widths)).rstrip())
+            summary = _summary(s["changes"])
+            if summary:
+                lines.append("    " + summary)
     if any(s["base_guessed"] for r in data["repositories"] for s in r["sessions"]):
         lines += ["", "base?: the session was first seen after it started, so its base is the commit at that time."]
     return "\n".join(lines) + "\n"
