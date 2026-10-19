@@ -96,6 +96,10 @@ def test_the_path_normaliser(nested):
     assert norm(" ./api//routes.py ") == "api/routes.py"
     assert norm("api/./sub/../routes.py") == "api/routes.py"
     assert norm(os.path.join(nested.meta.path, "api", "routes.py")) == "api/routes.py"
+    # a name inside the repository that starts with ".." is not a path outside it
+    assert norm(os.path.join(nested.meta.path, "..data", "x.py")) == "..data/x.py"
+    outside = os.path.join(os.path.dirname(nested.meta.path), "x.py")
+    assert norm(outside) == outside.replace("\\", "/")
     assert norm("") == ""
     assert mcp_server._norm_symbol(nested, "api\\routes.py::list_users") == "api/routes.py::list_users"
     assert mcp_server._norm_symbol(nested, "Detector.predict") == "Detector.predict"

@@ -123,12 +123,14 @@ def test_all_edges_filter(idx):
 
 
 def test_inherits_edge_built():
+    # A cross-file edge needs import evidence, so the subclass imports its base.
     src_a = "class Base:\n    pass\n"
-    src_b = "class Sub(Base):\n    def m(self):\n        return 1\n"
+    src_b = "from base import Base\n\n\nclass Sub(Base):\n    def m(self):\n        return 1\n"
     pa = parse_python("base.py", src_a)
     pb = parse_python("sub.py", src_b)
     g = build_graph([pa, pb])
     assert "base.py::Base" in g.successors("sub.py::Sub", "inherits")
+    assert g.edge_info("sub.py::Sub", "base.py::Base", "inherits") == {"evidence": "import", "lines": [4]}
 
 
 def test_add_edge_requires_existing_nodes():

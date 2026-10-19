@@ -19,7 +19,9 @@ import pytest
 
 from orch_engine import mcp_server, track
 from orch_engine.config import Config
+from orch_engine.graph import JS_TEXT_NOTE
 from orch_engine.ingest import repo_meta, resolve_commit
+from orch_engine.models import ENGINE_SCHEMA
 from orch_engine.pipeline import build_index, build_index_at
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -228,7 +230,9 @@ def test_it_matches_build_index_on_a_nested_checkout_with_odd_bytes_and_line_end
     cfg = _cfg(tmp_path)
     work, commit = build_index(str(repo), cfg, register=False), build_index_at(str(repo), "HEAD", cfg)
     _same(work, commit)
-    assert {e["path"] for e in work.not_analysed} == {e["path"] for e in commit.not_analysed} == {"app/build/", "env/"}
+    assert work.not_analysed == commit.not_analysed
+    assert {(e["path"], e["reason"]) for e in work.not_analysed} == {
+        ("app/build/", "skipped folder"), ("env/", "skipped folder"), ("", JS_TEXT_NOTE)}
 
 
 # ----------------------------------------------------------------- caches
@@ -243,7 +247,7 @@ def test_use_cache_is_honoured_and_keyed_by_the_full_sha(history, tmp_path):
     on = _cfg(tmp_path / "on", use_cache=True)
     first = build_index_at(history["path"], history["base"], on)
     names = os.listdir(os.path.join(on.data_dir, "cache"))
-    assert f"commit-{history['base']}-2000000.pkl" in names
+    assert f"commit-{history['base']}-2000000-v{ENGINE_SCHEMA}.pkl" in names
     logs = []
     again = build_index_at(history["path"], history["base"], on, progress=logs.append)
     assert "Loading cached parse/graph ..." in logs
@@ -261,7 +265,7 @@ def test_a_snapshot_follows_a_moved_branch_and_names_its_commit_in_full(history,
     assert first["commit"] == history["base"] and second["commit"] == history["head"]
     assert "api/routes.py" in second["files"] and "api/routes.py" not in first["files"]
     assert sorted(os.listdir(os.path.join(cfg.data_dir, "snapshots"))) == sorted(
-        [history["base"] + ".json", history["head"] + ".json"])
+        [f"{history['base']}-v{ENGINE_SCHEMA}.json", f"{history['head']}-v{ENGINE_SCHEMA}.json"])
 
 
 def test_structural_diff_through_mcp_uses_no_worktree(history, tmp_path, monkeypatch):

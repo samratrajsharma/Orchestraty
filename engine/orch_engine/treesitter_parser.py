@@ -154,6 +154,16 @@ def _complexity(node) -> int:
 
 def _callee_name(src, call_node):
     try:
+        method = call_node.child_by_field_name("method")      # Ruby: receiver.method(...)
+        receiver = call_node.child_by_field_name("receiver")
+    except Exception:
+        method = receiver = None
+    if method is not None:
+        name = _txt(src, method)
+        if receiver is None:
+            return "bare", name
+        return ("self", name) if _txt(src, receiver) == "self" else ("attr", name)
+    try:
         fn = call_node.child_by_field_name("function") or call_node.child_by_field_name("name")
     except Exception:
         fn = None
@@ -176,6 +186,9 @@ def _callee_name(src, call_node):
 
 
 def _collect_calls(src, node):
+    """Call sites as parsing.py describes them. These languages have no import bindings, so
+    a plain name is 'bare' (resolved within its own file only), self.m()/this.m() is 'self',
+    and any other receiver is 'unknown'."""
     sites, seen = [], set()
     stack = [node]
     while stack:
@@ -183,11 +196,20 @@ def _collect_calls(src, node):
         for ch in n.children:
             if ch.type in _CALL_TYPES:
                 kind, name = _callee_name(src, ch)
-                if name and (kind, name) not in seen:
-                    seen.add((kind, name)); sites.append((kind, name))
+                if name:
+                    line = ch.start_point[0] + 1
+                    if kind == "bare":
+                        site = ("bare", name, (), line, None)
+                    elif kind == "self":
+                        site = ("self", "self", (name,), line, None)
+                    else:
+                        site = ("unknown", None, (name,), line, None)
+                    if site not in seen:
+                        seen.add(site); sites.append(site)
             # don't descend into nested named functions (their calls are theirs)
             if ch.type not in _FUNC_TYPES:
                 stack.append(ch)
+    sites.sort(key=lambda s: s[3])
     return sites
 
 
@@ -216,9 +238,10 @@ def _walk(src, node, rel_path, parent_class, out, lines):
                 sites = _collect_calls(src, ch)
                 out.append(Symbol(
                     id=f"{rel_path}::{qual}", name=name, qualname=qual,
-                    kind="method" if parent_class else "function",
+                    # a Go method is declared outside its type, but is still a method
+                    kind="method" if parent_class or t == "method_declaration" else "function",
                     file=rel_path, start_line=s0, end_line=s1, docstring="",
-                    code="\n".join(lines[s0 - 1:s1]), calls=[n for _, n in sites],
+                    code="\n".join(lines[s0 - 1:s1]), calls=list(dict.fromkeys(s[2][-1] if s[2] else s[1] for s in sites)),
                     call_sites=sites, parent=parent_class, complexity=_complexity(ch), bases=[]))
             # still descend (nested defs / local functions)
             _walk(src, ch, rel_path, parent_class, out, lines)

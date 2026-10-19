@@ -2,6 +2,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+# The version of what the engine computes: parsed files, fingerprints and edges. It is part of
+# every cache key and cache file name, so an entry written by another version is never
+# served. Bump it whenever parse output, fingerprints or edges change.
+ENGINE_SCHEMA = 2
+
 
 @dataclass
 class Symbol:
@@ -19,7 +24,12 @@ class Symbol:
     complexity: int = 0                               # cyclomatic-ish (functions/methods)
     bases: list[str] = field(default_factory=list)    # base classes (inheritance)
     decorators: list[str] = field(default_factory=list)  # decorator names (framework registration)
-    call_sites: list = field(default_factory=list)       # (kind, name): bare|self|attr receiver
+    call_sites: list = field(default_factory=list)       # (kind, name, attrs, line, ref): see parsing
+    base_refs: list = field(default_factory=list)        # how each base class name is bound (classes)
+    signature: dict = field(default_factory=dict)        # captured signature (Python): see parsing
+    sig_hash: str = ""                                   # hash of the signature
+    body_hash: str = ""                                  # hash of the normalised body
+    overloaded: bool = False                             # has typing.overload stubs
 
 
 @dataclass
@@ -34,6 +44,13 @@ class ParsedFile:
     error: str = ""
     exports: list[str] = field(default_factory=list)  # names in module __all__
     has_main: bool = False                            # real `if __name__ == '__main__':` guard
+    module_hash: str = ""                             # hash of the code outside any definition
+    bindings: dict = field(default_factory=dict)      # module-level import bindings: name -> binding
+    star_imports: list[str] = field(default_factory=list)   # Python: modules imported with *
+    assigned: list[str] = field(default_factory=list)  # Python: other names assigned at module level
+    reexports: dict = field(default_factory=dict)     # JS/TS: export { a } from ... -> binding
+    star_reexports: list[str] = field(default_factory=list)  # JS/TS: export * from ...
+    default_export: str = ""                          # JS/TS: the name exported as default
 
 
 @dataclass

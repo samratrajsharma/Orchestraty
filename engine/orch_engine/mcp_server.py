@@ -71,7 +71,7 @@ def _norm_path(idx, path):
     if s and (os.path.isabs(s) or _ABS_WINDOWS.match(s)):
         try:
             rel = os.path.relpath(s, idx.meta.path)
-            if rel != os.curdir and not rel.startswith(os.pardir):
+            if rel not in (os.curdir, os.pardir) and not rel.startswith(os.pardir + os.sep):
                 s = rel
         except ValueError:                        # another drive on Windows
             pass
@@ -120,7 +120,8 @@ def _resolve(idx, symbol: str) -> list[str]:
     return hits
 
 
-def _bfs(step, root: str, max_depth: int) -> list[str]:
+def _bfs(step, root: str, max_depth: int) -> list[tuple[str, str]]:
+    """[(node, the node it was reached from)] in breadth-first order."""
     seen, frontier, out = set(), [root], []
     for _ in range(max(1, max_depth)):
         nxt = []
@@ -128,12 +129,19 @@ def _bfs(step, root: str, max_depth: int) -> list[str]:
             for m in step(nid):
                 if m != root and m not in seen:
                     seen.add(m)
-                    out.append(m)
+                    out.append((m, nid))
                     nxt.append(m)
         if not nxt:
             break
         frontier = nxt
     return out
+
+
+def _with_edge(idx, nid: str, src: str, dst: str) -> dict:
+    """_short() of a node plus the evidence tag and call-site lines of the edge src -> dst."""
+    d = _short(idx, nid)
+    d.update(idx.graph.edge_info(src, dst, "calls"))
+    return d
 
 
 def _cycles_from_edges(edges) -> list[list[str]]:
@@ -191,8 +199,11 @@ def _changed_files(idx, files, base) -> set[str]:
         h = track.fingerprint(idx, idx.meta.commit)
         d = track.diff(b, h)
         cf = set(d.get("files_added", [])) | set(d.get("files_removed", []))
+        cf |= set(d.get("modules_changed", []))
         for key in d.get("symbols_added", []) + d.get("symbols_removed", []) + d.get("symbols_modified", []):
             cf.add(key.split("::")[0])
+        for m in d.get("symbols_moved", []):
+            cf.update((m["from"].split("::")[0], m["to"].split("::")[0]))
         return cf
     return set()
 
@@ -229,8 +240,9 @@ def find_symbol(name: str) -> dict:
 
 
 def callers_of(symbol: str, transitive: bool = False, max_depth: int = 6) -> dict:
-    """Who calls this symbol, from resolved call edges (not text matches). transitive=True
-    walks callers-of-callers up to max_depth."""
+    """Who calls this symbol, from resolved call edges (not text matches). Each caller comes
+    with the edge's evidence tag (how the call was bound) and its call-site lines.
+    transitive=True walks callers-of-callers up to max_depth."""
     idx = _get_index()
     symbol = _norm_symbol(idx, symbol)
     hits = _resolve(idx, symbol)
@@ -239,13 +251,14 @@ def callers_of(symbol: str, transitive: bool = False, max_depth: int = 6) -> dic
     if len(hits) > 1:
         return {"ambiguous": [_short(idx, h) for h in hits], "hint": "pass a qualified name or full id"}
     root = hits[0]
-    ids = _bfs(idx.graph.callers, root, max_depth) if transitive else idx.graph.callers(root)
+    pairs = _bfs(idx.graph.callers, root, max_depth) if transitive else [(c, root) for c in idx.graph.callers(root)]
     return {"symbol": _short(idx, root), "transitive": transitive,
-            "count": len(ids), "callers": [_short(idx, c) for c in ids]}
+            "count": len(pairs), "callers": [_with_edge(idx, c, c, via) for c, via in pairs]}
 
 
 def callees_of(symbol: str, transitive: bool = False, max_depth: int = 6) -> dict:
-    """What this symbol calls, from resolved call edges. transitive=True walks callees-of-callees."""
+    """What this symbol calls, from resolved call edges, each with the edge's evidence tag and
+    call-site lines. transitive=True walks callees-of-callees."""
     idx = _get_index()
     symbol = _norm_symbol(idx, symbol)
     hits = _resolve(idx, symbol)
@@ -254,9 +267,9 @@ def callees_of(symbol: str, transitive: bool = False, max_depth: int = 6) -> dic
     if len(hits) > 1:
         return {"ambiguous": [_short(idx, h) for h in hits], "hint": "pass a qualified name or full id"}
     root = hits[0]
-    ids = _bfs(idx.graph.callees, root, max_depth) if transitive else idx.graph.callees(root)
+    pairs = _bfs(idx.graph.callees, root, max_depth) if transitive else [(c, root) for c in idx.graph.callees(root)]
     return {"symbol": _short(idx, root), "transitive": transitive,
-            "count": len(ids), "callees": [_short(idx, c) for c in ids]}
+            "count": len(pairs), "callees": [_with_edge(idx, c, via, c) for c, via in pairs]}
 
 
 def blast_radius(symbol: str) -> dict:

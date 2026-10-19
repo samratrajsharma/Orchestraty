@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 
-from orch_engine.parsing import parse_file, parse_js, parse_python
+from orch_engine.parsing import call_name, parse_file, parse_js, parse_python
 
 
 def _sym(pf, qualname):
@@ -102,7 +102,7 @@ def test_decorator_expression_not_counted_as_a_call(sample_repo_path):
     )
     h = _sym(pf, "handler")
     assert "get" not in h.calls
-    assert all(name != "get" for _kind, name in h.call_sites)
+    assert all(call_name(site) != "get" for site in h.call_sites)
     assert h.complexity == 1                      # not inflated by the decorator
 
 

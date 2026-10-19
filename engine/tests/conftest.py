@@ -5,6 +5,7 @@ so the suite is fast, fully offline and deterministic (no network, no model).
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -63,8 +64,36 @@ def build_repo(tmp_path_factory):
 
 
 # --------------------------------------------------------------------------- #
-# Synthetic git repo for the Track (snapshot/diff) feature.
+# Synthetic git repositories, built with no user or system git config.
 # --------------------------------------------------------------------------- #
+FIXTURE_GIT_SWITCHES = ["-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false",
+                        "-c", "core.autocrlf=false", "-c", "maintenance.auto=false", "-c", "gc.auto=0"]
+
+
+@pytest.fixture
+def git_cmd(tmp_path_factory, monkeypatch):
+    """git for building fixture repositories. No user or system config reaches them
+    (autocrlf, hooks, signing), and the engine's own git calls in the test see the same."""
+    if shutil.which("git") is None:
+        pytest.skip("git not available on PATH")
+    empty = tmp_path_factory.mktemp("gitconfig") / "config"
+    empty.write_text("", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+    def git(repo, *args, env=None, stdin=None):
+        e = dict(os.environ, GIT_TERMINAL_PROMPT="0",
+                 GIT_AUTHOR_NAME="Engine Test", GIT_AUTHOR_EMAIL="t@example.com",
+                 GIT_COMMITTER_NAME="Engine Test", GIT_COMMITTER_EMAIL="t@example.com")
+        e.update(env or {})
+        r = subprocess.run(["git"] + FIXTURE_GIT_SWITCHES + list(args), cwd=repo, capture_output=True,
+                           env=e, input=stdin, timeout=120)
+        if r.returncode != 0:
+            raise AssertionError(f"git {args} failed: {r.stderr.decode('utf-8', 'replace')}")
+        return r.stdout.decode("utf-8").strip()
+    return git
+
+
 def _git(args, cwd):
     return subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True)
 

@@ -5,6 +5,7 @@ import json
 import os
 import pickle
 
+from . import models
 from .config import CONFIG
 from .ingest import MAX_BLOB_BYTES, blob_text, ingest, ingest_commit, read_blobs
 from .parsing import parse_file
@@ -14,7 +15,8 @@ from .graph import build_graph
 class RepoIndex:
     """Everything the engine knows about one repository at one commit: the parsed files
     and the code graph built from them. `not_analysed` lists what the index left out
-    (skipped folders, symlinks, submodules, oversized files) as {"path", "reason"}, so a
+    (skipped folders, symlinks, submodules, oversized files) and what binding could not
+    cover (namespace packages, TypeScript path aliases, ...) as {"path", "reason"}, so a
     gap is stated rather than read as "nothing there"."""
 
     def __init__(self, meta, parsed_files, graph, config, not_analysed=None):
@@ -22,7 +24,7 @@ class RepoIndex:
         self.parsed_files = parsed_files
         self.graph = graph
         self.config = config
-        self.not_analysed = list(not_analysed or [])
+        self.not_analysed = list(not_analysed or []) + list(getattr(graph, "not_analysed", []))
         self.memo = {}          # per-index cache for pure analyses (insights, overview, ...)
 
     def stats(self):
@@ -46,8 +48,10 @@ def _signature(meta, files):
     # bust the cache. That silently broke Timeline/Track on git repos: track/dirty saw
     # the edit, but capture reused the stale HEAD-keyed parse and reported "no change"
     # (QA finding G-05). Always hashing the tree makes any uncommitted edit invalidate
-    # the cache, which is the whole point of over-time tracking.
+    # the cache, which is the whole point of over-time tracking. The schema version is in
+    # it too, so an entry another engine version wrote is never served.
     h = hashlib.sha1()
+    h.update(("schema-%d|" % models.ENGINE_SCHEMA).encode())
     h.update((meta.commit or "").encode())
     for rel, ab in sorted(files):
         try:
@@ -62,7 +66,7 @@ def _cache_file(data_dir, meta, sig):
     d = os.path.join(data_dir, "cache")
     os.makedirs(d, exist_ok=True)
     safe = "".join(ch if ch.isalnum() else "_" for ch in meta.name)[:40] or "repo"
-    return os.path.join(d, f"{safe}_{sig}.pkl")
+    return os.path.join(d, f"{safe}_v{models.ENGINE_SCHEMA}_{sig}.pkl")
 
 
 def _cache_secret(data_dir):
@@ -110,6 +114,22 @@ def _cache_load(path, secret):
         return None
 
 
+def _load_index_parts(path, secret):
+    """(parsed, graph) from a cache file, or None unless it is a verified entry that this
+    engine version wrote."""
+    loaded = _cache_load(path, secret)
+    if isinstance(loaded, dict) and loaded.get("schema") == models.ENGINE_SCHEMA:
+        return loaded["parsed"], loaded["graph"]
+    return None
+
+
+def _dump_index_parts(path, parsed, graph, secret):
+    try:
+        _cache_dump(path, {"schema": models.ENGINE_SCHEMA, "parsed": parsed, "graph": graph}, secret)
+    except Exception:
+        pass
+
+
 def _cache_dump(path, obj, secret):
     blob = pickle.dumps(obj)
     sig = hmac.new(secret, blob, hashlib.sha256).digest()
@@ -155,9 +175,9 @@ def build_index(source, config=CONFIG, progress=None, use_cache=None, register=T
         secret = _cache_secret(config.data_dir)
         if os.path.exists(cache):
             log("Loading cached parse/graph ...")
-            loaded = _cache_load(cache, secret)       # HMAC-verified; None on miss/tamper
-            if loaded is not None and len(loaded) >= 2:   # older caches also hold chunks: ignored
-                parsed, graph = loaded[0], loaded[1]
+            parts = _load_index_parts(cache, secret)     # HMAC-verified; None on miss/tamper
+            if parts is not None:
+                parsed, graph = parts
 
     if parsed is None:
         log(f"Parsing {len(code_files)} code + {len(doc_files)} doc files ...")
@@ -165,10 +185,7 @@ def build_index(source, config=CONFIG, progress=None, use_cache=None, register=T
         log("Building code graph ...")
         graph = build_graph(parsed)
         if use_cache:
-            try:
-                _cache_dump(cache, (parsed, graph), secret)
-            except Exception:
-                pass
+            _dump_index_parts(cache, parsed, graph, secret)
 
     if register:
         record_repo(config.data_dir, source, meta)
@@ -192,16 +209,17 @@ def build_index_at(source, ref="HEAD", config=CONFIG, progress=None, use_cache=N
     log("Reading commit %s from git objects ..." % ref)
     meta, code_files, doc_files, not_analysed = ingest_commit(source, ref, config.data_dir, max_bytes=max_bytes)
     files = code_files + doc_files
-    cache = os.path.join(config.data_dir, "cache", "commit-%s-%d.pkl" % (meta.commit, max_bytes))
+    cache = os.path.join(config.data_dir, "cache",
+                         "commit-%s-%d-v%d.pkl" % (meta.commit, max_bytes, models.ENGINE_SCHEMA))
 
     parsed = graph = None
     if use_cache:
         secret = _cache_secret(config.data_dir)
         if os.path.exists(cache):
             log("Loading cached parse/graph ...")
-            loaded = _cache_load(cache, secret)       # HMAC-verified; None on miss/tamper
-            if loaded is not None and len(loaded) >= 2:
-                parsed, graph = loaded[0], loaded[1]
+            parts = _load_index_parts(cache, secret)     # HMAC-verified; None on miss/tamper
+            if parts is not None:
+                parsed, graph = parts
 
     if parsed is None:
         log(f"Parsing {len(code_files)} code + {len(doc_files)} doc files ...")
@@ -210,10 +228,7 @@ def build_index_at(source, ref="HEAD", config=CONFIG, progress=None, use_cache=N
         log("Building code graph ...")
         graph = build_graph(parsed)
         if use_cache:
-            try:
-                _cache_dump(cache, (parsed, graph), secret)
-            except Exception:
-                pass
+            _dump_index_parts(cache, parsed, graph, secret)
 
     if register:
         record_repo(config.data_dir, source, meta)

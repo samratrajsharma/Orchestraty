@@ -151,17 +151,107 @@ def _git_env():
     return env
 
 
+# ---------------- running git ----------------
+# Options on every git command the engine runs. A repository's own config can name programs
+# that even a read-only command starts: log.showSignature with gpg.program runs one on a plain
+# `git log` over a signed commit, and core.fsmonitor on anything that reads the index. A command
+# that diffs must also pass --no-ext-diff and --no-textconv; the engine runs none today, and
+# never uses --textconv or --filters. core.longpaths: deep paths blow past Windows' 260 chars.
+GIT_SAFE_OPTIONS = ("-c", "log.showSignature=false", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true")
+
+_OWN_CLONE_ROOTS = set()        # <data_dir>/repos of every data folder this process cloned into
+_CLONE_NAME = re.compile(r"^[0-9a-f]{16}$")      # _dest_for's folder names
+
+
+class UntrustedRepositoryError(RuntimeError):
+    """git refused a repository that another user owns (git's safe.directory check)."""
+
+
+def _register_clone_root(repos):
+    _OWN_CLONE_ROOTS.add(os.path.realpath(repos))
+
+
+def own_clone(cwd):
+    """The clone folder (<data_dir>/repos/<hash>) that `cwd` lies in, or "" when `cwd` is
+    not inside a clone the engine made in this process."""
+    if not cwd:
+        return ""
+    here = os.path.normcase(os.path.realpath(cwd))
+    for root in _OWN_CLONE_ROOTS:
+        try:
+            rel = os.path.relpath(here, os.path.normcase(root))
+        except ValueError:                        # another drive on Windows
+            continue
+        first = rel.split(os.sep)[0]
+        if first not in (os.curdir, os.pardir) and _CLONE_NAME.match(first):
+            return os.path.join(root, first)
+    return ""
+
+
+_NETWORK_COMMANDS = ("clone", "fetch")      # the engine's own clones, and nothing else
+
+
+def git_command(args, cwd=None):
+    """(argv, env) for one git command run in `cwd`.
+
+    - No command but the engine's own clone and fetch may use the network. That rules out a
+      repository's own config starting a program through a transport, as a partial clone's
+      on-demand fetch of a missing object would (core.sshCommand on an ssh remote).
+    - git's ownership check stays on for any path the user gives. Inside the engine's own
+      clones, git is pointed at the clone's .git (GIT_DIR, GIT_WORK_TREE), so it never
+      searches a parent folder, and the check is switched off (safe.directory=*) only when
+      that .git is the clone's own folder."""
+    env = _git_env()
+    env["GIT_NO_LAZY_FETCH"] = "1"                 # git 2.44 and later
+    if not (args and args[0] in _NETWORK_COMMANDS):
+        env["GIT_ALLOW_PROTOCOL"] = "none"         # every transport refused, on older git too
+    trust = []
+    clone = own_clone(cwd)
+    if clone:
+        gitdir = os.path.join(clone, ".git")
+        env["GIT_DIR"], env["GIT_WORK_TREE"] = gitdir, clone
+        if os.path.isdir(gitdir) and not os.path.islink(gitdir):
+            trust = ["-c", "safe.directory=*"]
+    return ["git", *GIT_SAFE_OPTIONS, *trust, *args], env
+
+
+_DUBIOUS = re.compile(r"dubious ownership in repository at '(.*)'")
+_SAFE_DIR_LINE = re.compile(r"safe\.directory\s+(.+?)\s*$", re.M)
+
+
+def _shell_quote(path):
+    """A path in single quotes, which both PowerShell and POSIX shells take literally: a
+    folder named x$(touch y) must never run anything when the command is pasted."""
+    if os.name == "nt":
+        return "'" + path.replace("'", "''") + "'"
+    return "'" + path.replace("'", "'\\''") + "'"
+
+
+def check_ownership(returncode, stderr, cwd):
+    """Raise UntrustedRepositoryError when git refused to work because another user owns
+    the repository. The message names the command the user can run if they trust the
+    folder; the engine never runs it for them. git translates its own explanation, but not
+    the safe.directory command it suggests, so that is what is matched."""
+    text = stderr or ""
+    if returncode == 0 or ("dubious ownership" not in text and "--add safe.directory" not in text):
+        return
+    m = _DUBIOUS.search(text) or _SAFE_DIR_LINE.search(text)
+    where = m.group(1).strip("'\"") if m else os.path.abspath(cwd or os.curdir)
+    raise UntrustedRepositoryError(
+        "git refused to read the repository at %s because another user owns it (git's "
+        "safe.directory check). If you trust this folder, run:\n"
+        "    git config --global --add safe.directory %s\n"
+        "The engine never changes this setting itself." % (where, _shell_quote(where)))
+
+
 def _run_git(args, cwd=None, timeout=60):
-    # safe.directory: git exits non-zero with "detected dubious ownership" when it
-    #   thinks a repo belongs to another user. These are OUR clones in OUR cache, so
-    #   the guard buys nothing and silently breaks every git call we make.
-    # core.longpaths: deep node_modules paths blow past Windows' 260-char limit.
     # encoding: git writes UTF-8; the locale default (cp1252 on Windows) crashed on the
     #   first non-ASCII author or message.
-    return subprocess.run(
-        ["git", "-c", "safe.directory=*", "-c", "core.longpaths=true"] + args,
-        cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=timeout, env=_git_env())
+    argv, env = git_command(args, cwd)
+    r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=timeout, env=env)
+    check_ownership(r.returncode, r.stderr, cwd)
+    return r
 
 
 def _capture(args, cwd, timeout=20):
@@ -169,6 +259,8 @@ def _capture(args, cwd, timeout=20):
     try:
         r = _run_git(args, cwd=cwd, timeout=timeout)
         return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
+    except UntrustedRepositoryError:
+        raise
     except FileNotFoundError:
         return 127, "", "git is not installed or not on PATH."
     except Exception as e:
@@ -180,6 +272,8 @@ def _git(args, cwd):
         out = _run_git(args, cwd=cwd, timeout=15)
         if out.returncode == 0:
             return out.stdout.strip()
+    except UntrustedRepositoryError:
+        raise
     except Exception:
         pass
     return ""
@@ -275,6 +369,7 @@ def clone_or_local(source, data_dir):
         url = validate_git_url(normalize_git_url(src))
         repos = os.path.join(data_dir, "repos")
         os.makedirs(repos, exist_ok=True)
+        _register_clone_root(repos)
         dest = _dest_for(repos, url)
 
         if os.path.isdir(dest):
@@ -363,6 +458,26 @@ def posix_rel(abs_p, root):
     return os.path.relpath(abs_p, root).replace(os.sep, "/")
 
 
+_IMPORT_CONFIGS = ("tsconfig.json", "jsconfig.json", "package.json")
+
+
+def _is_import_config(name):
+    return name in _IMPORT_CONFIGS or (name.startswith("tsconfig.") and name.endswith(".json"))
+
+
+def _import_config_notes(rel, text):
+    """A Not analysed entry when a tsconfig or jsconfig sets path aliases (paths, baseUrl)
+    or a package.json declares workspaces: the resolver does not follow them, so cross-file
+    calls through them get no edge. The file itself is never indexed."""
+    if rel.rsplit("/", 1)[-1] == "package.json":
+        if re.search(r'"workspaces"\s*:', text):
+            return [{"path": rel, "reason": "workspace packages: cross-file calls between them are not resolved"}]
+    elif re.search(r'"(paths|baseUrl)"\s*:', text):
+        return [{"path": rel, "reason": "TypeScript path aliases (paths or baseUrl): cross-file calls "
+                                        "through them are not resolved"}]
+    return []
+
+
 def _kind(rel):
     """'code', 'doc' or None for a repo-relative path, by extension."""
     ext = os.path.splitext(rel)[1].lower()
@@ -406,6 +521,13 @@ def list_files(path, max_files=20000, not_analysed=None):
                 skipped.append({"path": posix_rel(abs_p, path),
                                 "reason": "symlink" if os.path.islink(abs_p) else "outside the repository"})
                 continue
+            if _is_import_config(f):
+                try:
+                    if os.path.getsize(abs_p) <= 1_000_000:
+                        with open(abs_p, "r", encoding="utf-8", errors="replace") as fh:
+                            skipped.extend(_import_config_notes(posix_rel(abs_p, path), fh.read()))
+                except OSError:
+                    pass
             kind = _kind(f)
             if kind == "code":
                 code.append((posix_rel(abs_p, path), abs_p))
@@ -445,14 +567,15 @@ _FULL_SHA = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 def _git_bytes(args, cwd, stdin=None, timeout=300):
     """(returncode, stdout bytes, stderr text) for a read-only git command. Bytes, so no
     locale decoding ever touches paths or file contents."""
-    env = _git_env()
+    argv, env = git_command(args, cwd)
     env["GIT_OPTIONAL_LOCKS"] = "0"            # never take the index lock, never refresh it
     try:
-        r = subprocess.run(["git", "-c", "safe.directory=*", "-c", "core.longpaths=true"] + args,
-                           cwd=cwd, input=stdin, capture_output=True, timeout=timeout, env=env)
+        r = subprocess.run(argv, cwd=cwd, input=stdin, capture_output=True, timeout=timeout, env=env)
     except FileNotFoundError:
         return 127, b"", "git is not installed or not on PATH."
-    return r.returncode, r.stdout, r.stderr.decode("utf-8", "replace").strip()
+    err = r.stderr.decode("utf-8", "replace").strip()
+    check_ownership(r.returncode, err, cwd)
+    return r.returncode, r.stdout, err
 
 
 def resolve_commit(path, ref):
@@ -476,7 +599,7 @@ def commit_files(path, sha, max_bytes=MAX_BLOB_BYTES, max_files=20000):
     rc, out, err = _git_bytes(["ls-tree", "-r", "-z", "-l", "--full-tree", sha], path)
     if rc != 0:
         raise RuntimeError("git ls-tree failed for %s: %s" % (sha, err[:300]))
-    code, docs, skipped, skipped_dirs, capped = [], [], [], set(), False
+    code, docs, skipped, skipped_dirs, capped, configs = [], [], [], set(), False, []
     for record in out.split(b"\0"):
         if not record:
             continue
@@ -500,6 +623,8 @@ def commit_files(path, sha, max_bytes=MAX_BLOB_BYTES, max_files=20000):
         if mode == "120000":
             skipped.append({"path": rel, "reason": "symlink"})
             continue
+        if otype == "blob" and _is_import_config(comps[-1]) and size.isdigit() and int(size) <= 1_000_000:
+            configs.append((rel, obj))
         kind = _kind(rel)
         if otype != "blob" or kind is None:
             continue
@@ -512,6 +637,10 @@ def commit_files(path, sha, max_bytes=MAX_BLOB_BYTES, max_files=20000):
                 skipped.append({"path": "", "reason": "file cap (%d) reached: the rest of the commit" % max_files})
             continue
         (code if kind == "code" else docs).append((rel, obj))
+    if configs:
+        blobs = read_blobs(path, [sha for _, sha in configs])
+        for rel, sha in configs:
+            skipped.extend(_import_config_notes(rel, blob_text(blobs[sha])))
     code.sort()
     docs.sort()
     skipped.sort(key=lambda e: (e["path"], e["reason"]))
