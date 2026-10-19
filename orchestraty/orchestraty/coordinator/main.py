@@ -30,6 +30,7 @@ from orchestraty.coordinator.record import Record, SchemaError, repo_key
 from orchestraty.coordinator.spool import SpoolReader
 from orchestraty.livemap import changes as git_changes
 from orchestraty.livemap.map import LiveMap
+from orchestraty.rules import overlap
 
 SCAN_SECONDS = 0.15
 HOUSEKEEPING_SECONDS = 10
@@ -64,6 +65,8 @@ class Coordinator:
         self._last_housekeeping = 0
         self._last_scan = None
         self.changed = set()               # sessions whose live map changed in the last step
+        self.new_findings = []             # findings first seen in the last step
+        self._dirty_repos = set()          # repositories whose findings must be worked out again
         self.reload_config()
         self.livemap = LiveMap(state, self.log)
         self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
@@ -85,6 +88,7 @@ class Coordinator:
         self.record.put_session(session)
         self.livemap.forget(session["id"])
         self.sessions.pop(session["id"], None)
+        self._dirty_repos.add(session["repo_id"])
 
     # configuration
     def reload_config(self):
@@ -116,6 +120,7 @@ class Coordinator:
             self.expire(now)
             self.clean_spool(now)
         self.update_map()
+        self.update_findings()
         return len(lines)
 
     def update_map(self):
@@ -135,6 +140,37 @@ class Coordinator:
                         self.record.put_changes(sid, v.files, v.unattributed,
                                                 [c.as_dict() for c in v.symbols.values()])
         return self.changed
+
+    def update_findings(self):
+        """Run the overlap rules for every repository where something changed: record new
+        findings, refresh the known ones, and resolve those that stopped holding. A finding
+        that needs a code graph still being built is kept as it is meanwhile. Returns the
+        findings first seen now."""
+        repos = self._dirty_repos | {self.sessions[sid]["repo_id"] for sid in self.changed if sid in self.sessions}
+        self._dirty_repos = set()
+        self.new_findings = []
+        for repo_id in sorted(repos):
+            ids = sorted(sid for sid, s in self.sessions.items()
+                         if s["repo_id"] == repo_id and s["state"] == "live" and sid in self.livemap.views)
+            views = {sid: self.livemap.views[sid] for sid in ids}
+            graph_ready = {sid: self.livemap.graph(sid) is not None for sid in ids}
+            base_ready = {sid: self.livemap.base_graph(sid) is not None for sid in ids}
+            found = overlap.evaluate(views, self.livemap.graph, self.livemap.base_graph)
+            now = self.now_ns()
+            with self.record.transaction():
+                for f in found:
+                    if self.record.put_finding(repo_id, f, now):
+                        self.new_findings.append(f)
+                        self.log.info("finding %s (%s)", f.key, f.strength)
+                keys = {f.key for f in found}
+                for old in self.record.findings(repo_id=repo_id):
+                    if old["key"] in keys:
+                        continue
+                    waiting = ((old["rule"] in ("O3", "O4") and graph_ready.get(old["receiver"]) is False)
+                               or (old["rule"] == "O6" and base_ready.get(old["changer"]) is False))
+                    if not waiting:
+                        self.record.resolve_finding(old["key"], now)
+        return self.new_findings
 
     def scan_level0(self):
         """Plain-git sessions: worktrees of a repository with a live hooked session that have
@@ -219,6 +255,7 @@ class Coordinator:
         self.record.put_session(session)
         if session["state"] != "live":
             self.livemap.forget(sid)
+            self._dirty_repos.add(session["repo_id"])
             return
         if sid not in self.livemap.sessions:
             self._track(session)
@@ -285,6 +322,7 @@ class Coordinator:
         for s in stale:
             del self.sessions[s["id"]]
             self.livemap.forget(s["id"])
+            self._dirty_repos.add(s["repo_id"])
 
     def clean_spool(self, now):
         """Delete spool files read to the end whose session is ignored, or ended more than a

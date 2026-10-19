@@ -48,7 +48,7 @@ def collect(state, include_ended=False, now=None):
     now = time.time() if now is None else now
     cfg = config.load(state)
     data = {"schema": STATUS_SCHEMA, "coordinator": _coordinator(state, now), "repositories": []}
-    sessions_by_repo, repo_rows, changes = {}, {}, {}
+    sessions_by_repo, repo_rows, changes, findings = {}, {}, {}, {}
     if os.path.exists(state.record):
         record = Record(state.record, readonly=True)
         try:
@@ -57,6 +57,8 @@ def collect(state, include_ended=False, now=None):
             for s in record.sessions(states=states):
                 sessions_by_repo.setdefault(s["repo_id"], []).append(s)
                 changes[s["id"]] = record.changes(s["id"])
+            for f in record.findings():
+                findings.setdefault(f["repo_id"], []).append(f)
         finally:
             record.close()
     for common_dir in cfg["repos"]:
@@ -65,8 +67,45 @@ def collect(state, include_ended=False, now=None):
         data["repositories"].append({
             "name": repo_name(common_dir), "common_dir": common_dir,
             "sessions": [_session(s, now, changes.get(s["id"], ({}, [], [])))
-                         for s in sorted(sessions, key=lambda s: (s["started"], s["id"]))]})
+                         for s in sorted(sessions, key=lambda s: (s["started"], s["id"]))],
+            "overlaps": [_finding(f) for f in sorted(findings.get(row["id"], []) if row else [], key=_finding_order)]})
     return data
+
+
+_STRENGTH = {"strong": 0, "medium": 1, "weak": 2}
+
+
+def _finding_order(f):
+    return (_STRENGTH.get(f["strength"], 9), f["rule"], f["key"])
+
+
+def _finding(f):
+    return {"key": f["key"], "rule": f["rule"], "strength": f["strength"], "symbol": f["symbol"],
+            "file": f["file"], "changer": f["changer"], "receiver": f["receiver"], "sessions": f["sessions"],
+            "detail": f["detail"]}
+
+
+def _short(sid):
+    return sid[:8]
+
+
+def _overlap_line(f):
+    """One line for one finding, from its structured fields only."""
+    name = f["symbol"].split("::")[-1] if f["symbol"] else f["file"]
+    d = f["detail"]
+    if f["rule"] == "O1":
+        what = f"{f['file']} changed in both " + " and ".join(_short(s) for s in f["sessions"])
+    elif f["rule"] == "O2":
+        what = f"{f['symbol']} changed in both " + " and ".join(_short(s) for s in f["sessions"])
+    elif f["rule"] in ("O3", "O4"):
+        how = "removed" if f["rule"] == "O4" else "breaking change"
+        what = (f"{name} ({f['symbol'].split('::')[0]}): {how} in {_short(f['changer'])}, "
+                f"used in {f['file']} by {_short(f['receiver'])}")
+    else:
+        left = d.get("left", [])
+        what = (f"{name} ({f['symbol'].split('::')[0]}): {len(left)} caller{'s' if len(left) != 1 else ''} "
+                f"left behind by {_short(f['changer'])}")
+    return f"{f['strength']:<6}  {f['rule']}  {what}"
 
 
 def _summary(changes, limit=4):
@@ -124,6 +163,9 @@ def render(data):
             summary = _summary(s["changes"])
             if summary:
                 lines.append("    " + summary)
+        if repo["overlaps"]:
+            lines.append("  overlaps:")
+            lines += ["    " + _overlap_line(f) for f in repo["overlaps"]]
     if any(s["base_guessed"] for r in data["repositories"] for s in r["sessions"]):
         lines += ["", "base?: the session was first seen after it started, so its base is the commit at that time."]
     return "\n".join(lines) + "\n"

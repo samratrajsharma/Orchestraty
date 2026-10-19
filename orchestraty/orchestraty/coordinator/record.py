@@ -54,6 +54,22 @@ CREATE TABLE IF NOT EXISTS session_files (
     status TEXT NOT NULL,
     attributed INTEGER NOT NULL,
     PRIMARY KEY (session_id, path));
+CREATE TABLE IF NOT EXISTS findings (
+    key TEXT PRIMARY KEY,
+    repo_id INTEGER NOT NULL,
+    rule TEXT NOT NULL,
+    strength TEXT NOT NULL,
+    changer TEXT NOT NULL,
+    receiver TEXT NOT NULL,
+    sessions TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    file TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    state TEXT NOT NULL,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    resolved INTEGER);
+CREATE INDEX IF NOT EXISTS findings_by_repo ON findings (repo_id, state);
 CREATE TABLE IF NOT EXISTS session_symbols (
     session_id TEXT NOT NULL,
     symbol TEXT NOT NULL,
@@ -205,6 +221,43 @@ class Record:
             d.update(symbol=r["symbol"], kind=r["kind"], change=r["change"], contract=r["contract"])
             symbols.append(d)
         return files, unattributed, symbols
+
+    # findings of the overlap rules
+    def put_finding(self, repo_id, f, now):
+        """Open a finding (or reopen it), or refresh one that is open. Returns True when it
+        was not open before."""
+        row = self.db.execute("SELECT state FROM findings WHERE key = ?", (f.key,)).fetchone()
+        detail = json.dumps(f.detail, sort_keys=True)
+        if row is None:
+            self.db.execute("INSERT INTO findings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, NULL)",
+                            (f.key, repo_id, f.rule, f.strength, f.changer, f.receiver, json.dumps(list(f.sessions)),
+                             f.symbol, f.file, detail, now, now))
+            return True
+        self.db.execute("UPDATE findings SET detail = ?, last_seen = ?, state = 'open', resolved = NULL WHERE key = ?",
+                        (detail, now, f.key))
+        return row["state"] != "open"
+
+    def resolve_finding(self, key, now):
+        self.db.execute("UPDATE findings SET state = 'resolved', resolved = ? WHERE key = ? AND state = 'open'",
+                        (now, key))
+
+    def findings(self, repo_id=None, states=("open",)):
+        sql, args, where = "SELECT * FROM findings", [], []
+        if repo_id is not None:
+            where.append("repo_id = ?")
+            args.append(repo_id)
+        if states:
+            where.append("state IN (%s)" % ", ".join("?" * len(states)))
+            args.extend(states)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        out = []
+        for r in self.db.execute(sql + " ORDER BY key", args):
+            d = dict(r)
+            d["sessions"] = json.loads(d["sessions"])
+            d["detail"] = json.loads(d["detail"])
+            out.append(d)
+        return out
 
     def sessions(self, states=None, repo_id=None):
         sql, args = "SELECT * FROM sessions", []

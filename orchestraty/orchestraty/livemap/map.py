@@ -281,6 +281,14 @@ class LiveMap:
         self._graphs[sid] = (key, g)
         return g
 
+    def base_graph(self, sid):
+        """The code graph of the session's base commit, or None while it is being built."""
+        v = self.views.get(sid)
+        if v is None:
+            return None
+        idx = self.indexes.get(v.repo_key, v.base, v.worktree)
+        return idx.graph if idx is not None else None
+
     def index_state(self, sid):
         """"ready", "building" or "failed: <why>" for the session's base index."""
         v = self.views.get(sid)
