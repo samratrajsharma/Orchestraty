@@ -18,8 +18,9 @@ def state(state_root):
 
 
 def record_sessions(state, repo, *events):
-    for sid, event, cwd in events:
-        spool_event(state.root, sid, event, cwd)
+    start = time.time_ns()
+    for i, (sid, event, cwd) in enumerate(events):
+        spool_event(state.root, sid, event, cwd, ts=start + i * 1000)     # distinct, increasing times
     c = cmain.Coordinator(state)
     try:
         c.step()

@@ -108,6 +108,23 @@ def test_a_replaced_or_truncated_file_is_read_from_the_start(tmp_path):
     assert lines_of(reader.poll()) == [b'{"c":1}', b'{"c":2}', b'{"c":3}']
 
 
+def test_a_file_with_the_same_inode_but_other_bytes_is_read_from_the_start(tmp_path):
+    # Linux hands a deleted file's inode to the next new file at once; the bytes before the
+    # offset tell the two apart.
+    f = tmp_path / "claude" / "s1.jsonl"
+    f.parent.mkdir(parents=True)
+    f.write_bytes(b'{"a":1}\n{"a":2}\n')
+    reader = SpoolReader(str(tmp_path))
+    reader.poll()
+    fid, offset = reader.positions[str(f)]
+    dev, ino, tail = fid.split(":")
+    assert bytes.fromhex(tail) == b'{"a":1}\n{"a":2}\n'[-16:] and offset == 16
+    f.write_bytes(b'{"x":1}\n{"x":2}\n{"x":3}\n')        # same file object, other content, longer
+    assert lines_of(reader.poll()) == [b'{"x":1}', b'{"x":2}', b'{"x":3}']
+    reader.positions[str(f)] = ("%s:%s:zz" % (dev, ino), 8)    # a damaged saved position
+    assert len(lines_of(reader.poll())) == 3
+
+
 def test_an_overlong_line_without_a_newline_is_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(spool_mod, "MAX_LINE", 16)
     f = tmp_path / "claude" / "s1.jsonl"

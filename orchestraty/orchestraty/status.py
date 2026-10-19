@@ -61,7 +61,7 @@ def collect(state, include_ended=False, now=None):
         sessions = sessions_by_repo.get(row["id"], []) if row else []
         data["repositories"].append({
             "name": repo_name(common_dir), "common_dir": common_dir,
-            "sessions": [_session(s, now) for s in sorted(sessions, key=lambda s: s["started"])]})
+            "sessions": [_session(s, now) for s in sorted(sessions, key=lambda s: (s["started"], s["id"]))]})
     return data
 
 

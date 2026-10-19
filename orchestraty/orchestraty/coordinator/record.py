@@ -176,4 +176,4 @@ class Record:
             args.append(repo_id)
         if where:
             sql += " WHERE " + " AND ".join(where)
-        return [dict(r) for r in self.db.execute(sql + " ORDER BY started", args)]
+        return [dict(r) for r in self.db.execute(sql + " ORDER BY started, id", args)]
