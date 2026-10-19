@@ -208,7 +208,10 @@ if os.name == "nt":
         finally:
             _winapi.CloseHandle(handle)
 
-    DETACHED = 0x00000008 | 0x00000200          # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP: a console of its own that nobody sees. Not
+    # DETACHED_PROCESS: with no console at all, every git the coordinator runs would get a new
+    # console (seconds each, and a window may flash up).
+    DETACHED = 0x08000000 | 0x00000200
     BREAKAWAY = 0x01000000                      # CREATE_BREAKAWAY_FROM_JOB: outlive the agent's job
 
     class _Startup:
