@@ -1,6 +1,6 @@
 # ADR-0003: The coordination core is product code from the start, in `orchestraty/`
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-19
 - Deciders: Samrat Raj Sharma
 
