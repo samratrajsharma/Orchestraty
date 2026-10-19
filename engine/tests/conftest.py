@@ -80,6 +80,9 @@ def git_cmd(tmp_path_factory, monkeypatch):
     empty.write_text("", encoding="utf-8")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # The engine reads the system config on purpose; point it at an empty file, so a machine
+    # that already trusts every folder (CI runners set safe.directory=*) changes nothing here.
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(empty))
 
     def git(repo, *args, env=None, stdin=None):
         e = dict(os.environ, GIT_TERMINAL_PROMPT="0",

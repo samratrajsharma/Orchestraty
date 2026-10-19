@@ -33,9 +33,11 @@ def make_repo(git_cmd, path):
 
 
 def _assume_other_owner(monkeypatch, repo):
-    """Make git treat every repository as another user's; skip where git can't."""
+    """Make git treat every repository as another user's. The probe runs git exactly as the
+    engine does; skip where git still does not refuse (a git that ignores the variable)."""
     monkeypatch.setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
-    probe = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=repo, capture_output=True)
+    argv, env = ingest.git_command(["rev-parse", "--show-toplevel"], str(repo))
+    probe = subprocess.run(argv, cwd=repo, capture_output=True, env=env)
     if probe.returncode == 0:
         pytest.skip("the installed git does not honour GIT_TEST_ASSUME_DIFFERENT_OWNER")
 
