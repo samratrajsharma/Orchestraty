@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import sys
+import time
 
 from orchestraty import __version__
 from orchestraty.capture import install as hooks
@@ -72,7 +73,82 @@ def cmd_init(args):
     else:
         print(f"Installed in {path}." + (f" Backup: {saved}" if saved else ""))
         print("Sessions started from now on are seen; restart running sessions to include them.")
+    _watch_here(state, os.getcwd(), quiet_outside=True)
     return 0
+
+
+def _watch_here(state, path, quiet_outside=False):
+    """Watch the repository holding `path`. Returns an exit code."""
+    from orchestraty import config, gitio
+    try:
+        info = gitio.worktree_info(path)
+    except gitio.UntrustedRepositoryError as exc:
+        print(f"Not watched: {exc}", file=sys.stderr)
+        return 2
+    if info is None:
+        if quiet_outside:
+            print("Run orch watch inside a repository to have its sessions compared.")
+            return 0
+        print(f"orch watch: {path} is not inside a git worktree", file=sys.stderr)
+        return 2
+    added = config.watch(state, info["common_dir"])
+    name = os.path.basename(info["top"])
+    print(f"Watching {name} ({info['common_dir']})." if added else f"Already watching {name}.")
+    return 0
+
+
+def cmd_watch(args):
+    return _watch_here(State(), os.path.abspath(args.path or os.getcwd()))
+
+
+def cmd_unwatch(args):
+    from orchestraty import config, gitio
+    state = State()
+    path = os.path.abspath(args.path or os.getcwd())
+    try:
+        info = gitio.worktree_info(path)
+    except gitio.UntrustedRepositoryError:
+        info = None
+    common_dir = info["common_dir"] if info else path
+    if config.unwatch(state, common_dir):
+        print(f"No longer watching {common_dir}.")
+    else:
+        print(f"{common_dir} was not watched.")
+    return 0
+
+
+def cmd_status(args):
+    from orchestraty import status
+    data = status.collect(State(), include_ended=args.all)
+    if args.json:
+        print(json.dumps(data, indent=2))
+    else:
+        sys.stdout.write(status.render(data))
+    return 0
+
+
+def cmd_coordinator(args):
+    from orchestraty.coordinator import main as coordinator
+    from orchestraty.coordinator.lock import Lock, touch
+    state = State()
+    if args.action == "run":
+        return coordinator.run(state)
+    # stop: ask, then wait until the lock is free
+    lock = Lock(state.lock)
+    if lock.acquire():
+        lock.release()
+        print("The coordinator is not running.")
+        return 0
+    touch(state.stop)
+    deadline = time.monotonic() + args.wait
+    while time.monotonic() < deadline:
+        if lock.acquire():
+            lock.release()
+            print("The coordinator stopped.")
+            return 0
+        time.sleep(0.1)
+    print("The coordinator did not stop in time.", file=sys.stderr)
+    return 1
 
 
 def cmd_restore(args):
@@ -138,6 +214,28 @@ def build_parser():
     restore.add_argument("--from-backup", action="store_true",
                          help="put back the settings file as it was before the last orch init")
     restore.set_defaults(handler=cmd_restore)
+
+    watch = commands.add_parser("watch", help="compare the sessions of this repository",
+                                description="Watch a repository: its sessions are recorded and compared.")
+    watch.add_argument("path", nargs="?", help="a folder inside the repository (default: here)")
+    watch.set_defaults(handler=cmd_watch)
+    unwatch = commands.add_parser("unwatch", help="stop watching this repository",
+                                  description="Stop watching a repository.")
+    unwatch.add_argument("path", nargs="?", help="a folder inside the repository (default: here)")
+    unwatch.set_defaults(handler=cmd_unwatch)
+
+    status = commands.add_parser("status", help="the sessions on each watched repository",
+                                 description="Show the coordinator and the sessions on each watched repository.")
+    status.add_argument("--json", action="store_true", help="print JSON (schema in the 'schema' field)")
+    status.add_argument("--all", action="store_true", help="include ended sessions")
+    status.set_defaults(handler=cmd_status)
+
+    coordinator = commands.add_parser("coordinator", help="run or stop the coordinator by hand",
+                                      description="Hooks start the coordinator when needed; these are for "
+                                                  "debugging.")
+    coordinator.add_argument("action", choices=["run", "stop"])
+    coordinator.add_argument("--wait", type=float, default=10.0, help="seconds to wait for a stop (default 10)")
+    coordinator.set_defaults(handler=cmd_coordinator)
     return parser
 
 

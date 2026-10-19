@@ -33,3 +33,22 @@ def symlinks_work(folder):
         return True
     except (OSError, NotImplementedError):
         return False
+
+
+def spool_event(state_root, session, event, cwd, agent="claude", ts=None, **fields):
+    """Append one spool line the way the hook script writes it (no hook process)."""
+    import time
+    line = {"ts": ts if ts is not None else time.time_ns(), "pid": 1, "agent": agent, "event": event,
+            "len": 1, "session_id": session, "hook_event_name": event, "cwd": str(cwd)}
+    line.update(fields)
+    path = Path(state_root) / "spool" / agent / (session + ".jsonl")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "ab") as fh:
+        fh.write(json.dumps(line).encode("utf-8") + b"\n")
+    return path
+
+
+def hook_payload(event, session, cwd, **fields):
+    body = {"session_id": session, "transcript_path": "/t/x.jsonl", "cwd": str(cwd), "hook_event_name": event}
+    body.update(fields)
+    return json.dumps(body).encode("utf-8")

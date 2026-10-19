@@ -217,6 +217,30 @@ def install_script(state):
     return state.hook_script
 
 
+def launch_lines(python=None):
+    """What the hook script needs to start the coordinator: the interpreter that has this
+    package, and the import path that finds this package and the engine where they are now
+    (installed or not)."""
+    import orchestraty
+    paths = [os.path.dirname(os.path.dirname(os.path.abspath(orchestraty.__file__)))]
+    try:
+        import orch_engine
+        paths.append(os.path.dirname(os.path.dirname(os.path.abspath(orch_engine.__file__))))
+    except ImportError:
+        pass
+    unique = []
+    for p in paths:
+        if not any(_same(p, q) for q in unique):
+            unique.append(p)
+    return [python or sys.executable, os.pathsep.join(unique)]
+
+
+def write_launch(state, python=None):
+    os.makedirs(state.hooks, exist_ok=True)
+    _write_atomic(state.launch, ("\n".join(launch_lines(python)) + "\n").encode("utf-8"))
+    return state.launch
+
+
 def install(state, path, python):
     """Install the hook script and merge our entries into the settings file at `path`.
     Returns (changed, backup folder or None)."""
@@ -224,6 +248,7 @@ def install(state, path, python):
     check_settings_file(path)
     current = load_settings(path)
     script = install_script(state)
+    write_launch(state)
     wanted = merged_settings(current, python, script)
     if os.path.exists(path) and wanted == current:
         return False, None

@@ -50,8 +50,44 @@ class State:
         return self._in("hooks", "hook.py")
 
     @property
+    def launch(self):
+        """How the hook script starts the coordinator: the interpreter, then the import path."""
+        return self._in("hooks", "launch.txt")
+
+    @property
     def spool(self):
         return self._in("spool")
+
+    @property
+    def record(self):
+        return self._in("record.sqlite")
+
+    @property
+    def config(self):
+        return self._in("config.json")
+
+    @property
+    def lock(self):
+        return self._in("coordinator.lock")
+
+    @property
+    def alive(self):
+        """Touched by the coordinator every few seconds; a stale one means it is not running."""
+        return self._in("coordinator.alive")
+
+    @property
+    def spawned(self):
+        """Touched by a hook just before it starts the coordinator, so hooks do not start a
+        crowd of them."""
+        return self._in("coordinator.spawned")
+
+    @property
+    def info(self):
+        return self._in("coordinator.json")
+
+    @property
+    def stop(self):
+        return self._in("coordinator.stop")
 
     @property
     def backups(self):

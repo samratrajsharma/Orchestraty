@@ -25,6 +25,13 @@ its size.
 Silent and fail-open: it prints nothing and always exits 0. An internal failure appends one
 ``{"shim_error": "<exception class>"}`` line instead, so failures show up in the data.
 
+It also starts the coordinator when that is not running (its heartbeat file is stale), at
+most once every few seconds across all hooks: detached, with no handle or stream of the hook's,
+from the state folder (never the agent's folder, whose files must not end up on the
+coordinator's import path), and with no GIT_ or PYTHON variable of the agent's environment.
+``orch init`` writes the interpreter and the import path to use into ``hooks/launch.txt``.
+Setting ``ORCH_NO_COORDINATOR`` turns the start-up off (tests and measurements).
+
 Built-in modules only (sys, os, time, and _winapi on Windows), and no json and no site, so the
 interpreter starts fast. The append is atomic with several writers: on Windows the file is
 opened with FILE_APPEND_DATA only, so the kernel places every write at the end of the file
@@ -49,6 +56,9 @@ EDIT_TOOLS = {b'"Edit"': b"file_path", b'"Write"': b"file_path", b'"MultiEdit"':
 EVENT_FIELDS = {b"SessionStart": b"source", b"SessionEnd": b"reason"}
 FLAG_EVENTS = (b"Stop", b"SubagentStop")
 MAX_FIELD = 4096            # bytes; longer values are left out
+STALE_SECONDS = 10.0        # the coordinator touches its heartbeat every 2 seconds
+RESPAWN_SECONDS = 5.0       # at most one start attempt in this time, by any hook
+COORDINATOR_ARGS = ("-m", "orchestraty", "coordinator", "run")
 _SPACE = b" \t\r\n"
 _ESCAPES = b'"\\/bfnrtu'
 _HEX = b"0123456789abcdefABCDEF"
@@ -197,6 +207,57 @@ if os.name == "nt":
             _winapi.WriteFile(handle, line)
         finally:
             _winapi.CloseHandle(handle)
+
+    DETACHED = 0x00000008 | 0x00000200          # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    BREAKAWAY = 0x01000000                      # CREATE_BREAKAWAY_FROM_JOB: outlive the agent's job
+
+    class _Startup:
+        """What CreateProcess reads from a STARTUPINFO: no window, no handles of ours."""
+        dwFlags = 0
+        wShowWindow = 0
+        hStdInput = None
+        hStdOutput = None
+        hStdError = None
+        lpAttributeList = None
+
+    def command_line(argv):
+        """The Windows command line for argv (the rules of subprocess.list2cmdline)."""
+        result = []
+        for arg in argv:
+            backslashes = []
+            if result:
+                result.append(" ")
+            quote = (" " in arg) or ("\t" in arg) or not arg
+            if quote:
+                result.append('"')
+            for c in arg:
+                if c == "\\":
+                    backslashes.append(c)
+                elif c == '"':
+                    result.append("\\" * len(backslashes) * 2)
+                    backslashes = []
+                    result.append('\\"')
+                else:
+                    if backslashes:
+                        result.extend(backslashes)
+                        backslashes = []
+                    result.append(c)
+            if backslashes:
+                result.extend(backslashes)
+            if quote:
+                result.extend(backslashes)
+                result.append('"')
+        return "".join(result)
+
+    def _spawn(argv, cwd, env):
+        line = command_line(argv)
+        try:
+            handles = _winapi.CreateProcess(argv[0], line, None, None, False, DETACHED | BREAKAWAY, env, cwd,
+                                            _Startup())
+        except OSError:                         # the agent's job allows no breakaway
+            handles = _winapi.CreateProcess(argv[0], line, None, None, False, DETACHED, env, cwd, _Startup())
+        _winapi.CloseHandle(handles[0])
+        _winapi.CloseHandle(handles[1])
 else:
     def _append(path, line):
         fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
@@ -204,6 +265,58 @@ else:
             os.write(fd, line)
         finally:
             os.close(fd)
+
+    def _spawn(argv, cwd, env):
+        if os.fork():
+            return
+        try:                                    # the child: its own session, no streams of ours
+            os.chdir(cwd)
+            os.setsid()
+            fd = os.open(os.devnull, os.O_RDWR)
+            for target in (0, 1, 2):
+                os.dup2(fd, target)
+            os.execve(argv[0], argv, env)
+        finally:
+            os._exit(127)
+
+
+def coordinator_alive(root, now):
+    try:
+        return now - os.stat(os.path.join(root, "coordinator.alive")).st_mtime < STALE_SECONDS
+    except OSError:
+        return False
+
+
+def start_coordinator(root, now):
+    """Start the coordinator if its heartbeat is stale and no hook tried in the last
+    RESPAWN_SECONDS. Returns True when it started one. Two hooks starting one at the same
+    moment is harmless: the coordinator's lock lets only one run."""
+    if coordinator_alive(root, now) or os.environ.get("ORCH_NO_COORDINATOR"):
+        return False                            # running, or switched off (tests, measurements)
+    spawned = os.path.join(root, "coordinator.spawned")
+    try:
+        if now - os.stat(spawned).st_mtime < RESPAWN_SECONDS:
+            return False
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(root, "hooks", "launch.txt"), "rb") as fh:
+            lines = fh.read().decode("utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return False                            # orch init has not said how to start it
+    python = lines[0] if lines else ""
+    if not os.path.isabs(python) or not os.path.isfile(python):
+        return False
+    fd = os.open(spawned, os.O_WRONLY | os.O_CREAT, 0o600)
+    os.close(fd)
+    os.utime(spawned, None)
+    env = {k: v for k, v in os.environ.items()
+           if not k.upper().startswith(("GIT_", "PYTHON")) or k.upper() == "PYTHONDONTWRITEBYTECODE"}
+    if len(lines) > 1 and lines[1]:
+        env["PYTHONPATH"] = lines[1]
+    env["ORCH_HOME"] = root                     # the state folder this hook serves, whatever the agent's env says
+    _spawn([python] + list(COORDINATOR_ARGS), root, env)
+    return True
 
 
 def state_folder(script):
@@ -228,6 +341,7 @@ def main(argv, script=__file__):
         name, line = event_line(raw, agent, event, time.time_ns(), os.getpid())
         path = os.path.join(folder, name)
         append(path, line)
+        start_coordinator(root, time.time())
     except BaseException as exc:                 # fail open, but leave a trace in the data
         line = error_line(agent, exc, time.time_ns(), os.getpid())
         for target in (path, os.path.join(folder, "shim_errors.jsonl")):
