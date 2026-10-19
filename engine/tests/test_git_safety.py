@@ -189,6 +189,26 @@ def test_a_broken_clone_never_falls_through_to_a_repository_in_a_parent_folder(t
     assert ingest.git_toplevel(str(outer / ".orch_cache")) != ""      # outside the clones: plain git
 
 
+def test_an_outer_gits_variables_never_redirect_a_command(tmp_path, git_cmd, monkeypatch):
+    # Run from inside a git hook, the engine inherits GIT_DIR, GIT_INDEX_FILE and the rest,
+    # which would point every command at that other repository.
+    repo = make_repo(git_cmd, tmp_path / "repo")
+    other = make_repo(git_cmd, tmp_path / "other")
+    write(other, {"other_only.py": "def o():\n    return 2\n"})
+    git_cmd(other, "add", "-A")
+    git_cmd(other, "commit", "-q", "-m", "second")
+    for name, value in (("GIT_DIR", other / ".git"), ("GIT_WORK_TREE", other),
+                        ("GIT_INDEX_FILE", other / ".git" / "index"), ("GIT_COMMON_DIR", other / ".git"),
+                        ("GIT_OBJECT_DIRECTORY", other / ".git" / "objects")):
+        monkeypatch.setenv(name, str(value))
+    _, env = ingest.git_command(["rev-parse", "HEAD"], str(repo))
+    assert not set(ingest.INHERITED_GIT_VARIABLES) & set(env)
+    assert ingest.git_toplevel(str(repo)).replace("\\", "/").rstrip("/").endswith("/repo")
+    cfg = Config(data_dir=str(tmp_path / "data"), use_cache=False)
+    files = {pf.file for pf in build_index_at(str(repo), "HEAD", cfg).parsed_files}
+    assert files == {"m.py"}
+
+
 def test_every_git_command_carries_the_defensive_options(tmp_path):
     argv, _ = ingest.git_command(["log", "-n1"], str(tmp_path))
     opts = argv[1:argv.index("log")]

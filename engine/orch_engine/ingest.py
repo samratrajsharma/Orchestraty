@@ -140,8 +140,16 @@ def _rm(path):
         pass
 
 
+# Variables an outer git sets for the hooks it runs (or a caller sets by hand). Inherited, they
+# point every command at that repository and index whatever folder it runs in.
+INHERITED_GIT_VARIABLES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                           "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_PREFIX")
+
+
 def _git_env():
     env = dict(os.environ)
+    for name in INHERITED_GIT_VARIABLES:
+        env.pop(name, None)
     env["GIT_TERMINAL_PROMPT"] = "0"   # fail fast instead of blocking on a login prompt
     env["GCM_INTERACTIVE"] = "never"   # don't pop the Windows credential dialog
     env["GIT_ASKPASS"] = "echo"
