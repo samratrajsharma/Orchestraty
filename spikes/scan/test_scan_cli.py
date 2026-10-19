@@ -75,6 +75,7 @@ def test_full_interactive_run_saves_exactly_what_it_showed_and_nothing_else(linu
                "2026-09-01", "20",           # helper incident
                "yesterday", "last week",     # change incident: two bad dates -> none
                "",                           # ...and no minutes
+               "2026-09-20", "90",           # parallel incident
                "", "abc", "45"]              # collision incident: no date; bad minutes, then 45
     answers.append("")                       # save? default yes
     before = snapshot_tree(m.base, out_dir)
@@ -110,6 +111,7 @@ def test_full_interactive_run_saves_exactly_what_it_showed_and_nothing_else(linu
     assert result["self_report"] == {
         "helper_incident": {"date": "2026-09-01", "minutes": 20},
         "change_incident": {"date": None, "minutes": None},
+        "parallel_incident": {"date": "2026-09-20", "minutes": 90},
         "collision_incident": {"date": None, "minutes": 45},
         "window_days": 30,
     }

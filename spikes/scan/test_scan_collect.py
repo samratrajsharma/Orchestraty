@@ -84,12 +84,16 @@ def test_sessions_are_counted_from_file_dates_only(machine):
     machine.cursor_sessions(ages=(1,))
     machine.droid_sessions(ages=(2,))
     machine.pi_sessions(ages=(3,))
+    machine.openclaw_sessions(ages=(1, 30))
+    machine.cline_sessions(editor="Code", ages=(1,))
+    machine.cline_sessions(editor="Cursor", ages=(2,))
+    machine.cline_cli_sessions(ages=(3,))
     result = sc.collect(machine.env(), days=14)
     counts = {n: (a["sessions"] or {}).get("sessions") for n, a in result["agents"].items()}
     assert counts == {"claude-code": 2, "codex": 2, "gemini-cli": 1, "copilot-cli": 1, "cursor": 1,
-                      "factory-droid": 1, "pi": 1, "opencode": None}
-    assert result["sessions_summary"]["agents_with_sessions"] == 7
-    assert result["sessions_summary"]["sessions_total"] == 9
+                      "factory-droid": 1, "pi": 1, "opencode": None, "openclaw": 1, "cline": 3, "aider": None}
+    assert result["sessions_summary"]["agents_with_sessions"] == 9
+    assert result["sessions_summary"]["sessions_total"] == 13
 
 
 def test_codex_compressed_and_archived_sessions_count(linux_machine):
@@ -153,6 +157,83 @@ def test_max_concurrent_from_creation_and_modification_times(linux_machine, monk
     assert result["agents"]["claude-code"]["sessions"]["max_concurrent"] == 3
     assert result["sessions_summary"]["max_concurrent_all_agents"] == 3
     assert len(paths) == 4
+
+
+def test_relocated_openclaw_state_folder_is_used(linux_machine, tmp_path):
+    other = tmp_path / "claw-state"
+    linux_machine.openclaw_sessions(ages=(1, 2), home=other)
+    agent = sc.collect(linux_machine.env(OPENCLAW_STATE_DIR=str(other)), days=14)["agents"]["openclaw"]
+    assert agent["sessions"]["sessions"] == 2 and agent["home_relocated"] and agent["installed"]
+
+
+def test_cline_in_any_vs_code_based_editor_counts(machine):
+    machine.cline_sessions(editor="Windsurf", ages=(1,))
+    agent = sc.collect(machine.env(), days=14)["agents"]["cline"]
+    assert agent["installed"] and agent["home_found"] and agent["sessions"]["sessions"] == 1
+
+
+def _claude_project(machine, folder):
+    """The Claude Code project-folder name for a folder on the synthetic machine's root."""
+    return "-" + sc._encode_claude_segment(str(folder.relative_to(machine.root)))
+
+
+def test_parallel_sessions_are_counted_per_repository(linux_machine, make_repo, monkeypatch):
+    m = linux_machine
+    shop = make_repo(m.root / "srv" / "shop")
+    worktree = m.root / "srv" / "shop-wt"
+    git(shop, "worktree", "add", "-q", "-b", "wt", str(worktree))
+    blog = make_repo(m.root / "srv" / "blog")
+    # shop: two sessions in the main checkout and one in its worktree, all running at once
+    m.claude_sessions(project=_claude_project(m, shop), ages=(0.010, 0.012))
+    m.claude_sessions(project=_claude_project(m, worktree), ages=(0.011,))
+    # blog: two sessions on different days, never at the same time
+    m.claude_sessions(project=_claude_project(m, blog), ages=(1, 3))
+    monkeypatch.setattr(sc, "_birth_time", lambda st, env: st.st_mtime - 3600)
+    result = sc.collect(m.env(), days=14)
+    per_repo = sorted((i["claude_code_sessions"] for i in result["repos"]["items"]), key=lambda s: s["sessions"])
+    blog_s, shop_s = per_repo
+    assert (shop_s["sessions"], shop_s["checkouts_with_sessions"], shop_s["max_concurrent"]) == (3, 2, 3)
+    assert shop_s["days_with_2plus_sessions"] == 1 and shop_s["days_with_overlapping_sessions"] in (1, 2)
+    assert (blog_s["sessions"], blog_s["max_concurrent"], blog_s["days_with_overlapping_sessions"],
+            blog_s["days_with_2plus_sessions"]) == (2, 1, 0, 0)
+    summary = result["sessions_summary"]["claude_code_by_repo"]
+    assert summary["repos_with_sessions"] == 2 and summary["sessions_matched_to_a_repo"] == 5
+    assert summary["overlap_measurable"] is True
+    assert summary["repos_with_overlapping_sessions"] == 1 and summary["max_concurrent_one_repo"] == 3
+    assert summary["repos_with_2plus_sessions_on_a_day"] == 1 and summary["max_checkouts_with_sessions_one_repo"] == 2
+    assert summary["sessions_not_matched_to_a_repo"] == 0
+
+
+def test_without_creation_times_only_same_day_counts_are_given(linux_machine, make_repo, monkeypatch):
+    m = linux_machine
+    shop = make_repo(m.root / "srv" / "shop")
+    m.claude_sessions(project=_claude_project(m, shop), ages=(0.01, 0.02))
+    monkeypatch.setattr(sc, "_birth_time", lambda st, env: None)
+    result = sc.collect(m.env(), days=14)
+    stats = result["repos"]["items"][0]["claude_code_sessions"]
+    assert stats["max_concurrent"] is None and stats["days_with_overlapping_sessions"] is None
+    assert stats["days_with_2plus_sessions"] in (0, 1)        # 0 only if midnight falls between the two
+    summary = result["sessions_summary"]["claude_code_by_repo"]
+    assert summary["overlap_measurable"] is False and summary["repos_with_overlapping_sessions"] is None
+    assert any("could not be measured" in x for x in result["limits"])
+
+
+def test_sessions_outside_any_repository_are_counted_apart(linux_machine):
+    linux_machine.claude_sessions(project="-srv-deleted-folder", ages=(1,))
+    summary = sc.collect(linux_machine.env(), days=14)["sessions_summary"]["claude_code_by_repo"]
+    assert summary["repos_with_sessions"] == 0 and summary["sessions_not_matched_to_a_repo"] == 1
+
+
+def test_aider_history_in_a_repository_is_dated_but_never_opened(linux_machine, make_repo, monkeypatch):
+    m = linux_machine
+    recent = make_repo(m.home / "code" / "svc")
+    stale = make_repo(m.home / "code" / "old")
+    history = m.aider_history(recent, age=1) + m.aider_history(stale, age=40)
+    opened = _open_spy(monkeypatch)
+    result = sc.collect(m.env(), days=14)
+    assert result["agents"]["aider"]["repos_with_recent_history"] == 1
+    assert sorted(i["aider_history_recent"] for i in result["repos"]["items"]) == [False, True]
+    assert not set(opened) & {os.path.normcase(os.path.realpath(p)) for p in history}
 
 
 # ----------------------------------------------------------------- privacy: nothing private is opened
@@ -1634,6 +1715,17 @@ def test_max_overlap():
     assert sc._max_overlap([(0, 10), (5, 15), (12, 20)]) == 2
     assert sc._max_overlap([(0, 1), (1, 2)]) == 1            # touching intervals do not overlap
     assert sc._max_overlap([(0, 10), (1, 9), (2, 8)]) == 3
+
+
+def test_overlap_days():
+    noon = time.mktime((2026, 10, 5, 12, 0, 0, 0, 0, -1))      # local noon, away from midnight
+    day = 86400
+    assert sc._overlap_days([]) == 0
+    assert sc._overlap_days([(noon, noon + 60)]) == 0
+    assert sc._overlap_days([(noon, noon + 600), (noon + 300, noon + 900)]) == 1
+    assert sc._overlap_days([(noon, noon + 600), (noon + 600, noon + 900)]) == 0       # touching only
+    assert sc._overlap_days([(noon, noon + 2 * day), (noon + 3600, noon + day + 3600)]) == 2
+    assert sc._overlap_days([(noon, noon + 60), (noon + day, noon + day + 60)]) == 0
 
 
 def test_hashes_are_salted_per_run():

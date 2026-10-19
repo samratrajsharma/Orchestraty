@@ -33,10 +33,13 @@ pass the scanner, this note or your result on to anyone else.
 
 What it does:
   * Checks which coding agents are installed (for example Claude Code, Codex,
-    Gemini CLI, Copilot CLI, Cursor).
+    Gemini CLI, Copilot CLI, Cursor, OpenClaw, Cline, Aider).
   * Counts each agent's sessions over the last {days} days, using only file
     names, dates and sizes. It never opens a session, transcript or history
-    file.
+    file. For Claude Code it also groups the sessions by the repository they
+    were started in, using only the names of Claude Code's project folders,
+    and counts how often several sessions ran on one repository at the same
+    time.
   * Looks at git repositories it can find (in common code folders, from
     Claude Code's project list, or ones you name). It counts worktrees, active
     branches, commits made or credited by coding agents, and whether different
@@ -44,7 +47,8 @@ What it does:
     a category (GitHub, GitLab, Bitbucket, Azure or other). It uses read-only
     git commands with all network access switched off. To tell rebased or
     squash-merged work apart, git compares the changes on active branches in
-    memory; no file content is kept.
+    memory; no file content is kept. It also notes whether Aider's history file
+    in a repository changed recently, from the file's date only.
   * Opens the MCP helper settings of each app, and Claude Code's settings files
     (settings.json and any settings your organisation manages), to count the
     helpers, note what kind of command starts them (npx, docker and so on) and
@@ -85,6 +89,10 @@ QUESTIONS = [
     ("change_incident",
      "In the last {window} days, think of the time not knowing what an agent had\n"
      "changed cost you the most time."),
+    ("parallel_incident",
+     "In the last {window} days, think of the time two of your own agent sessions,\n"
+     "running at the same time, broke each other's work or made you redo work, and\n"
+     "cost you the most time."),
     ("collision_incident",
      "In the last {window} days, think of the time your work, or your agent's,\n"
      "colliding with a teammate's work on the same code cost you the most time."),
@@ -134,7 +142,7 @@ def _ask_minutes(input_fn, out):
 
 def ask_questions(input_fn, out):
     out("")
-    out("Three optional questions. Press Enter to skip any of them.")
+    out("Four optional questions. Press Enter to skip any of them.")
     answers = {}
     for key, text in QUESTIONS:
         out("")

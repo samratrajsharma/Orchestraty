@@ -4,9 +4,10 @@ Status: throwaway (Phase 0). Not part of the product.
 
 Describes, in counts, how coding agents are set up and used on this machine:
 which agents are installed, how many sessions they recorded recently (from file
-dates and sizes only), which git repositories show work in flight by different
-people on the same files, which MCP helpers are configured, and how hooks are
-allowed.
+dates and sizes only), how many Claude Code sessions ran at the same time on one
+repository (from project-folder names and file dates only), which git repositories
+show work in flight by different people on the same files, which MCP helpers are
+configured, and how hooks are allowed.
 
 Safety properties (each one is covered by a test):
   * Session, transcript, history and sign-in files are never opened. Only their
@@ -45,7 +46,7 @@ import time
 from pathlib import Path
 
 SCHEMA = "orch-scan/1"
-SCANNER_VERSION = "0.3.2"
+SCANNER_VERSION = "0.4.0"
 
 MAX_REPOS = 50          # repositories inspected per run
 MAX_REFS = 100          # unmerged branches inspected per repository, newest first
@@ -268,14 +269,21 @@ def _lstat_is_link(st):
 
 # ------------------------------------------------------------------ agents
 #
-# One row per agent, from each agent's public documentation (checked 2026-09-24).
-#   "home"      folder relative to a base: "home" (the home folder) or "xdg_config" (~/.config)
+# One row per agent, from each agent's public documentation (checked 2026-09-24; OpenClaw,
+# Cline and Aider added 2026-10-19).
+#   "home"      folder relative to a base: "home" (the home folder), "xdg_config" (~/.config),
+#               or "vscode_global_storage" (an editor extension's folder, in every VS Code-based
+#               editor listed in VSCODE_EDITORS)
+#   "extra_homes"  more (base, folder) pairs where the same agent keeps sessions
 #   "home_env"  an environment variable that relocates the agent's folder, and whether it
 #               names the folder itself ("dir") or a replacement home folder ("home")
 #   "sessions"  where session files live: (subfolder, depth, file-name pattern). Only file
 #               names, sizes and dates are ever read there.
 #   "history"   files in the agent's folder that hold prompt history; never opened
 #   "credentials"  files in the agent's folder that hold sign-in tokens; never opened
+#   "private_dirs"  more folders in the agent's folder whose files are never opened
+#   "sessions_in_repos"  files the agent keeps in each repository instead; only their dates
+#               are read (lstat), never their contents
 #   "generic_binary"  the program name is too common to prove the agent is installed on its
 #               own (e.g. "pi"), so it counts only together with the agent's folder
 #   "source"    "docs" when the session layout is documented by the vendor, "third-party"
@@ -364,15 +372,58 @@ AGENTS = [
         "sessions": None,   # one SQLite database; not counted
         "source": "docs",
     },
+    {
+        "name": "openclaw",
+        "binaries": ["openclaw"],
+        "home": ("home", ".openclaw"),
+        "home_env": ("OPENCLAW_STATE_DIR", "dir"),
+        # <home>/agents/<agent id>/sessions/<session id>.jsonl, next to a sessions.json index.
+        # Newer builds also keep state in a database under state/, which is not read.
+        "sessions": [("agents", 3, r"^[^.]+\.jsonl$")],
+        "credentials": ["openclaw.json"],
+        "private_dirs": ["credentials", "state", "transcripts"],
+        "source": "third-party",
+    },
+    {
+        "name": "cline",
+        "binaries": ["cline"],
+        # The editor extension: <editor>/User/globalStorage/saoudrizwan.claude-dev/tasks/<task id>/
+        # holding ui_messages.json and api_conversation_history.json. The command-line version
+        # keeps the same layout under ~/.cline/data.
+        "home": ("vscode_global_storage", "saoudrizwan.claude-dev"),
+        "extra_homes": [("home", ".cline/data")],
+        "home_env": None,
+        "sessions": [("tasks", 2, r"^ui_messages\.json$")],
+        "private_dirs": ["state", "checkpoints"],
+        "source": "docs",
+    },
+    {
+        "name": "aider",
+        "binaries": ["aider"],
+        "home": ("home", ".aider"),
+        "home_env": None,
+        "sessions": None,   # Aider keeps its history in each repository instead
+        "sessions_in_repos": [".aider.chat.history.md", ".aider.input.history"],
+        "credentials": ["oauth-keys.env"],
+        "source": "docs",
+    },
 ]
+
+# VS Code and the editors built on it, by the folder name each uses for its settings.
+VSCODE_EDITORS = ["Code", "Code - Insiders", "Cursor", "Windsurf", "VSCodium"]
 
 
 def agent_spec(name):
     return next(a for a in AGENTS if a["name"] == name)
 
 
+def _base_folder(env, kind):
+    return env.home if kind == "home" else env.xdg_config()
+
+
 def agent_home(env, spec):
-    """The agent's own folder, following its relocation variable when set."""
+    """The agent's own folder, following its relocation variable when set. For an editor
+    extension, the folder in the first editor listed (agent_homes gives them all)."""
     reloc = spec.get("home_env")
     if reloc and env.environ.get(reloc[0]):
         target = Path(env.environ[reloc[0]])
@@ -380,8 +431,21 @@ def agent_home(env, spec):
             return target / spec["home"][1]
         return target
     kind, rel = spec["home"]
-    base = env.home if kind == "home" else env.xdg_config()
-    return base / rel
+    if kind == "vscode_global_storage":
+        return env.user_config_dir() / VSCODE_EDITORS[0] / "User" / "globalStorage" / rel
+    return _base_folder(env, kind) / rel
+
+
+def agent_homes(env, spec):
+    """Every folder where the agent keeps its files: its own folder (one per editor for an
+    editor extension) and any extra folders."""
+    kind, rel = spec["home"]
+    if kind == "vscode_global_storage":
+        homes = [env.user_config_dir() / editor / "User" / "globalStorage" / rel for editor in VSCODE_EDITORS]
+    else:
+        homes = [agent_home(env, spec)]
+    homes.extend(_base_folder(env, k) / r for k, r in spec.get("extra_homes") or [])
+    return homes
 
 
 # File names that usually hold sign-in tokens, wherever they are. Never opened.
@@ -393,11 +457,13 @@ def private_places(env):
     is ever opened."""
     roots, files = [], []
     for spec in AGENTS:
-        home = agent_home(env, spec)
-        for subdir, _, _ in spec.get("sessions") or []:
-            roots.append(_norm(home / subdir))
-        for name in (spec.get("history") or []) + (spec.get("credentials") or []):
-            files.append(_norm(home / name))
+        for home in agent_homes(env, spec):
+            for subdir, _, _ in spec.get("sessions") or []:
+                roots.append(_norm(home / subdir))
+            for subdir in spec.get("private_dirs") or []:
+                roots.append(_norm(home / subdir))
+            for name in (spec.get("history") or []) + (spec.get("credentials") or []):
+                files.append(_norm(home / name))
     return roots, files
 
 
@@ -465,7 +531,6 @@ def session_stats(env, spec, days, counters):
     layouts = spec.get("sessions")
     if not layouts:
         return None
-    home = agent_home(env, spec)
     since = env.now - days * 86400
     count = 0
     total_bytes = 0
@@ -473,7 +538,7 @@ def session_stats(env, spec, days, counters):
     folders = set()
     intervals = []
     births_known = True
-    for subdir, depth, pattern in layouts:
+    for home, (subdir, depth, pattern) in ((h, layout) for h in agent_homes(env, spec) for layout in layouts):
         for path, st in _scan_files(home / subdir, depth, pattern, counters):
             if st.st_mtime < since:
                 continue
@@ -495,6 +560,59 @@ def session_stats(env, spec, days, counters):
         "folders": len(folders),
         "max_concurrent": _max_overlap(intervals) if (births_known and count) else None,
         "intervals": intervals,   # internal; removed before output
+    }
+
+
+def claude_sessions_by_project(env, days):
+    """{Claude Code project-folder name: [(created, last written), ...]} for the session files
+    in the last `days` days, from folder names and file dates only (nothing is opened). The
+    same files session_stats counts; unreadable folders are counted there, not again here."""
+    spec = agent_spec("claude-code")
+    subdir, depth, pattern = spec["sessions"][0]
+    since = env.now - days * 86400
+    out = {}
+    for path, st in _scan_files(agent_home(env, spec) / subdir, depth, pattern, Counters()):
+        if st.st_mtime < since or st.st_mtime > env.now + 86400:
+            continue
+        out.setdefault(path.parent.name, []).append((_birth_time(st, env), st.st_mtime))
+    return out
+
+
+def _overlap_days(intervals):
+    """Number of calendar days (local time) on which at least two of the intervals overlap.
+    Intervals that only touch do not overlap, as in _max_overlap."""
+    events = []
+    for start, end in intervals:
+        events.append((start, 1))
+        events.append((max(end, start), -1))
+    events.sort(key=lambda e: (e[0], e[1]))
+    days = set()
+    cur, prev = 0, None
+    for t, delta in events:
+        if cur >= 2 and prev is not None and t > prev:
+            day = _dt.date.fromtimestamp(prev)
+            last = _dt.date.fromtimestamp(t)
+            while day <= last:
+                days.add(day)
+                day += _dt.timedelta(days=1)
+        cur += delta
+        prev = t
+    return len(days)
+
+
+def repo_session_stats(intervals, checkouts):
+    """Counts for the Claude Code sessions of one repository, all its checkouts together."""
+    per_day = {}
+    for _, last in intervals:
+        day = _dt.date.fromtimestamp(last)
+        per_day[day] = per_day.get(day, 0) + 1
+    births_known = all(start is not None for start, _ in intervals)
+    return {
+        "sessions": len(intervals),
+        "checkouts_with_sessions": len(checkouts),
+        "days_with_2plus_sessions": sum(1 for n in per_day.values() if n >= 2),
+        "max_concurrent": _max_overlap(intervals) if births_known else None,
+        "days_with_overlapping_sessions": _overlap_days(intervals) if births_known else None,
     }
 
 
@@ -644,9 +762,12 @@ def _common_code_roots(env, counters):
 SOURCE_ORDER = {"given": 0, "claude_projects": 1, "common_folders": 2}
 
 
-def discover_repos(env, extra_paths=(), walk_depth=3, counters=None):
+def discover_repos(env, extra_paths=(), walk_depth=3, counters=None, project_map=None):
     """Find git working copies: paths given by the person, Claude Code project folders
     that decode to a real folder, and a bounded walk of common code folders.
+
+    If `project_map` is a dict, it is filled with {project-folder name: normalised path of the
+    checkout it belongs to}, for the Claude Code project folders that decode to one.
 
     Returns (candidates sorted with given paths first, counts by source before any cap)."""
     counters = counters or Counters()
@@ -699,6 +820,8 @@ def discover_repos(env, extra_paths=(), walk_depth=3, counters=None):
         repo = _enclosing_repo(real, env.home)
         if repo is not None:          # sessions started in a subfolder map to their repository
             add(repo, "claude_projects")
+            if project_map is not None:
+                project_map[entry.name] = _norm(os.path.realpath(str(repo)))
 
     for base in _common_code_roots(env, counters):
         walk(base, 1, "common_folders")
@@ -1165,6 +1288,17 @@ def inspect_repo(repo, env, days, hasher, deadline=None, _via_container=False):
         if os.path.lexists(os.path.join(str(repo), marker)) and label not in managers:
             managers.append(label)
     item["hook_managers"] = managers
+    # Files an agent keeps in the repository itself (Aider's history): only their dates are
+    # read, with lstat, and a file that is a link is ignored.
+    recent = False
+    for name in agent_spec("aider")["sessions_in_repos"]:
+        try:
+            st = os.lstat(os.path.join(str(repo), name))
+        except OSError:
+            continue
+        if (st.st_mode & 0o170000) == 0o100000 and env.now - days * 86400 <= st.st_mtime <= env.now + 86400:
+            recent = True
+    item["aider_history_recent"] = recent
     code, out = _git(repo, ["config", "--get", "core.hooksPath"], env)
     item["hooks_path_set"] = code == 0 and bool(out.strip())
     code, out = _git(repo, ["rev-parse", "--git-common-dir"], env)
@@ -1833,6 +1967,49 @@ def _is_wsl(env):
     return "microsoft" in platform.release().lower() or bool(env.environ.get("WSL_DISTRO_NAME"))
 
 
+def _sessions_per_repo(env, days, project_map, key_by_path, counters):
+    """Claude Code sessions grouped by repository: a project folder maps to the checkout it was
+    started in, and every checkout of one repository (linked worktrees) counts together.
+
+    Returns {"by_key": {repository key: counts}, "summary": counts over all repositories}."""
+    try:
+        by_project = claude_sessions_by_project(env, days)
+    except Exception:            # never stops the scan
+        counters.errors.append("Claude Code sessions could not be grouped by repository")
+        return {"by_key": {}, "summary": None}
+    groups = {}
+    unmatched = 0
+    for project, intervals in by_project.items():
+        checkout = project_map.get(project)
+        if checkout is None:
+            unmatched += len(intervals)
+            continue
+        group = groups.setdefault(key_by_path.get(checkout, checkout), {"intervals": [], "checkouts": set()})
+        group["intervals"].extend(intervals)
+        group["checkouts"].add(checkout)
+    by_key = {k: repo_session_stats(g["intervals"], g["checkouts"]) for k, g in groups.items()}
+    stats = list(by_key.values())
+    measurable = all(s["max_concurrent"] is not None for s in stats)
+    if stats and not measurable:
+        counters.limits.append("this system does not record when files were created, so overlapping Claude Code "
+                               "sessions per repository could not be measured; same-day counts are given instead")
+    summary = {
+        "repos_with_sessions": len(stats),
+        "sessions_matched_to_a_repo": sum(s["sessions"] for s in stats),
+        "sessions_not_matched_to_a_repo": unmatched,
+        "repos_with_2plus_sessions_on_a_day": sum(1 for s in stats if s["days_with_2plus_sessions"] >= 1),
+        "max_days_with_2plus_sessions_one_repo": max((s["days_with_2plus_sessions"] for s in stats), default=0),
+        "max_checkouts_with_sessions_one_repo": max((s["checkouts_with_sessions"] for s in stats), default=0),
+        "overlap_measurable": measurable,
+        "repos_with_overlapping_sessions":
+            sum(1 for s in stats if (s["max_concurrent"] or 0) >= 2) if measurable else None,
+        "max_concurrent_one_repo": max((s["max_concurrent"] for s in stats), default=0) if measurable else None,
+        "max_days_with_overlapping_sessions_one_repo":
+            max((s["days_with_overlapping_sessions"] for s in stats), default=0) if measurable else None,
+    }
+    return {"by_key": by_key, "summary": summary}
+
+
 def collect(env=None, days=14, extra_repos=(), read_claude_json=False, hasher=None, progress=None):
     """Run every collector and return the result as a dict ready for json.dumps.
 
@@ -1845,8 +2022,7 @@ def collect(env=None, days=14, extra_repos=(), read_claude_json=False, hasher=No
     agents = {}
     all_intervals = []
     for spec in AGENTS:
-        home = agent_home(env, spec)
-        home_found = _isdir(home)
+        home_found = any(_isdir(h) for h in agent_homes(env, spec))
         on_path = any(env.which(b) for b in spec["binaries"])
         # A common program name (e.g. "pi") proves nothing unless the agent's folder exists too.
         installed = home_found or (on_path and not spec.get("generic_binary"))
@@ -1876,7 +2052,9 @@ def collect(env=None, days=14, extra_repos=(), read_claude_json=False, hasher=No
         "max_concurrent_all_agents": _max_overlap(all_intervals) if (births_known and all_intervals) else None,
     }
 
-    candidates, found_by = discover_repos(env, extra_repos, counters=counters)
+    project_map = {}
+    candidates, found_by = discover_repos(env, extra_repos, counters=counters, project_map=project_map)
+    key_by_path = {}                # normalised checkout path -> the repository's shared git folder
     repos_out = []
     inspected_paths = []
     git_available = env.git_program() is not None
@@ -1897,12 +2075,14 @@ def collect(env=None, days=14, extra_repos=(), read_claude_json=False, hasher=No
             if key is None:
                 counters.errors.append("a folder was not a readable git working copy")
                 continue
+            key_by_path[_norm(r["path"])] = key
             if key in by_key:                 # another checkout (linked worktree) of the same repository
                 by_key[key]["sources"] |= r["sources"]
                 worktree_checkouts += 1
                 continue
-            by_key[key] = {"path": r["path"], "sources": set(r["sources"])}
+            by_key[key] = {"path": r["path"], "sources": set(r["sources"]), "key": key}
         unique = list(by_key.values())
+        repo_sessions = _sessions_per_repo(env, days, project_map, key_by_path, counters)
         if cloud_repos:
             counters.limits.append(f"{cloud_repos} repositories are in cloud-synced folders with files not "
                                    "on this computer; they were not inspected")
@@ -1927,6 +2107,7 @@ def collect(env=None, days=14, extra_repos=(), read_claude_json=False, hasher=No
                 counters.errors.extend(errs)
                 continue
             item["found_by"] = sorted(r["sources"])
+            item["claude_code_sessions"] = repo_sessions["by_key"].get(r["key"])
             if item.pop("branch_cap_hit"):
                 caps_hit += 1
             time_limited += item.pop("branch_time_limit_hit")
@@ -1937,7 +2118,10 @@ def collect(env=None, days=14, extra_repos=(), read_claude_json=False, hasher=No
             inspected_paths.append(item.pop("_path"))
             repos_out.append(item)
     else:
+        repo_sessions = _sessions_per_repo(env, days, project_map, key_by_path, counters)
         counters.limits.append("git is not on PATH, so repositories were counted but not inspected")
+    sessions_summary["claude_code_by_repo"] = repo_sessions["summary"]
+    agents["aider"]["repos_with_recent_history"] = sum(1 for i in repos_out if i.get("aider_history_recent"))
     if caps_hit:
         counters.limits.append(f"{caps_hit} repositories had more than {MAX_REFS} unmerged branches; "
                                f"only the {MAX_REFS} newest were inspected in each")
@@ -1991,7 +2175,10 @@ def collect(env=None, days=14, extra_repos=(), read_claude_json=False, hasher=No
     if env.is_macos:
         not_collected.append("Claude Code policies set through a macOS configuration profile")
     for spec in AGENTS:
-        if not spec.get("sessions"):
+        if spec.get("sessions_in_repos"):
+            not_collected.append(f"the contents of {spec['name']}'s history files in repositories (only whether "
+                                 f"one changed in the last {days} days is noted)")
+        elif not spec.get("sessions"):
             not_collected.append(f"{spec['name']} sessions (they are kept in a database, which is not read)")
 
     return {

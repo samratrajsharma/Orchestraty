@@ -18,14 +18,16 @@ The scanner is a single Python file (Python 3.9 or later). You can read all of i
 
 ## What it looks at
 
-- **Which coding agents are installed**, for example Claude Code, Codex, Gemini CLI, Copilot CLI and Cursor. It checks whether each agent's program is on your PATH and whether its settings folder exists.
+- **Which coding agents are installed**, for example Claude Code, Codex, Gemini CLI, Copilot CLI, Cursor, OpenClaw, Cline and Aider. It checks whether each agent's program is on your PATH and whether its settings folder exists (for Cline, the extension's folder in VS Code and the editors built on it).
 - **How many sessions each agent recorded in the last 14 days.** It lists the session files and looks only at their names, sizes and dates. **It never opens a session, transcript or history file.** If your system records when a file was created, it also works out how many sessions overlapped in time.
+- **Claude Code sessions per repository.** Claude Code names each of its project folders after the folder a session was started in. The scanner uses those folder names, and the session files' dates, to group sessions by repository (all checkouts of one repository together) and to count how many ran at the same time on one repository, and on how many days. The result holds only these counts, under a one-way code for each repository.
 - **Git repositories** it can find: in common code folders in your home folder (such as `code`, `src`, `projects` and `repos`), from the project list Claude Code keeps, and in any folders you name or the folders under them. For each repository it notes where it is hosted, as a category only (GitHub, GitLab, Bitbucket, Azure or other), and counts:
   - worktrees, and branches with recent work;
   - how many people committed recently. One person who uses two email addresses, or the same name on two machines, counts once; git's `.mailmap` file in the repository is used for this when it is a plain file. It also keeps the count by email address;
   - pairs of branches where different people changed the same files;
   - commits made or credited by coding agents, in the cloud or locally, and commits made by other automation such as dependency bots;
-  - which hook tools are set up (husky, lefthook, pre-commit), whether the repository sets its own hooks folder, how many git hooks are active, and whether it is a partial or shallow clone.
+  - which hook tools are set up (husky, lefthook, pre-commit), whether the repository sets its own hooks folder, how many git hooks are active, and whether it is a partial or shallow clone;
+  - whether Aider's history file in the repository changed in the last 14 days. Only the file's date is read; the file is never opened.
 
   It runs only read-only git commands: `log`, `rev-parse`, `for-each-ref`, `merge-base`, `worktree list`, `config --get`, `remote -v` and `symbolic-ref --quiet`. Git's network access, signature checks, trace logs and background fetching are switched off for every command. It never runs `git status`, and it changes nothing in the repository.
 - **MCP helpers** (tools that agents start): how many are set up for each app (switched-off ones counted separately), a short label for the kind of command that starts each one (a common launcher such as `npx`, `uvx`, `docker`, `node` or `python`; `remote` for a web address; otherwise `other`, `other-path` or `unknown`), and whether that command can be found on your machine. A command on a network path is never looked up.
@@ -34,7 +36,7 @@ The scanner is a single Python file (Python 3.9 or later). You can read all of i
 
 ## What it opens, and what it keeps
 
-- **It never opens** session, transcript or history files, or files with the usual credential file names, such as `auth.json` and `.credentials.json`.
+- **It never opens** session, transcript or history files (including Aider's history files in your repositories, and OpenClaw's and Cline's session folders), OpenClaw's settings and credentials, Aider's key file, or files with the usual credential file names, such as `auth.json` and `.credentials.json`.
 - **Git compares changes, but no file content is kept.** To tell rebased or squash-merged work apart from work still in progress, git compares the changes on active branches in memory. That can include any file committed on those branches, whatever its name.
 - **It opens settings files, keeps only counts and labels, and discards the rest:** each app's MCP helper settings, and Claude Code's settings files (your `settings.json` and any settings your organisation manages). These files can contain passwords or tokens. The scanner reads them in memory only and never keeps, shows or saves helper names, programs, arguments, environment values, headers or any other setting.
 - **It asks first before opening `.claude.json`.** Claude Code keeps its user-level helper list there, and the file also holds your sign-in details and can hold older prompt history. The default answer is no. If you agree, it keeps only the helper counts and command labels.
@@ -57,7 +59,7 @@ Questions about any of this go to the person who sent you the scanner.
 
 ## Optional questions
 
-At the end the scanner asks three optional questions about the last 30 days: the time an agent's helper tool failing cost you the most time; the time not knowing what an agent had changed cost you the most time; and the time your work collided with a teammate's cost you the most time. Each asks for a date and a number of minutes. You can skip any of them.
+At the end the scanner asks four optional questions about the last 30 days: the time an agent's helper tool failing cost you the most time; the time not knowing what an agent had changed cost you the most time; the time two of your own agent sessions, running at the same time, broke each other's work or made you redo work; and the time your work collided with a teammate's cost you the most time. Each asks for a date and a number of minutes. You can skip any of them.
 
 ## Running it
 

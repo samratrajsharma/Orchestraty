@@ -5,6 +5,7 @@ Status: throwaway (Phase 0). Not part of the product.
 A read-only scanner that describes, in counts, how coding agents are set up and used on one developer's machine:
 - which agents are installed;
 - how many sessions each agent recorded recently, from file names, dates and sizes only;
+- how many Claude Code sessions ran at the same time on one repository, from the names of Claude Code's project folders and the session files' dates only;
 - whether git repositories show work in flight by different people on the same files;
 - which MCP helpers are configured;
 - whether hooks are allowed.

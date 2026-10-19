@@ -97,9 +97,33 @@ class SyntheticMachine:
         base = self.home / ".pi" / "agent" / "sessions" / "--Users-dev-app--"
         return [self._plant(base / f"2026-09-20T10-00_{i}.jsonl", age) for i, age in enumerate(ages)]
 
+    def openclaw_sessions(self, ages=(1,), home=None):
+        base = (home or self.home / ".openclaw") / "agents" / "main" / "sessions"
+        out = [self._plant(base / f"sess-{i}.jsonl", age) for i, age in enumerate(ages)]
+        self._plant(base / "sessions.json", 1)                     # the index: never a session
+        return out
+
+    def cline_sessions(self, editor="Code", ages=(1,)):
+        base = self.config_dir() / editor / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "tasks"
+        out = []
+        for i, age in enumerate(ages):
+            out.append(self._plant(base / f"17000000{i}" / "ui_messages.json", age))
+            self._plant(base / f"17000000{i}" / "api_conversation_history.json", age)
+        return out
+
+    def cline_cli_sessions(self, ages=(1,)):
+        base = self.home / ".cline" / "data" / "tasks"
+        return [self._plant(base / f"18000000{i}" / "ui_messages.json", age) for i, age in enumerate(ages)]
+
+    def aider_history(self, repo, age=1):
+        return [self._plant(repo / name, age) for name in (".aider.chat.history.md", ".aider.input.history")]
+
     def history_files(self):
-        for rel in (".claude/history.jsonl", ".codex/history.jsonl", ".codex/session_index.jsonl"):
+        for rel in (".claude/history.jsonl", ".codex/history.jsonl", ".codex/session_index.jsonl",
+                    ".openclaw/openclaw.json", ".openclaw/credentials/oauth.json", ".aider/oauth-keys.env"):
             self._plant(self.home / rel, 1)
+        self._plant(self.config_dir() / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "state" /
+                    "taskHistory.json", 1)
 
     def everything_private(self):
         self.claude_sessions()
@@ -109,6 +133,9 @@ class SyntheticMachine:
         self.cursor_sessions()
         self.droid_sessions()
         self.pi_sessions()
+        self.openclaw_sessions()
+        self.cline_sessions()
+        self.cline_cli_sessions()
         self.history_files()
 
     # -- config files
