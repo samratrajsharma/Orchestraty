@@ -81,7 +81,7 @@ class Deliverer:
                     out.append((user, "wake", slots.wake_slot(self.state, user), text))
             if hooked(changer) and user in sessions and not finding["detail"].get("latent"):
                 out.append((changer, "next", slots.next_slot(self.state, changer),
-                            templates.for_changer(finding, sessions[user])))
+                            templates.for_changer(finding, sessions[user], told=hooked(user))))
         elif rule == "O6":
             changer = finding["changer"]
             if hooked(changer):

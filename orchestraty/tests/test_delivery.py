@@ -83,6 +83,7 @@ def test_a_strong_overlap_reaches_both_agents(state, two):
     assert "c.py uses it: use (line 5)" in out["additionalContext"]
     told_a = read_slot(slots.next_slot(state, "A"))["hookSpecificOutput"]["additionalContext"]
     assert "which you changed (parameter currency removed), is used in c.py" in told_a
+    assert "That session is told before it next edits that file." in told_a
     stop = read_slot(slots.stop_slot(state, "A"))["hookSpecificOutput"]
     assert stop["hookEventName"] == "Stop" and "pay in b.py (line 5)" in stop["additionalContext"]
     b = notes_of(c, "B")
@@ -333,5 +334,6 @@ def test_sessions_without_hooks_get_no_notes(state, repo, git, tmp_path):
         assert receivers == {"A"}                                   # A hears; the plain-git one cannot
         told = read_slot(slots.next_slot(state, "A"))["hookSpecificOutput"]["additionalContext"]
         assert "changes made outside any agent session (worktree wt-c, branch feat-c)" in told
+        assert "nobody there is told" in told and "That session is told" not in told
     finally:
         c.close()

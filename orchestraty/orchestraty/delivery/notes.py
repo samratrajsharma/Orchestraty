@@ -85,14 +85,19 @@ def for_user(finding, changer):
                 f"file, and agree with that session if the old form must stay. {COVERAGE}")
 
 
-def for_changer(finding, user):
-    """O3/O4, to the session that broke or removed something another session's file uses."""
+def for_changer(finding, user, told=None):
+    """O3/O4, to the session that broke or removed something another session's file uses.
+    `told`: whether that session gets a note of its own before it next edits the file; by
+    default, unless it is a plain-git session (no session with Orchestraty works there)."""
     d = finding["detail"]
     uses = _list(d.get("uses", []), lambda u: _name(u["symbol"]) + _lines(u.get("lines", [])))
     how = "removed" if finding["rule"] == "O4" else f"changed ({_reasons(d.get('reasons', []))})"
+    if told is None:
+        told = user.get("agent") != "git"
+    then = ("That session is told before it next edits that file." if told else
+            "No session with Orchestraty works in that worktree, so nobody there is told; mention it to your user.")
     return _cap(f"{_name(finding['symbol'])} in {_path(finding['symbol'])}, which you {how}, is used in "
-                f"{clean(finding['file'])} by {describe(user)}: {uses}. That session is told before it next "
-                f"edits that file. {COVERAGE}")
+                f"{clean(finding['file'])} by {describe(user)}: {uses}. {then} {COVERAGE}")
 
 
 def for_both(finding, other):

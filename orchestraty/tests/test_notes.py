@@ -43,12 +43,23 @@ def test_the_notes_to_the_changer_to_both_and_at_the_end_of_a_turn():
     to_changer = notes.for_changer(finding("O3"), B)
     assert "charge in pay/charge.py, which you changed (parameter currency removed), is used in billing/annual.py" in to_changer
     assert "(worktree wt-b, branch feat-annual)" in to_changer
+    assert "That session is told before it next edits that file." in to_changer
     both = notes.for_both(finding("O2"), B)
     assert both == ("Orchestraty: another Claude Code session (worktree wt-b, branch feat-annual) is also changing "
                     "charge in pay/charge.py. Agree on one version before either of you merges.")
     stop = notes.left_behind(finding("O6"))
     assert "These callers still use it and no session has updated them: bill in billing/old.py (line 7)." in stop
     assert notes.describe(GIT) == "changes made outside any agent session (worktree main, branch main)"
+
+
+def test_the_changer_hears_when_nobody_there_is_told():
+    # A plain-git worktree has no session with Orchestraty, so no note reaches it.
+    text = notes.for_changer(finding("O3"), GIT)
+    assert "is used in billing/annual.py by changes made outside any agent session (worktree main, branch main)" in text
+    assert "No session with Orchestraty works in that worktree, so nobody there is told; mention it to your user." in text
+    assert "That session is told" not in text and text.endswith(notes.COVERAGE)
+    # the delivery planner says so for a session it cannot reach either
+    assert "nobody there is told" in notes.for_changer(finding("O3"), B, told=False)
 
 
 def test_identifiers_are_cleaned_so_no_text_can_steer_an_agent():
