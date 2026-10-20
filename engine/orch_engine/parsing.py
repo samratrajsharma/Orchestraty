@@ -28,7 +28,9 @@ def _read(abs_path):
 
 
 # ---------------- call sites ----------------
-# Every call a function makes is kept as (kind, name, attrs, line, ref):
+# Every call a function makes is kept as (kind, name, attrs, line, ref), and a Python call
+# also as (kind, name, attrs, line, ref, args), where args is how it passes its arguments:
+# (positional count, uses *x, sorted keyword names, uses **x); see arg_shape.
 #   name   the name the call starts with, as written: f in f(), m in m.f(), obj in obj.m()
 #   attrs  the attribute names after it: () for f(), ("f",) for m.f(), ("b", "f") for a.b.f()
 #   line   the line the call starts on
@@ -54,6 +56,21 @@ AMBIGUOUS = ("ambiguous",)
 def call_name(site):
     """The name a call site calls: the last attribute (m in obj.m()), else the first name."""
     return site[2][-1] if site[2] else (site[1] or "")
+
+
+def arg_shape(call):
+    """How one ast.Call passes its arguments: (positional count, uses *x, sorted keyword
+    names, uses **x). The positional count leaves out starred arguments."""
+    positional = sum(1 for a in call.args if a.__class__ is not ast.Starred)
+    star = any(a.__class__ is ast.Starred for a in call.args)
+    keywords = tuple(sorted(k.arg for k in call.keywords if k.arg is not None))
+    double_star = any(k.arg is None for k in call.keywords)
+    return (positional, star, keywords, double_star)
+
+
+def site_args(site):
+    """The args of a call site, or None when it has none (JS, TS, tree-sitter)."""
+    return site[5] if len(site) > 5 else None
 
 
 def _bind(table, name, binding):
@@ -586,6 +603,8 @@ def _calls_and_complexity(node, pkg=(), mscope=None, module_types=None, self_nam
             seen.add(nm)
             calls.append(nm)
         cs = _site(n.func, n.lineno, sc, root, self_name, mscope, local_types, module_types)
+        if cs:
+            cs = cs + (arg_shape(n),)
         if cs and cs not in seen_sites:
             seen_sites.add(cs)
             sites.append(cs)

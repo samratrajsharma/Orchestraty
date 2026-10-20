@@ -5,7 +5,7 @@ import posixpath
 import re
 from collections import defaultdict
 
-from .parsing import AMBIGUOUS, call_name
+from .parsing import AMBIGUOUS, call_name, site_args
 
 PYTHON = "python"
 JS_LANGS = ("javascript", "typescript")
@@ -37,7 +37,8 @@ class CodeGraph:
       - symbol node: "<rel_path>::<qualname>", e.g. "model.py::Detector.predict"
     Edge types: contains, method_of, calls, imports, inherits. A calls or inherits edge also
     records how it was bound (an evidence tag) and the source lines it comes from; see
-    edge_info(). Calls that bound to nothing in the repository are kept per file in
+    edge_info(); a Python calls edge also records how each of its calls passes its arguments.
+    Calls that bound to nothing in the repository are kept per file in
     `unresolved`, for name-only searches.
     """
 
@@ -45,7 +46,7 @@ class CodeGraph:
         self.nodes = {}                  # id -> {"type":..., "data":...}
         self._out = defaultdict(list)    # id -> [(dst, etype)]
         self._in = defaultdict(list)     # id -> [(src, etype)]
-        self._info = {}                  # (src, dst, etype) -> (evidence, lines)
+        self._info = {}                  # (src, dst, etype) -> (evidence, lines, argument shapes)
         self.unresolved = {}             # file -> [(caller id, called name, line, why)]
         self.not_analysed = []           # what binding could not cover, as {"path", "reason"}
         self.resolution = {}             # Python source roots and ambiguous module names
@@ -55,25 +56,36 @@ class CodeGraph:
             self.nodes[nid] = {"type": ntype, "data": data or {}}
         return nid
 
-    def add_edge(self, src, dst, etype, evidence=None, lines=()):
+    def add_edge(self, src, dst, etype, evidence=None, lines=(), args=()):
         """Add an edge between two existing nodes. An edge with `evidence` (calls, inherits)
-        is never duplicated: adding it again only merges its lines."""
+        is never duplicated: adding it again only merges its lines and argument shapes."""
         if src not in self.nodes or dst not in self.nodes:
             return
         if evidence is not None:
             key = (src, dst, etype)
             old = self._info.get(key)
             if old is not None:
-                self._info[key] = (old[0], tuple(sorted(set(old[1]) | set(lines))))
+                self._info[key] = (old[0], tuple(sorted(set(old[1]) | set(lines))),
+                                   tuple(sorted(set(old[2]) | set(args))))
                 return
-            self._info[key] = (evidence, tuple(sorted(set(lines))))
+            self._info[key] = (evidence, tuple(sorted(set(lines))), tuple(sorted(set(args))))
         self._out[src].append((dst, etype))
         self._in[dst].append((src, etype))
 
     def edge_info(self, src, dst, etype="calls"):
-        """{"evidence": tag, "lines": [...]} for a calls or inherits edge, else {}."""
+        """{"evidence": tag, "lines": [...]} for a calls or inherits edge, else {}. A calls
+        edge whose calls are Python adds "args": how each call passes its arguments, as
+        {"positional": n, "star": bool, "keywords": [...], "double_star": bool}. For a method
+        the positional count leaves out the receiver, also where a call passes it by hand
+        (Cls.m(obj, ...) counts like obj.m(...))."""
         info = self._info.get((src, dst, etype))
-        return {"evidence": info[0], "lines": list(info[1])} if info else {}
+        if not info:
+            return {}
+        out = {"evidence": info[0], "lines": list(info[1])}
+        if len(info) > 2 and info[2]:
+            out["args"] = [{"positional": p, "star": s, "keywords": list(k), "double_star": d}
+                           for p, s, k, d in info[2]]
+        return out
 
     def successors(self, nid, etype=None):
         return [d for d, t in self._out.get(nid, []) if etype is None or t == etype]
@@ -525,7 +537,7 @@ class _Resolver:
     def resolve(self, sym, site):
         """[(target id, evidence)] for one call site of `sym`, or why it binds to nothing in
         the repository: external, missing, local, global, free, unknown or ambiguous."""
-        kind, name, attrs, line, ref = site
+        kind, name, attrs, line, ref = site[:5]
         file = sym.file
         lang = self.files[file].language
         if kind in ("same", "bare"):
@@ -590,6 +602,19 @@ def _namespace_notes(r):
     return [{"path": d + "/", "reason": NAMESPACE_NOTE} for d in sorted(hit)]
 
 
+def _passes_receiver(target, evidence):
+    """Whether a call bound with `evidence` passes the method's receiver by hand: Cls.m(obj, ...)
+    does, for a method that is neither a classmethod nor a staticmethod."""
+    return (evidence == "class_attr" and target.kind == "method"
+            and not {"classmethod", "staticmethod"} & set(target.decorators))
+
+
+def _after_receiver(shape):
+    """The argument shape of Cls.m(obj, ...) without obj, as obj.m(...) counts it."""
+    positional, star, keywords, double_star = shape
+    return (positional - 1, star, keywords, double_star) if positional else shape
+
+
 def build_graph(parsed_files):
     g = CodeGraph()
     for pf in parsed_files:
@@ -614,7 +639,7 @@ def build_graph(parsed_files):
     for pf in parsed_files:
         unresolved = []
         for sym in pf.symbols:
-            found = {}                            # target -> [evidence, lines]: one edge each
+            found = {}                            # target -> [evidence, lines, args]: one edge each
             for site in sym.call_sites:
                 res = r.resolve(sym, site)
                 if isinstance(res, str):
@@ -623,15 +648,18 @@ def build_graph(parsed_files):
                         continue
                     unresolved.append((sym.id, call_name(site), site[3], res))
                     continue
+                shape = site_args(site)
                 for target, ev in res:
                     if target == sym.id:
                         continue
-                    if target in found:
-                        found[target][1].add(site[3])
-                    else:
-                        found[target] = [ev, {site[3]}]
-            for target, (ev, lines) in found.items():
-                g.add_edge(sym.id, target, "calls", evidence=ev, lines=lines)
+                    if target not in found:
+                        found[target] = [ev, set(), set()]
+                    found[target][1].add(site[3])
+                    if shape is not None:
+                        found[target][2].add(_after_receiver(shape) if _passes_receiver(r.syms[target], ev)
+                                             else shape)
+            for target, (ev, lines, args) in found.items():
+                g.add_edge(sym.id, target, "calls", evidence=ev, lines=lines, args=args)
             if sym.kind == "class":
                 for base, ev in r.bases(sym.id):
                     g.add_edge(sym.id, base, "inherits", evidence=ev, lines=(sym.start_line,))

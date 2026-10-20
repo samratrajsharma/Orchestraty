@@ -5,7 +5,7 @@ from typing import Optional
 # The version of what the engine computes: parsed files, fingerprints and edges. It is part of
 # every cache key and cache file name, so an entry written by another version is never
 # served. Bump it whenever parse output, fingerprints or edges change.
-ENGINE_SCHEMA = 2
+ENGINE_SCHEMA = 3
 
 
 @dataclass
@@ -24,7 +24,7 @@ class Symbol:
     complexity: int = 0                               # cyclomatic-ish (functions/methods)
     bases: list[str] = field(default_factory=list)    # base classes (inheritance)
     decorators: list[str] = field(default_factory=list)  # decorator names (framework registration)
-    call_sites: list = field(default_factory=list)       # (kind, name, attrs, line, ref): see parsing
+    call_sites: list = field(default_factory=list)       # (kind, name, attrs, line, ref[, args]): see parsing
     base_refs: list = field(default_factory=list)        # how each base class name is bound (classes)
     signature: dict = field(default_factory=dict)        # captured signature (Python): see parsing
     sig_hash: str = ""                                   # hash of the signature
