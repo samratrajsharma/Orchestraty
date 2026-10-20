@@ -8,15 +8,19 @@ Who hears what (Draft 4 §5.5):
 | O1     | none (weak: status only)               |                                  |           |
 | O2     | another session changes this too       | both sessions                    | next      |
 | O3, O4 | what changed, and where this file uses it | the session using it          | edit file |
+|        | the same, when it is already changing  | the session using it             | next      |
+|        | that file (it may never edit it again) |                                  |           |
 |        | who uses what you changed (not for a   | the session that changed it      | next      |
 |        | latent finding: a file nobody is changing) |                              |           |
 | O6     | callers you left behind                | the session that changed it      | stop      |
 | O3, O4 | the same note, when wake is on and the   | the session using it             | wake      |
 |        | session using it waits for its user      |                                  |           |
 
-Plain-git sessions get no notes (they have no hooks). One note per finding per session and
-kind: the record's ``notes`` table remembers every note made, so a finding that comes back
-is not told twice. Nor is the same change told twice when it is found again under another
+Plain-git sessions get no notes (they have no hooks). A session hears each finding once:
+when one of its notes for a finding is taken (the edit note, the next note or the wake note),
+the others count as delivered and come out of their slots, and no new one is made. The
+record's ``notes`` table remembers every note made, so a finding that comes back is not told
+twice. Nor is the same change told twice when it is found again under another
 session: a plain-git session that took over a finished session's worktree, or two sessions
 that broke the same function (one note per session, kind, rule, function and file). A note
 whose finding stops holding before it was taken is withdrawn.
@@ -77,6 +81,11 @@ class Deliverer:
                 path = os.path.join(sessions[user]["worktree"], *finding["file"].split("/"))
                 text = templates.for_user(finding, sessions[changer])
                 out.append((user, "edit", slots.edit_slot(self.state, user, path), text))
+                if not finding["detail"].get("latent"):
+                    # it already changed that file and may never edit it again: tell it with
+                    # its next tool result too (whichever note it takes first counts)
+                    out.append((user, "next", slots.next_slot(self.state, user),
+                                templates.for_user(finding, sessions[changer], before_edit=False)))
                 if wake and sessions[user].get("turn") == "idle" and not finding["detail"].get("latent"):
                     out.append((user, "wake", slots.wake_slot(self.state, user), text))
             if hooked(changer) and user in sessions and not finding["detail"].get("latent"):
@@ -92,7 +101,7 @@ class Deliverer:
         """Make the notes a newly seen finding calls for (not again for one already made)."""
         made = 0
         for sid, kind, slot, text in self.plan(finding, sessions, wake):
-            if self._told_already(finding, sid, kind):
+            if self._told_already(finding, sid, kind) or self._heard(finding["key"], sid):
                 continue
             if self.record.add_note(finding["key"], sid, kind, _rel(self.state, slot), text, self.now_ns(), trigger_ns):
                 made += 1
@@ -107,6 +116,10 @@ class Deliverer:
         if parts[0] == "O2" and len(parts) == 4 and sid in parts[2:]:
             return (parts[0], parts[1])
         return None
+
+    def _heard(self, finding_key, sid):
+        """Whether the session already took a note of this finding."""
+        return bool(self.record.notes(finding_key=finding_key, session_id=sid, states=("delivered",)))
 
     def _told_already(self, finding, sid, kind):
         topic = self._topic(finding["key"], sid)
@@ -141,11 +154,12 @@ class Deliverer:
         return False
 
     def _delivered(self, slot_rel, ts):
-        """The slot's written notes reached their agent. A wake note carries the same text as
-        its finding's other notes for that session: those count as delivered too."""
-        woke = [n for n in self.record.notes(slot=slot_rel, states=("written",)) if n["kind"] == "wake"]
+        """The slot's written notes reached their agent. A session hears each finding once:
+        that finding's other notes for the same session count as delivered too, and come out
+        of their slots (the other notes there wait for the next write)."""
+        taken = self.record.notes(slot=slot_rel, states=("written",))
         self.record.mark_delivered(slot_rel, ts)
-        for note in woke:
+        for note in taken:
             for other in self.record.notes(finding_key=note["finding_key"], session_id=note["session_id"],
                                            states=("pending", "written")):
                 if other["state"] == "written" and slots.withdraw(_abs(self.state, other["slot"])):

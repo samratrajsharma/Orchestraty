@@ -69,9 +69,9 @@ def _cap(text):
     return text if len(text) <= MAX_NOTE else text[:MAX_NOTE - 1] + "~"
 
 
-def for_user(finding, changer):
+def for_user(finding, changer, before_edit=True):
     """O3/O4, to the session whose file uses what another session broke or removed; given
-    before its next edit of that file."""
+    before its next edit of that file, or with its next tool result (before_edit=False)."""
     d = finding["detail"]
     uses = _list(d.get("uses", []), lambda u: _name(u["symbol"]) + _lines(u.get("lines", [])))
     target = f"{_name(finding['symbol'])} in {_path(finding['symbol'])}"
@@ -81,8 +81,9 @@ def for_user(finding, changer):
         what = f"{describe(changer)} changed the contract of {target}: {_reasons(d.get('reasons', []))}."
         if d.get("moved_to"):
             what += f" It now lives in {_path(d['moved_to'])}."
-    return _cap(f"{what} {clean(finding['file'])} uses it: {uses}. Check these uses before you change this "
-                f"file, and agree with that session if the old form must stay. {COVERAGE}")
+    when = "before you change this file" if before_edit else "in the code you changed"
+    return _cap(f"{what} {clean(finding['file'])} uses it: {uses}. Check these uses {when}, and agree with that "
+                f"session if the old form must stay. {COVERAGE}")
 
 
 def for_changer(finding, user, told=None):

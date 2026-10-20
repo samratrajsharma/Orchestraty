@@ -88,7 +88,25 @@ def test_a_strong_overlap_reaches_both_agents(state, two):
     assert stop["hookEventName"] == "Stop" and "pay in b.py (line 5)" in stop["additionalContext"]
     b = notes_of(c, "B")
     assert b[("edit", "O3|a.py::charge|A|B|c.py")]["state"] == "written"
-    assert not slots.waiting(slots.next_slot(state, "B"))           # B changed nothing anyone uses
+    # B already changed c.py and may never edit it again: it also hears with its next tool result
+    told_b = read_slot(slots.next_slot(state, "B"))["hookSpecificOutput"]
+    assert told_b["hookEventName"] == "PostToolUse"
+    assert "c.py uses it: use (line 5). Check these uses in the code you changed" in told_b["additionalContext"]
+
+
+def test_a_session_hears_a_finding_once_whichever_note_it_takes_first(state, two):
+    from orchestraty.capture.hook import take_slot
+    c, wa, wb = two
+    edit(state, c, "B", wb, "c.py", USES)                           # B's call is in before A's change
+    edit(state, c, "A", wa, "a.py", BROKEN)
+    edit_slot = slots.edit_slot(state, "B", str(wb / "c.py"))
+    assert slots.waiting(edit_slot) and slots.waiting(slots.next_slot(state, "B"))
+    assert take_slot(slots.next_slot(state, "B"))                   # its next tool result
+    c.step()
+    b = notes_of(c, "B")
+    assert b[("next", "O3|a.py::charge|A|B|c.py")]["state"] == "delivered"
+    assert b[("edit", "O3|a.py::charge|A|B|c.py")]["state"] == "delivered"
+    assert not slots.waiting(edit_slot)                             # not told again before its next edit
 
 
 def test_the_note_comes_before_the_first_edit_of_a_file_that_uses_the_change(state, two, hook_script):
@@ -112,6 +130,7 @@ def test_the_note_comes_before_the_first_edit_of_a_file_that_uses_the_change(sta
     assert ("next", "O3|a.py::charge|A|B|b.py") in notes_of(c, "A")              # now real: A is told
     assert notes_of(c, "B")[("edit", "O3|a.py::charge|A|B|b.py")]["state"] == "delivered"
     assert not slots.waiting(slot)                                                # B is not told twice
+    assert ("next", "O3|a.py::charge|A|B|b.py") not in notes_of(c, "B")           # not even with a result
 
 
 def test_the_hook_takes_the_note_and_the_coordinator_counts_it_delivered(state, two, hook_script):
