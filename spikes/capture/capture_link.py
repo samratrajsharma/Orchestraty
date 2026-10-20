@@ -115,7 +115,7 @@ class Session:
 
 def read_sessions(spool):
     sessions = {}
-    for agent in ("claude", "codex"):
+    for agent in ("claude", "codex", "agy"):
         folder = os.path.join(spool, agent)
         if not os.path.isdir(folder):
             continue
