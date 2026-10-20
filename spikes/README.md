@@ -11,7 +11,7 @@ Each experiment has its own folder, and that folder's README says what it is for
 1. **Neutral names.** A folder name says what the code does. Test plans, pass marks and results are kept outside this repository.
 2. **Every folder's README starts with the same status line:** "Status: throwaway (Phase 0). Not part of the product." It then says how to run the code.
 3. **Imports go one way.**
-   - A spike may import the engine package (`orch_engine`) and `spikes/_shared`.
+   - A spike may import the engine package (`orch_engine`), the product package (`orchestraty`) and `spikes/_shared`.
    - A spike never imports another spike.
    - Nothing under `engine/` imports from `spikes/`.
 4. **No pass marks in code.** Spikes print measurements. Whether a result is good enough is decided elsewhere.
@@ -24,7 +24,7 @@ Each experiment has its own folder, and that folder's README says what it is for
 
 ## Run the tests
 
-You need Python 3.9 or later and pytest. From the repository root:
+You need Python 3.9 or later and pytest. The overlap history needs 3.10 or later, as the engine does; below that its tests are skipped. From the repository root:
 
 ```
 cd spikes
