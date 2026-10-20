@@ -10,7 +10,12 @@ A pair file (JSON, one per pair, written before any run):
     {"id": "...", "repo": "<path of a git repository>", "base": "<commit>", "related": true,
      "prompt_a": "...", "prompt_b": "...",
      "tests": {"cwd": "<folder in the repository>", "args": ["python", "-m", "pytest", "-q"]},
-     "check": {"path": "<file to add after the merge>", "code": "<a test>"}}     (related pairs)
+     "check": {"path": "<file to add after the merge>", "code": "<a test>"},      (related pairs)
+     "pythonpath": ["src", "<absolute folder>"]}                               (optional)
+
+"pythonpath" lists folders put first on the import path of both sessions and of every test run,
+relative to that run's own worktree (or absolute), so a repository with a src layout tests its
+own code even where an installed copy of the same package exists.
 
 Each run goes into <out>/<pair>/<condition>-<repeat>/ and is skipped when its result.json
 exists, so a stopped series resumes where it stopped. Per run: a clone of the repository at
@@ -102,13 +107,20 @@ def plan(pairs, repeats, conditions, seed):
     return out
 
 
-def session(prompt, cwd, results, name):
+def import_path(top, pair):
+    """{"PYTHONPATH": ...} for a run's worktree, or {} when the pair names no folders."""
+    folders = [p if os.path.isabs(p) else os.path.join(top, *p.split("/")) for p in pair.get("pythonpath", [])]
+    return {"PYTHONPATH": os.pathsep.join(folders)} if folders else {}
+
+
+def session(prompt, cwd, results, name, extra_env=None):
     argv = [CLAUDE, "-p", prompt, "--model", MODEL, "--max-turns", "60", "--permission-mode", "acceptEdits",
             "--allowedTools", "Bash(python -m pytest:*)", "--output-format", "json"]
     start = time.time()
     try:
         proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=SESSION_SECONDS,
-                              env=clean_env(CLAUDE_CONFIG_DIR=PROFILE), encoding="utf-8", errors="replace")
+                              env=clean_env(CLAUDE_CONFIG_DIR=PROFILE, **(extra_env or {})),
+                              encoding="utf-8", errors="replace")
         out, err, code, timed_out = proc.stdout, proc.stderr, proc.returncode, False
     except subprocess.TimeoutExpired as exc:
         out, err, code, timed_out = (exc.stdout or ""), (exc.stderr or ""), None, True
@@ -131,11 +143,12 @@ def session(prompt, cwd, results, name):
     results[name] = info
 
 
-def run_tests(cwd, tests, extra=()):
+def run_tests(cwd, tests, extra=(), extra_env=None):
     args = list(tests["args"]) + list(extra)
     try:
         proc = subprocess.run(args, cwd=os.path.join(cwd, tests.get("cwd", ".")), capture_output=True, text=True,
-                              timeout=TEST_SECONDS, env=clean_env(), encoding="utf-8", errors="replace")
+                              timeout=TEST_SECONDS, env=clean_env(**(extra_env or {})), encoding="utf-8",
+                              errors="replace")
         return {"passed": proc.returncode == 0, "exit": proc.returncode, "tail": (proc.stdout + proc.stderr)[-3000:]}
     except subprocess.TimeoutExpired:
         return {"passed": False, "exit": None, "tail": "timed out"}
@@ -192,8 +205,8 @@ def run_one(pair, condition, repeat, out_root):
             raise RuntimeError("orch init failed: " + init.stderr[-500:])
     sessions = {}
     try:
-        threads = [threading.Thread(target=session, args=(pair["prompt_a"], wa, sessions, "A")),
-                   threading.Thread(target=session, args=(pair["prompt_b"], wb, sessions, "B"))]
+        threads = [threading.Thread(target=session, args=(pair["prompt_a"], wa, sessions, "A", import_path(wa, pair))),
+                   threading.Thread(target=session, args=(pair["prompt_b"], wb, sessions, "B", import_path(wb, pair)))]
         threads[0].start()
         time.sleep(2)
         threads[1].start()
@@ -211,8 +224,8 @@ def run_one(pair, condition, repeat, out_root):
     for name, wt in (("A", wa), ("B", wb)):
         git(wt, "add", "-A")
         result["changed_" + name] = git(wt, "commit", "-q", "-m", name, check=False).returncode == 0
-    result["alone_a"] = run_tests(wa, pair["tests"])
-    result["alone_b"] = run_tests(wb, pair["tests"])
+    result["alone_a"] = run_tests(wa, pair["tests"], extra_env=import_path(wa, pair))
+    result["alone_b"] = run_tests(wb, pair["tests"], extra_env=import_path(wb, pair))
     git(repo, "checkout", "-q", "-B", "merged", "a")
     merge = git(repo, "merge", "--no-edit", "b", check=False)
     result["conflict"] = merge.returncode != 0
@@ -227,8 +240,9 @@ def run_one(pair, condition, repeat, out_root):
                 fh.write(pair["check"]["code"])
             extra = [os.path.relpath(path, os.path.join(repo, pair["tests"].get("cwd", ".")))]
             result["check"] = run_tests(repo, {"cwd": pair["tests"].get("cwd", "."),
-                                               "args": list(pair["tests"]["args"][:3]) + ["-q"] + extra})
-        result["merged"] = run_tests(repo, pair["tests"])
+                                               "args": list(pair["tests"]["args"][:3]) + ["-q"] + extra},
+                                        extra_env=import_path(repo, pair))
+        result["merged"] = run_tests(repo, pair["tests"], extra_env=import_path(repo, pair))
     for name, branch in (("a", "a"), ("b", "b")):
         with open(os.path.join(folder, name + ".patch"), "w", encoding="utf-8", newline="\n") as fh:
             fh.write(git(repo, "diff", pair["base"], branch, check=False).stdout)

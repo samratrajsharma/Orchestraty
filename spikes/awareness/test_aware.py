@@ -14,6 +14,14 @@ def test_the_order_is_random_per_repeat_but_fixed_by_the_seed():
     assert {r for _, _, r in one[:6]} == {1} and {r for _, _, r in one[6:]} == {2}
 
 
+def test_a_pairs_import_path_is_its_own_worktrees():
+    top = os.path.join("w", "wt-a")
+    absolute = os.path.abspath("shims")
+    env = aware_run.import_path(top, {"pythonpath": ["src", absolute]})
+    assert env == {"PYTHONPATH": os.pathsep.join([os.path.join(top, "src"), absolute])}
+    assert aware_run.import_path(top, {}) == {}
+
+
 def result(pair, condition, repeat, related=True, alone=(True, True), conflict=False, merged=True, check=True,
            notes=()):
     r = {"pair": pair, "condition": condition, "repeat": repeat, "related": related,
