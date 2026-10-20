@@ -14,7 +14,9 @@ Every live session is followed on the live map (``livemap.map``), refreshed afte
 calls and on a timer. The timer also looks at the other worktrees of each repository with a
 live session: one with changes and no hooked session becomes a plain-git session (agent
 ``git``, level 0), based on its merge base with the main worktree's HEAD, so agents that run
-no hooks, editors and people are seen too.
+no hooks, editors and people are seen too. When a hooked session ends, its repository's
+worktrees are looked at at once: a worktree it left with changes is followed as plain git, so
+its changes stay on the map (and its push line stays) after the agent has gone.
 """
 import hashlib
 import json
@@ -66,6 +68,8 @@ class Coordinator:
         self.bad_lines = 0
         self._last_housekeeping = 0
         self._last_scan = None
+        self._scan_now = set()             # repositories to look at now (a hooked session ended)
+        self._repo_paths = {}              # repository id -> a worktree of it, to list the others
         self.changed = set()               # sessions whose live map changed in the last step
         self.new_findings = []             # findings first seen in the last step
         self._dirty_repos = set()          # repositories whose findings must be worked out again
@@ -82,7 +86,15 @@ class Coordinator:
     def close(self):
         self.record.close()
 
+    def _ended_hooked(self, session):
+        """A hooked session ended: look at its repository's worktrees at once."""
+        if session["agent"] != LEVEL0_AGENT and session.get("repo_id") is not None:
+            self._repo_paths[session["repo_id"]] = session["worktree"]
+            self._scan_now.add(session["repo_id"])
+
     def _track(self, session):
+        if session.get("repo_id") is not None and session.get("worktree"):
+            self._repo_paths.setdefault(session["repo_id"], session["worktree"])
         key = self._repo_keys.get(session["repo_id"])
         if key is None:
             self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
@@ -180,10 +192,11 @@ class Coordinator:
         """Refresh the live map where needed and record what changed. On the timer every live
         session is refreshed and the plain-git worktrees are looked at."""
         mono = time.monotonic()
-        if self._last_scan is None or mono - self._last_scan >= self.cfg["level0_seconds"]:
+        if self._last_scan is None or mono - self._last_scan >= self.cfg["level0_seconds"] or self._scan_now:
             self._last_scan = mono
             self.livemap.mark_all()
-            self.scan_level0()
+            forced, self._scan_now = self._scan_now, set()
+            self.scan_level0(forced)
         self.changed = self.livemap.refresh_pending()
         if self.changed:
             with self.record.transaction():
@@ -211,15 +224,8 @@ class Coordinator:
             found = overlap.evaluate(views, self.livemap.graph, self.livemap.base_graph)
             now = self.now_ns()
             with self.record.transaction():
-                for f in found:
-                    if self.record.put_finding(repo_id, f, now):
-                        self.new_findings.append(f)
-                        self.log.info("finding %s (%s)", f.key, f.strength)
-                    # Every evaluation, not only for new findings: a latent finding that became
-                    # real now calls for the note to the session that made the change. Notes
-                    # already made are not made again.
-                    cause = max((self.sessions[s]["last_seen"] for s in f.sessions if s in self.sessions), default=now)
-                    self.deliverer.add(f.as_dict(), self.sessions, cause, wake=self.cfg["wake"])
+                # Resolve first: a note withdrawn here must not count as already told when a
+                # finding about the same change, under another session, makes its notes below.
                 keys = {f.key for f in found}
                 for old in self.record.findings(repo_id=repo_id):
                     if old["key"] in keys:
@@ -229,19 +235,32 @@ class Coordinator:
                     if not waiting:
                         self.record.resolve_finding(old["key"], now)
                         self.deliverer.withdraw(old["key"])
+                for f in found:
+                    if self.record.put_finding(repo_id, f, now):
+                        self.new_findings.append(f)
+                        self.log.info("finding %s (%s)", f.key, f.strength)
+                    # Every evaluation, not only for new findings: a latent finding that became
+                    # real now calls for the note to the session that made the change. Notes
+                    # already made are not made again.
+                    cause = max((self.sessions[s]["last_seen"] for s in f.sessions if s in self.sessions), default=now)
+                    self.deliverer.add(f.as_dict(), self.sessions, cause, wake=self.cfg["wake"])
             self._push_dirty = True
         return self.new_findings
 
-    def scan_level0(self):
-        """Plain-git sessions: worktrees of a repository with a live hooked session that have
-        changes and no hooked session of their own."""
-        hooked = [s for s in self.sessions.values() if s["state"] == "live" and s["agent"] != LEVEL0_AGENT]
+    def scan_level0(self, forced=()):
+        """Plain-git sessions: worktrees with changes and no live hooked session, in each
+        repository with a live session of any kind, or whose hooked session just ended."""
+        live = [s for s in self.sessions.values() if s["state"] == "live"]
+        hooked = [s for s in live if s["agent"] != LEVEL0_AGENT]
         repos = {}
-        for s in hooked:
-            repos.setdefault(s["repo_id"], s)
-        for repo_id, any_session in repos.items():
+        for s in live:
+            repos.setdefault(s["repo_id"], s["worktree"])
+        for repo_id in forced:
+            if repo_id in self._repo_paths:
+                repos.setdefault(repo_id, self._repo_paths[repo_id])
+        for repo_id, any_worktree in repos.items():
             try:
-                trees = git_changes.worktrees(any_session["worktree"])
+                trees = git_changes.worktrees(any_worktree)
             except (gitio.GitError, gitio.UntrustedRepositoryError):
                 continue
             busy = {os.path.normcase(s["worktree"]) for s in hooked if s["repo_id"] == repo_id}
@@ -320,6 +339,7 @@ class Coordinator:
             self.deliverer.forget_session(sid)
             self._dirty_repos.add(session["repo_id"])
             self._push_dirty = True
+            self._ended_hooked(session)
             return
         if sid not in self.livemap.sessions:
             self._track(session)
@@ -390,6 +410,7 @@ class Coordinator:
                 self.deliverer.forget_session(s["id"])
             self._dirty_repos.add(s["repo_id"])
             self._push_dirty = True
+            self._ended_hooked(s)
 
     def clean_spool(self, now):
         """Delete spool files read to the end whose session is ignored, or ended more than a

@@ -101,13 +101,20 @@ def test_findings_wait_while_a_graph_is_being_built(state, two, monkeypatch):
     assert keys(c) == before                                      # kept, not resolved
 
 
-def test_an_ended_session_takes_its_findings_with_it(state, two):
+def test_an_ended_session_takes_its_findings_with_it_but_not_its_changes(state, two):
+    # B's findings end with B; the changes it left in its worktree stay on the map as a
+    # plain-git session, so the overlap they make with A's change is still seen.
     c, wa, wb = two
     edit(state, c, "A", wa, "a.py", BROKEN)
     edit(state, c, "B", wb, "c.py", USES)
     spool_event(state.root, "B", "SessionEnd", wb, reason="other")
     c.step()
-    assert keys(c) == {"O6|a.py::charge|A"}
+    c.livemap.indexes.wait(120)
+    c.step()
+    assert not [k for k in keys(c) | keys(c, latent=True) if "|B|" in k or k.endswith("|B")]
+    [plain] = [s for s in c.record.sessions(states=("live",)) if s["agent"] == "git"]
+    assert os.path.normcase(plain["worktree"]) == os.path.normcase(str(wb))
+    assert keys(c) == {"O6|a.py::charge|A", f"O3|a.py::charge|A|{plain['id']}|c.py"}
 
 
 def test_the_same_function_in_both_and_the_same_file(state, two):

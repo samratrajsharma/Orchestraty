@@ -16,14 +16,17 @@ Who hears what (Draft 4 §5.5):
 
 Plain-git sessions get no notes (they have no hooks). One note per finding per session and
 kind: the record's ``notes`` table remembers every note made, so a finding that comes back
-is not told twice. A note whose finding stops holding before it was taken is withdrawn.
+is not told twice. Nor is the same change told twice when it is found again under another
+session: a plain-git session that took over a finished session's worktree, or two sessions
+that broke the same function (one note per session, kind, rule, function and file). A note
+whose finding stops holding before it was taken is withdrawn.
 
 Slots hold every note waiting for them when they are written and are never overwritten (see
 ``slots``): when a slot that had notes written to it is gone from disk, the hook took it, and
 those notes are delivered; then the next notes waiting for it are written.
 
-The push line: for each live hooked session with an open O6 finding, ``push/<worktree key>.txt``
-holds one line the git pre-push hook prints.
+The push line: for each live session with an open O6 finding, hooked or plain git (a worktree
+an agent has left), ``push/<worktree key>.txt`` holds one line the git pre-push hook prints.
 """
 import os
 import shutil
@@ -89,9 +92,30 @@ class Deliverer:
         """Make the notes a newly seen finding calls for (not again for one already made)."""
         made = 0
         for sid, kind, slot, text in self.plan(finding, sessions, wake):
+            if self._told_already(finding, sid, kind):
+                continue
             if self.record.add_note(finding["key"], sid, kind, _rel(self.state, slot), text, self.now_ns(), trigger_ns):
                 made += 1
         return made
+
+    @staticmethod
+    def _topic(key, sid):
+        """What a finding is about for one receiving session, whoever made the change."""
+        parts = key.split("|")
+        if parts[0] in ("O3", "O4") and len(parts) == 5:
+            return (parts[0], parts[1], parts[4])
+        if parts[0] == "O2" and len(parts) == 4 and sid in parts[2:]:
+            return (parts[0], parts[1])
+        return None
+
+    def _told_already(self, finding, sid, kind):
+        topic = self._topic(finding["key"], sid)
+        if topic is None:
+            return False
+        for note in self.record.notes(session_id=sid, states=("pending", "written", "delivered")):
+            if note["kind"] == kind and note["finding_key"] != finding["key"] and self._topic(note["finding_key"], sid) == topic:
+                return True
+        return False
 
     def withdraw(self, finding_key):
         """Take back the notes of a finding that stopped holding, unless already taken."""
@@ -161,11 +185,11 @@ class Deliverer:
 
     # 3. the push line
     def push_lines(self, sessions, open_findings):
-        """Write or remove push/<worktree key>.txt for every live hooked session."""
+        """Write or remove push/<worktree key>.txt for every live session, hooked or plain git."""
         folder = os.path.join(self.state.root, "push")
         wanted = {}
         for s in sessions.values():
-            if s["state"] != "live" or s["agent"] in NO_NOTES:
+            if s["state"] != "live":
                 continue
             mine = [f for f in open_findings if f["rule"] == "O6" and f["changer"] == s["id"]]
             line = templates.push_line(mine)

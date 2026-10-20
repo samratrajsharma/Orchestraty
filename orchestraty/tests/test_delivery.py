@@ -248,6 +248,64 @@ def test_the_push_line_follows_callers_left_behind(state, two):
     assert not push.exists()
 
 
+def test_a_finished_sessions_change_keeps_its_push_line(state, two):
+    # People push after the agent has gone: the worktree it left is followed as plain git.
+    c, wa, wb = two
+    edit(state, c, "A", wa, "a.py", BROKEN)
+    push = Path(state.root) / "push" / (slots.file_key(str(wa)) + ".txt")
+    assert push.exists()
+    spool_event(state.root, "A", "SessionEnd", wa, reason="other")
+    settle(c)
+    assert push.read_text(encoding="utf-8").startswith("orchestraty: 1 caller(s) of charge still use its old form")
+    [plain] = [s for s in c.record.sessions(states=("live",)) if s["agent"] == "git"]
+    assert os.path.normcase(plain["worktree"]) == os.path.normcase(str(wa))
+    (wa / "a.py").write_text("def charge(amount, currency):\n    return amount\n", encoding="utf-8")   # reverted
+    c._last_scan = None
+    settle(c)
+    assert not push.exists()
+
+
+def test_the_last_session_to_finish_keeps_its_push_line(state, two):
+    # No session is left to run the timer: the end itself must look at the worktree.
+    c, wa, wb = two
+    edit(state, c, "A", wa, "a.py", BROKEN)
+    spool_event(state.root, "B", "SessionEnd", wb, reason="other")
+    c.step()
+    spool_event(state.root, "A", "SessionEnd", wa, reason="other")
+    c.step()
+    c.livemap.indexes.wait(120)
+    c.step()
+    push = Path(state.root) / "push" / (slots.file_key(str(wa)) + ".txt")
+    assert push.exists() and "caller(s) of charge" in push.read_text(encoding="utf-8")
+
+
+def test_a_note_already_delivered_is_not_repeated_by_the_session_that_took_over(state, two):
+    from orchestraty.capture.hook import take_slot
+    c, wa, wb = two
+    edit(state, c, "A", wa, "a.py", BROKEN)
+    edit(state, c, "B", wb, "c.py", USES)
+    slot = slots.edit_slot(state, "B", str(wb / "c.py"))
+    assert take_slot(slot)                                        # B has seen it
+    c.step()
+    spool_event(state.root, "A", "SessionEnd", wa, reason="other")
+    settle(c)
+    assert not slots.waiting(slot)
+    told = [n for n in c.record.notes(session_id="B") if n["kind"] == "edit" and n["finding_key"].endswith("|B|c.py")]
+    assert [n["state"] for n in told] == ["delivered"]           # once, from A; nothing from its successor
+
+
+def test_a_note_never_seen_is_still_given_by_the_session_that_took_over(state, two):
+    c, wa, wb = two
+    edit(state, c, "A", wa, "a.py", BROKEN)
+    edit(state, c, "B", wb, "c.py", USES)
+    spool_event(state.root, "A", "SessionEnd", wa, reason="other")
+    settle(c)
+    slot = slots.edit_slot(state, "B", str(wb / "c.py"))
+    assert slots.waiting(slot)
+    text = read_slot(slot)["hookSpecificOutput"]["additionalContext"]
+    assert "changes made outside any agent session (worktree wt-a, branch feat-a)" in text
+
+
 def test_an_ended_session_takes_its_notes_back(state, two):
     c, wa, wb = two
     edit(state, c, "A", wa, "a.py", BROKEN)
