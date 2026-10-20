@@ -20,6 +20,13 @@ input are never stored; `len` is the payload's size in bytes.
 Silent and fail-open: it prints nothing and always exits 0. An internal failure appends
 one {"shim_error": "<exception class>"} line instead, so failures show up in the data.
 
+Antigravity (agent "agy") sends the same facts under other names: conversationId for the
+session, transcriptPath, the tool's name inside toolCall, the step number stepIdx, and its
+workspace folders in workspacePaths (the first is kept as cwd); its payloads carry no event
+name, so the event comes from the command line. Its PreToolUse hook must answer, so for agy
+the shim prints one answer: {"decision":"allow"} for PreToolUse (no objection; Antigravity's
+own approval rules still apply) and {} for every other event, also when it fails.
+
 Built-in modules only (sys, os, time, and _winapi on Windows), and no json or site, so the
 interpreter starts fast. The append is atomic with several writers: on Windows the file is
 opened with FILE_APPEND_DATA only, so the kernel places every write at the end of the file
@@ -40,6 +47,10 @@ LAST = (b"tool_use_id",)
 TOOL_FIELDS = (b"tool_name", b"tool_use_id")
 TOOL_EVENTS = (b"PreToolUse", b"PostToolUse", b"PostToolUseFailure")
 MAX_FIELD = 4096            # bytes; longer values are left out
+AGY = b"agy"
+AGY_FIELDS = ((b"conversationId", b"session_id"), (b"transcriptPath", b"transcript_path"))
+AGY_TOOL_EVENTS = (b"PreToolUse", b"PostToolUse")
+AGY_ANSWERS = {b"PreToolUse": b'{"decision":"allow"}'}
 _ESCAPES = b'"\\/bfnrtu'
 _HEX = b"0123456789abcdefABCDEF"
 
@@ -101,6 +112,65 @@ def field(raw, key, last=False):
             end = i
         else:
             start = i + 1
+
+
+def number(raw, key):
+    """The digits of the first `"key": <integer>` in raw, or None."""
+    needle = b'"' + key + b'"'
+    i = raw.find(needle)
+    if i < 0:
+        return None
+    j = i + len(needle)
+    while j < len(raw) and raw[j] in b" \t\r\n:":
+        j += 1
+    k = j
+    while k < len(raw) and 48 <= raw[k] <= 57 and k - j < 18:
+        k += 1
+    return raw[j:k] if k > j else None
+
+
+def first_in_list(raw, key):
+    """The first string token in the list `"key": [...]`, quotes included, or None."""
+    needle = b'"' + key + b'"'
+    i = raw.find(needle)
+    if i < 0:
+        return None
+    j = i + len(needle)
+    while j < len(raw) and raw[j] in b" \t\r\n:":
+        j += 1
+    if j >= len(raw) or raw[j] != 91:                   # '['
+        return None
+    j += 1
+    while j < len(raw) and raw[j] in b" \t\r\n":
+        j += 1
+    return _string_token(raw, j) if j < len(raw) and raw[j] == 34 else None
+
+
+def agy_event_line(raw, event, now_ns, pid):
+    """(session file name, spool line) for one Antigravity payload, in the same shape as the
+    other agents' lines."""
+    parts = [b'{"ts":%d,"pid":%d,"agent":"agy","event":"%s","len":%d,"hook_event_name":"%s"'
+             % (now_ns, pid, event, len(raw), event)]
+    session = b""
+    for key, name in AGY_FIELDS:
+        token = field(raw, key)
+        if token is not None:
+            parts.append(b',"%s":%s' % (name, token))
+            if name == b"session_id":
+                session = token[1:-1]
+    cwd = first_in_list(raw, b"workspacePaths")
+    if cwd is not None:
+        parts.append(b',"cwd":%s' % cwd)
+    if event in AGY_TOOL_EVENTS:
+        at = raw.find(b'"toolCall"')
+        token = field(raw[at:], b"name") if at >= 0 else None
+        if token is not None:
+            parts.append(b',"tool_name":%s' % token)
+        step = number(raw, b"stepIdx")
+        if step is not None:
+            parts.append(b',"step":%s' % step)
+    parts.append(b"}\n")
+    return safe_name(session, 64, b"nosession").decode("ascii") + ".jsonl", b"".join(parts)
 
 
 def safe_name(value, limit, fallback):
@@ -168,10 +238,14 @@ def main(argv):
     agent = safe_name(argv[1].encode("utf-8", "replace") if len(argv) > 1 else b"", 32, b"unknown")
     folder = os.path.join(spool, agent.decode("ascii"))
     path = None
+    event = b""
     try:
         event = safe_name(argv[2].encode("utf-8", "replace") if len(argv) > 2 else b"", 40, b"")
         raw = sys.stdin.buffer.read()
-        name, line = event_line(raw, agent, event, time.time_ns(), os.getpid())
+        if agent == AGY:
+            name, line = agy_event_line(raw, event, time.time_ns(), os.getpid())
+        else:
+            name, line = event_line(raw, agent, event, time.time_ns(), os.getpid())
         path = os.path.join(folder, name)
         append(path, line)
     except BaseException as exc:                 # fail open, but leave a trace in the data
@@ -184,6 +258,13 @@ def main(argv):
                 break
             except BaseException:
                 continue
+    finally:
+        if agent == AGY:                         # Antigravity waits for an answer
+            try:
+                sys.stdout.buffer.write(AGY_ANSWERS.get(event, b"{}"))
+                sys.stdout.buffer.flush()
+            except BaseException:
+                pass
 
 
 if __name__ == "__main__":
