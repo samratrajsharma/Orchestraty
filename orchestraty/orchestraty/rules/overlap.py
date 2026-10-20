@@ -11,7 +11,11 @@
 
 Uses come from the code graphs the engine builds: a call resolved with evidence (an import,
 the same file, a typed receiver, ...) or an inheritance, never a match by name alone. A use
-counts for O3 and O4 in the other session's own copy of the code. In a file that session is
+counts only when the change can break it: the classifier says which calls each breaking
+reason breaks (a parameter renamed breaks the calls that pass it by name, not those that pass
+it by position), and the engine records how each call passes its arguments; an inheritance
+always counts. A finding gives the reasons its uses run into first. A use counts for O3 and
+O4 in the other session's own copy of the code. In a file that session is
 changing it is a finding; in any other file that uses it, the finding is latent: not shown as
 an overlap, but it gives the session its note before its first edit of that file (at most
 MAX_LATENT files per change and session). O6 looks at the callers the base commit had, and a
@@ -22,6 +26,8 @@ Every finding has a stable key, so the coordinator can tell a new finding from o
 knows, and one that stopped holding.
 """
 from dataclasses import dataclass, field
+
+from orchestraty.livemap.contracts import breaking_reasons
 
 WEAK, MEDIUM, STRONG = "weak", "medium", "strong"
 MAX_LATENT = 100
@@ -52,7 +58,9 @@ def _file_of(symbol):
 
 
 def _uses(graph, target):
-    """{user symbol: sorted lines} for the calls to `target` and the classes inheriting it."""
+    """{user symbol: (sorted lines, call shapes)} for the calls to `target` and the classes
+    inheriting it. The shapes say how each call passes its arguments; None when some use is
+    not a Python call with recorded arguments (an inheritance, a call from JS)."""
     out = {}
     if graph is None or target not in graph.nodes:
         return out
@@ -60,9 +68,33 @@ def _uses(graph, target):
         for user in graph.predecessors(target, etype):
             if user == target:
                 continue
-            lines = graph.edge_info(user, target, etype).get("lines", [])
-            out.setdefault(user, set()).update(lines)
-    return {u: sorted(lines) for u, lines in out.items()}
+            info = graph.edge_info(user, target, etype)
+            lines, shapes = out.get(user, (set(), []))
+            lines.update(info.get("lines", []))
+            out[user] = (lines, shapes + info["args"] if shapes is not None and info.get("args") else None)
+    return {u: (sorted(lines), shapes) for u, (lines, shapes) in out.items()}
+
+
+def _breaking_uses(change, graph, target):
+    """[(user symbol, sorted lines, the breaking reasons it runs into)] for the uses of `target`
+    that `change` can break: every use, with no reasons, when the change does not say which
+    calls it breaks."""
+    out = []
+    for use, (lines, shapes) in sorted(_uses(graph, target).items()):
+        why = breaking_reasons(change.breaks, shapes) if change.breaks else []
+        if change.breaks and not why:
+            continue                      # each of its calls passes its arguments in a way that still works
+        out.append((use, lines, why))
+    return out
+
+
+def _reasons(change, why):
+    """The change's reasons for one finding: the breaking reasons its uses run into, then the
+    reasons that break no call; all of them, in order, when the change does not say which
+    calls it breaks."""
+    if not change.breaks:
+        return list(change.reasons)
+    return [r for r in change.reasons if r in why] + [r for r in change.reasons if r not in change.breaks]
 
 
 def same_file(a, b, views):
@@ -91,9 +123,10 @@ def contract_uses(changer, user, views, graphs):
             continue
         target = change.moved_from or sym                    # where the other session's code finds it
         removed = change.kind == "removed"
-        by_file = {}
-        for use, lines in _uses(graph, target).items():
+        by_file, why = {}, {}
+        for use, lines, hit in _breaking_uses(change, graph, target):
             by_file.setdefault(_file_of(use), []).append({"symbol": use, "lines": lines})
+            why.setdefault(_file_of(use), set()).update(hit)
         latent_left = MAX_LATENT
         for path, uses in sorted(by_file.items(), key=lambda kv: (kv[0] not in files, kv[0])):
             latent = path not in files
@@ -104,7 +137,7 @@ def contract_uses(changer, user, views, graphs):
             rule = "O4" if removed else "O3"
             yield Finding(f"{rule}|{target}|{changer}|{user}|{path}", rule, STRONG, tuple(sorted((changer, user))),
                           changer=changer, receiver=user, symbol=target, file=path,
-                          detail={"symbol": target, "kind": change.kind, "reasons": list(change.reasons),
+                          detail={"symbol": target, "kind": change.kind, "reasons": _reasons(change, why[path]),
                                   "moved_to": sym if change.moved_from else "", "uses": uses, "latent": latent})
 
 
@@ -121,12 +154,15 @@ def left_behind(changer, views, base_graphs):
         if change.contract != BREAKING:
             continue
         target = change.moved_from or sym
-        left = [{"symbol": use, "file": _file_of(use), "lines": lines}
-                for use, lines in sorted(_uses(graph, target).items()) if use not in updated]
+        left, why = [], set()
+        for use, lines, hit in _breaking_uses(change, graph, target):
+            if use not in updated:
+                left.append({"symbol": use, "file": _file_of(use), "lines": lines})
+                why.update(hit)
         if left:
             yield Finding(f"O6|{target}|{changer}", "O6", STRONG, (changer,), changer=changer, symbol=target,
                           file=_file_of(target),
-                          detail={"symbol": target, "kind": change.kind, "reasons": list(change.reasons),
+                          detail={"symbol": target, "kind": change.kind, "reasons": _reasons(change, why),
                                   "left": left})
 
 

@@ -3,7 +3,7 @@ import pytest
 
 from orch_engine.graph import build_graph
 from orch_engine.parsing import parse_python
-from orchestraty.livemap.map import SessionView, SymbolChange
+from orchestraty.livemap.map import SessionView, SymbolChange, analyse
 from orchestraty.rules.overlap import evaluate
 
 BASE = {
@@ -136,3 +136,78 @@ def test_findings_are_sorted_and_keys_are_stable():
     assert [f.key for f in first] == [f.key for f in again] == sorted(f.key for f in first)
     assert {f.rule for f in first} == {"O1", "O3", "O6"}
     assert "O3|a.py::charge|A|B|c.py" in {f.key for f in first}
+
+
+def changed(before, after, path="a.py"):
+    """The one change an edit of a file makes, as the live map classifies it."""
+    [c] = analyse({path: parse_python(path, before)}, {path: parse_python(path, after)}).values()
+    return c
+
+
+RENAMED = "def charge(amount, cur):\n    return amount\n"
+BY_POSITION = "from a import charge\n\n\ndef use():\n    return charge(2, 'USD')\n"
+BY_NAME = "from a import charge\n\n\ndef named():\n    return charge(2, currency='USD')\n"
+
+
+def test_a_rename_with_only_positional_callers_gives_no_contract_finding():
+    rename = changed(BASE["a.py"], RENAMED)
+    assert rename.contract == "breaking" and rename.reasons == ["parameter currency renamed to cur"]
+    copy = dict(BASE, **{"c.py": BY_POSITION})
+    findings = run({"A": view("A", ["a.py"], [rename]), "B": view("B", ["c.py"])},
+                   graphs={"B": graph_of(copy)}, base=graph_of(copy))
+    assert [f for f in findings if f.rule in ("O3", "O4", "O6")] == []
+
+
+def test_a_rename_reaches_exactly_the_callers_that_pass_it_by_name():
+    copy = dict(BASE, **{"c.py": BY_POSITION, "d.py": BY_NAME})
+    views = {"A": view("A", ["a.py"], [changed(BASE["a.py"], RENAMED)]), "B": view("B", ["c.py", "d.py"])}
+    findings = run(views, graphs={"B": graph_of(copy)}, base=graph_of(copy))
+    [o3] = [f for f in findings if f.rule == "O3"]
+    assert (o3.file, o3.receiver, o3.detail["latent"]) == ("d.py", "B", False)
+    assert o3.detail["uses"] == [{"symbol": "d.py::named", "lines": [5]}]
+    assert o3.detail["reasons"] == ["parameter currency renamed to cur"]
+    [o6] = by_rule(findings, "O6")
+    assert o6.detail["left"] == [{"symbol": "d.py::named", "file": "d.py", "lines": [5]}]
+
+
+def test_a_parameter_removed_from_the_end_breaks_the_calls_that_pass_it():
+    base = {"a.py": "def charge(amount, currency='EUR'):\n    return amount\n",
+            "b.py": "from a import charge\n\n\ndef short():\n    return charge(1)\n\n\n"
+                    "def full():\n    return charge(1, 'USD')\n\n\ndef named():\n    return charge(1, currency='USD')\n"}
+    removed = changed(base["a.py"], "def charge(amount):\n    return amount\n")
+    [o6] = run({"A": view("A", ["a.py"], [removed])}, base=graph_of(base))
+    assert [c["symbol"] for c in o6.detail["left"]] == ["b.py::full", "b.py::named"]
+
+
+def test_a_call_that_unpacks_its_arguments_still_counts():
+    base = dict(BASE, **{"b.py": "from a import charge\n\n\ndef pay(opts):\n    return charge(1, **opts)\n"})
+    [o6] = run({"A": view("A", ["a.py"], [changed(BASE["a.py"], RENAMED)])}, base=graph_of(base))
+    assert o6.detail["left"][0]["symbol"] == "b.py::pay"
+    # and **kwargs taken away breaks a call passing a keyword only it took, not a plain call
+    base = {"a.py": "def charge(amount, **extra):\n    return amount\n",
+            "b.py": "from a import charge\n\n\ndef plain():\n    return charge(1)\n\n\n"
+                    "def tagged():\n    return charge(1, tag='x')\n"}
+    [o6] = run({"A": view("A", ["a.py"], [changed(base["a.py"], "def charge(amount):\n    return amount\n")])},
+               base=graph_of(base))
+    assert [c["symbol"] for c in o6.detail["left"]] == ["b.py::tagged"]
+
+
+def test_a_finding_names_the_reasons_its_uses_run_into():
+    base = {"a.py": "def charge(amount, currency, *rest) -> int:\n    return amount\n",
+            "b.py": "from a import charge\n\n\ndef pay():\n    return charge(1, currency='EUR')\n"}
+    both = changed(base["a.py"], "def charge(amount, cur) -> str:\n    return amount\n")
+    assert both.reasons == ["parameter currency renamed to cur", "*args removed", "return type changed"]
+    [o6] = run({"A": view("A", ["a.py"], [both])}, base=graph_of(base))
+    assert o6.detail["reasons"] == ["parameter currency renamed to cur", "return type changed"]
+
+
+def test_a_removed_function_and_an_inherited_class_break_every_use():
+    removed = changed(BASE["a.py"], "")
+    assert removed.kind == "removed" and removed.breaks == {"removed": [["any"]]}
+    [o6] = run({"A": view("A", ["a.py"], [removed])}, base=graph_of(BASE))
+    assert o6.detail["left"][0]["symbol"] == "b.py::pay"
+    base = {"m.py": "class Base(Mixin):\n    pass\n",
+            "n.py": "from m import Base\n\n\nclass Child(Base):\n    pass\n"}
+    broken = changed(base["m.py"], "class Base:\n    pass\n", path="m.py")
+    [o6] = run({"A": view("A", ["m.py"], [broken])}, base=graph_of(base))
+    assert o6.detail["left"][0]["symbol"] == "n.py::Child"

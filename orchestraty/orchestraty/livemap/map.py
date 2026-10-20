@@ -6,7 +6,7 @@ seconds on a timer (which catches editors, formatters and people). A refresh ask
 files differ from the base commit, keeps those that belong to the session, parses the changed
 Python files as they are on disk and as they were at the base (parses are cached by content),
 and lets the engine's ``diff`` say which functions and classes were added, removed, moved or
-modified; ``contracts.classify`` rates each signature change.
+modified; ``contracts.classify`` rates each signature change and says which calls it breaks.
 
 Which files belong to a session:
 * a file named by one of its edit events is always its own;
@@ -24,7 +24,7 @@ from orch_engine.track import diff, file_fingerprint
 
 from orchestraty import gitio
 from orchestraty.livemap import changes as git_changes
-from orchestraty.livemap.contracts import BREAKING, COMPATIBLE, NONE, REVIEW, classify, worst
+from orchestraty.livemap.contracts import ANY, BREAKING, COMPATIBLE, NONE, REVIEW, classify, worst
 from orchestraty.livemap.index import BaseIndexes, ParseCache, blob_id, view
 
 PYTHON = (".py",)
@@ -42,11 +42,12 @@ class SymbolChange:
     file: str
     lines: list                 # [start, end] in the session's copy (in the base for a removal)
     moved_from: str = ""
+    breaks: dict = None         # breaking reason -> the calls it breaks (see contracts); None: not known
 
     def as_dict(self):
         return {"symbol": self.symbol, "kind": self.kind, "change": self.change, "contract": self.contract,
                 "reasons": list(self.reasons), "file": self.file, "lines": list(self.lines),
-                "moved_from": self.moved_from}
+                "moved_from": self.moved_from, "breaks": self.breaks}
 
 
 @dataclass
@@ -65,7 +66,7 @@ class SessionView:
     def key(self):
         """What a refresh compares to tell whether anything changed."""
         return (tuple(sorted(self.files.items())), tuple(sorted(self.unattributed)),
-                tuple(sorted((k, s.kind, s.change, s.contract, tuple(s.reasons), tuple(s.lines))
+                tuple(sorted((k, s.kind, s.change, s.contract, tuple(s.reasons), tuple(s.lines), repr(s.breaks))
                              for k, s in self.symbols.items())))
 
     def breaking(self):
@@ -93,22 +94,24 @@ def analyse(base, head):
     for k in d["symbols_added"]:
         out[k] = SymbolChange(k, "added", "", COMPATIBLE, [], hs[k]["file"], hs[k]["lines"])
     for k in d["symbols_removed"]:
-        out[k] = SymbolChange(k, "removed", "", BREAKING, ["removed"], bs[k]["file"], bs[k]["lines"])
+        out[k] = SymbolChange(k, "removed", "", BREAKING, ["removed"], bs[k]["file"], bs[k]["lines"],
+                              breaks={"removed": [ANY]})
     for m in d["symbols_moved"]:
         old, new = bs[m["from"]], hs[m["to"]]
-        verdict, reasons = REVIEW, ["moved from " + old["file"]]
+        verdict, reasons, breaks = REVIEW, ["moved from " + old["file"]], {}
         if m["signature_changed"]:
-            v, r = classify(new["kind"], old.get("signature"), new.get("signature"))
+            v, r, breaks = classify(new["kind"], old.get("signature"), new.get("signature"), old["kind"])
             verdict, reasons = worst(verdict, v), reasons + r
         out[m["to"]] = SymbolChange(m["to"], "moved", "signature" if m["signature_changed"] else "", verdict,
-                                    reasons, new["file"], new["lines"], moved_from=m["from"])
+                                    reasons, new["file"], new["lines"], moved_from=m["from"], breaks=breaks)
     for k, change in d["symbol_changes"].items():
         if k in out:
             continue
-        verdict, reasons = NONE, []
+        verdict, reasons, breaks = NONE, [], {}
         if change in ("signature", "both"):
-            verdict, reasons = classify(hs[k]["kind"], bs[k].get("signature"), hs[k].get("signature"))
-        out[k] = SymbolChange(k, "modified", change, verdict, reasons, hs[k]["file"], hs[k]["lines"])
+            verdict, reasons, breaks = classify(hs[k]["kind"], bs[k].get("signature"), hs[k].get("signature"),
+                                                bs[k]["kind"])
+        out[k] = SymbolChange(k, "modified", change, verdict, reasons, hs[k]["file"], hs[k]["lines"], breaks=breaks)
     return out
 
 
