@@ -56,3 +56,9 @@ def test_breaks_avoided_false_notes_and_what_is_left_out(tmp_path):
     assert 0.0 <= low <= 0.5 <= high <= 1.0
     text = aware_score.reactions(aware_score.load(str(tmp_path)))
     assert "## r1 with-1" in text and "to B (O3, edit)" in text
+    assert s["peer_messages"] == {"with": 0, "without": 0}
+    folder = tmp_path / "r2" / "without-1" / "transcripts"
+    folder.mkdir()
+    (folder / "A.jsonl").write_text(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "SendMessage", "input": {"to": "x"}}]}}) + "\n", encoding="utf-8")
+    assert aware_score.score(aware_score.load(str(tmp_path)))["peer_messages"] == {"with": 0, "without": 1}

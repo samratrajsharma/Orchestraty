@@ -13,6 +13,8 @@ Status: throwaway (Phase 0). Not part of the product.
 * **False notes**: strong or medium notes delivered in unrelated pairs, per 10 pair runs.
 * **Time to awareness**: from the change's event to the note being written, median.
 * **Cost**: the sessions' reported cost and input tokens, per condition.
+* **Peer messages**: messages the agents sent each other on their own (Claude Code's own
+  cross-session messaging, the SendMessage tool), per condition, from the transcripts.
 * ``reactions.md`` lists every delivered note with the agent's next words, for labelling by
   hand (used it correctly / ignored it / misread it).
 """
@@ -93,7 +95,9 @@ def score(runs):
                       "input_tokens_mean": round(statistics.mean(
                           [_input_tokens(s) for s in sessions]) if sessions else 0)}
     breaks_without = sum(t["without"] for t in table.values())
+    peers = {cond: sum(peer_messages(r) for r in runs if r["condition"] == cond) for cond in ("with", "without")}
     return {
+        "peer_messages": peers,
         "runs": len(runs), "outcomes": outcomes, "related_pairs": len(related),
         "breaks": {p: t for p, t in table.items()},
         "breaks_without": breaks_without, "breaks_with": sum(t["with"] for t in table.values()),
@@ -107,6 +111,27 @@ def score(runs):
         "notes_delivered": sum(1 for r in runs for n in r.get("notes", []) if n.get("state") == "delivered"),
         "cost": cost,
     }
+
+
+def peer_messages(r):
+    """SendMessage tool calls in the run's two transcripts."""
+    n = 0
+    for name in ("A", "B"):
+        path = os.path.join(r.get("_folder", ""), "transcripts", name + ".jsonl")
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if '"SendMessage"' not in line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                for block in (d.get("message") or {}).get("content") or []:
+                    if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "SendMessage":
+                        n += 1
+    return n
 
 
 def _input_tokens(s):
