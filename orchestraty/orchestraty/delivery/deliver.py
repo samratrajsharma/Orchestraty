@@ -8,7 +8,8 @@ Who hears what (Draft 4 §5.5):
 | O1     | none (weak: status only)               |                                  |           |
 | O2     | another session changes this too       | both sessions                    | next      |
 | O3, O4 | what changed, and where this file uses it | the session using it          | edit file |
-|        | who uses what you changed              | the session that changed it      | next      |
+|        | who uses what you changed (not for a   | the session that changed it      | next      |
+|        | latent finding: a file nobody is changing) |                              |           |
 | O6     | callers you left behind                | the session that changed it      | stop      |
 | O3, O4 | the same note, when wake is on and the   | the session using it             | wake      |
 |        | session using it waits for its user      |                                  |           |
@@ -73,9 +74,9 @@ class Deliverer:
                 path = os.path.join(sessions[user]["worktree"], *finding["file"].split("/"))
                 text = templates.for_user(finding, sessions[changer])
                 out.append((user, "edit", slots.edit_slot(self.state, user, path), text))
-                if wake and sessions[user].get("turn") == "idle":
+                if wake and sessions[user].get("turn") == "idle" and not finding["detail"].get("latent"):
                     out.append((user, "wake", slots.wake_slot(self.state, user), text))
-            if hooked(changer) and user in sessions:
+            if hooked(changer) and user in sessions and not finding["detail"].get("latent"):
                 out.append((changer, "next", slots.next_slot(self.state, changer),
                             templates.for_changer(finding, sessions[user])))
         elif rule == "O6":

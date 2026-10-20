@@ -33,8 +33,9 @@ def run(views, graphs=None, base=None):
     return evaluate(views, lambda sid: graphs.get(sid), lambda sid: base)
 
 
-def by_rule(findings, rule):
-    return [f for f in findings if f.rule == rule]
+def by_rule(findings, rule, latent=False):
+    """The findings of one rule; by default only those about files a session is changing."""
+    return [f for f in findings if f.rule == rule and bool(f.detail.get("latent")) == latent]
 
 
 def test_o1_the_same_file():
@@ -61,8 +62,11 @@ def test_o3_a_breaking_change_used_in_a_file_the_other_session_is_changing():
     assert (f.changer, f.receiver, f.file, f.symbol, f.strength) == ("A", "B", "c.py", "a.py::charge", "strong")
     assert f.detail["uses"] == [{"symbol": "c.py::use", "lines": [5]}]
     assert f.detail["reasons"] == ["parameter currency removed"]
-    # b.py calls charge too, but B is not changing b.py: nothing for B about it.
-    assert all(x.file != "b.py" for x in by_rule(findings, "O3"))
+    # b.py calls charge too, but B is not changing b.py: a latent finding, which only gives B
+    # its note before a first edit of b.py.
+    [latent] = by_rule(findings, "O3", latent=True)
+    assert (latent.file, latent.receiver) == ("b.py", "B")
+    assert latent.detail["uses"] == [{"symbol": "b.py::pay", "lines": [5]}]
 
 
 def test_no_contract_note_for_compatible_or_review_changes_or_without_a_graph():

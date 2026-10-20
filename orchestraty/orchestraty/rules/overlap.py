@@ -11,10 +11,12 @@
 
 Uses come from the code graphs the engine builds: a call resolved with evidence (an import,
 the same file, a typed receiver, ...) or an inheritance, never a match by name alone. A use
-counts for O3 and O4 in the other session's own copy of the code, and only in the files that
-session is changing. O6 looks at the callers the base commit had, and a caller counts as
-updated when some live session modified it. Calls made at module level, outside any function,
-are not seen.
+counts for O3 and O4 in the other session's own copy of the code. In a file that session is
+changing it is a finding; in any other file that uses it, the finding is latent: not shown as
+an overlap, but it gives the session its note before its first edit of that file (at most
+MAX_LATENT files per change and session). O6 looks at the callers the base commit had, and a
+caller counts as updated when some live session modified it. Calls made at module level,
+outside any function, are not seen.
 
 Every finding has a stable key, so the coordinator can tell a new finding from one it already
 knows, and one that stopped holding.
@@ -22,6 +24,7 @@ knows, and one that stopped holding.
 from dataclasses import dataclass, field
 
 WEAK, MEDIUM, STRONG = "weak", "medium", "strong"
+MAX_LATENT = 100
 BREAKING = "breaking"
 CHANGED_KINDS = ("modified", "moved", "removed")
 
@@ -77,7 +80,8 @@ def same_function(a, b, views):
 
 
 def contract_uses(changer, user, views, graphs):
-    """O3 and O4: what `changer` broke or removed, used in the files `user` is changing."""
+    """O3 and O4: what `changer` broke or removed, used in `user`'s copy of the code; latent
+    where `user` is not changing the file."""
     graph = graphs(user)
     if graph is None:
         return
@@ -89,14 +93,19 @@ def contract_uses(changer, user, views, graphs):
         removed = change.kind == "removed"
         by_file = {}
         for use, lines in _uses(graph, target).items():
-            if _file_of(use) in files:
-                by_file.setdefault(_file_of(use), []).append({"symbol": use, "lines": lines})
-        for path, uses in sorted(by_file.items()):
+            by_file.setdefault(_file_of(use), []).append({"symbol": use, "lines": lines})
+        latent_left = MAX_LATENT
+        for path, uses in sorted(by_file.items(), key=lambda kv: (kv[0] not in files, kv[0])):
+            latent = path not in files
+            if latent:
+                if latent_left <= 0:
+                    continue
+                latent_left -= 1
             rule = "O4" if removed else "O3"
             yield Finding(f"{rule}|{target}|{changer}|{user}|{path}", rule, STRONG, tuple(sorted((changer, user))),
                           changer=changer, receiver=user, symbol=target, file=path,
                           detail={"symbol": target, "kind": change.kind, "reasons": list(change.reasons),
-                                  "moved_to": sym if change.moved_from else "", "uses": uses})
+                                  "moved_to": sym if change.moved_from else "", "uses": uses, "latent": latent})
 
 
 def left_behind(changer, views, base_graphs):

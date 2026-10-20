@@ -191,9 +191,11 @@ class Coordinator:
                     if self.record.put_finding(repo_id, f, now):
                         self.new_findings.append(f)
                         self.log.info("finding %s (%s)", f.key, f.strength)
-                        cause = max((self.sessions[s]["last_seen"] for s in f.sessions if s in self.sessions),
-                                    default=now)
-                        self.deliverer.add(f.as_dict(), self.sessions, cause, wake=self.cfg["wake"])
+                    # Every evaluation, not only for new findings: a latent finding that became
+                    # real now calls for the note to the session that made the change. Notes
+                    # already made are not made again.
+                    cause = max((self.sessions[s]["last_seen"] for s in f.sessions if s in self.sessions), default=now)
+                    self.deliverer.add(f.as_dict(), self.sessions, cause, wake=self.cfg["wake"])
                 keys = {f.key for f in found}
                 for old in self.record.findings(repo_id=repo_id):
                     if old["key"] in keys:

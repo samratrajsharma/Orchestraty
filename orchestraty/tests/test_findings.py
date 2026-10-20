@@ -44,17 +44,19 @@ def edit(state, c, sid, top, rel, text):
     c.step()
 
 
-def keys(c, states=("open",)):
-    return {f["key"] for f in c.record.findings(states=states)}
+def keys(c, states=("open",), latent=False):
+    """Finding keys; by default only those about files a session is changing."""
+    return {f["key"] for f in c.record.findings(states=states) if bool(f["detail"].get("latent")) == latent}
 
 
 def test_a_breaking_change_and_its_use_in_another_session(state, two):
     c, wa, wb = two
     edit(state, c, "A", wa, "a.py", BROKEN)
     assert keys(c) == {"O6|a.py::charge|A"}                       # b.py's caller left behind
+    assert keys(c, latent=True) == {"O3|a.py::charge|A|B|b.py"}  # B's copy calls it, untouched yet
     edit(state, c, "B", wb, "c.py", USES)
     assert keys(c) == {"O6|a.py::charge|A", "O3|a.py::charge|A|B|c.py"}
-    [o3] = [f for f in c.record.findings() if f["rule"] == "O3"]
+    [o3] = [f for f in c.record.findings() if f["rule"] == "O3" and not f["detail"]["latent"]]
     assert (o3["changer"], o3["receiver"], o3["file"], o3["strength"]) == ("A", "B", "c.py", "strong")
     assert o3["detail"]["uses"] == [{"symbol": "c.py::use", "lines": [5]}]
     assert o3["detail"]["reasons"] == ["parameter currency removed"]
@@ -64,7 +66,7 @@ def test_new_findings_are_reported_once(state, two):
     c, wa, wb = two
     edit(state, c, "A", wa, "a.py", BROKEN)
     assert [f.key for f in c.new_findings] in ([], ["O6|a.py::charge|A"])
-    seen = {f["key"] for f in c.record.findings()}
+    seen = keys(c)
     assert seen
     c._last_scan = None
     c._dirty_repos.add(c.sessions["A"]["repo_id"])                # the rules run again over the same changes

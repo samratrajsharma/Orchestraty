@@ -90,6 +90,29 @@ def test_a_strong_overlap_reaches_both_agents(state, two):
     assert not slots.waiting(slots.next_slot(state, "B"))           # B changed nothing anyone uses
 
 
+def test_the_note_comes_before_the_first_edit_of_a_file_that_uses_the_change(state, two, hook_script):
+    # B has not touched b.py, which calls charge: its first edit of b.py gets the note anyway.
+    c, wa, wb = two
+    edit(state, c, "A", wa, "a.py", BROKEN)
+    slot = slots.edit_slot(state, "B", str(wb / "b.py"))
+    assert slots.waiting(slot)
+    payload = json.dumps({"session_id": "B", "hook_event_name": "PreToolUse", "cwd": str(wb), "tool_name": "Edit",
+                          "tool_input": {"file_path": str(wb / "b.py"), "old_string": "1", "new_string": "2"},
+                          "tool_use_id": "toolu_1"}).encode()
+    note = json.loads(run_hook(hook_script, ["claude", "PreToolUse"], payload).stdout)
+    assert "changed the contract of charge in a.py" in note["hookSpecificOutput"]["additionalContext"]
+    assert "b.py uses it: pay (line 5)" in note["hookSpecificOutput"]["additionalContext"]
+    # A latent finding tells nobody else: A hears about B only once B changes a file that uses it.
+    assert ("next", "O3|a.py::charge|A|B|b.py") not in notes_of(c, "A")
+    assert not slots.waiting(slots.next_slot(state, "A"))
+    (wb / "b.py").write_text("from a import charge\n\n\ndef pay():\n    return charge(2, 'EUR')\n", encoding="utf-8")
+    spool_event(state.root, "B", "PostToolUse", wb, tool_name="Edit", file_path=str(wb / "b.py"))
+    settle(c)
+    assert ("next", "O3|a.py::charge|A|B|b.py") in notes_of(c, "A")              # now real: A is told
+    assert notes_of(c, "B")[("edit", "O3|a.py::charge|A|B|b.py")]["state"] == "delivered"
+    assert not slots.waiting(slot)                                                # B is not told twice
+
+
 def test_the_hook_takes_the_note_and_the_coordinator_counts_it_delivered(state, two, hook_script):
     c, wa, wb = two
     edit(state, c, "A", wa, "a.py", BROKEN)

@@ -58,7 +58,8 @@ def collect(state, include_ended=False, now=None):
                 sessions_by_repo.setdefault(s["repo_id"], []).append(s)
                 changes[s["id"]] = record.changes(s["id"])
             for f in record.findings():
-                findings.setdefault(f["repo_id"], []).append(f)
+                if include_ended or not f["detail"].get("latent"):
+                    findings.setdefault(f["repo_id"], []).append(f)
         finally:
             record.close()
     for common_dir in cfg["repos"]:
