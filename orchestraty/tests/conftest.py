@@ -10,13 +10,33 @@ GIT_SWITCHES = ["-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false", "
                 "-c", "maintenance.auto=false", "-c", "gc.auto=0"]
 
 
+@pytest.fixture(scope="session", autouse=True)
+def the_repository_the_tests_live_in_is_never_touched():
+    """Fail the run if any test changed this repository's git hooks setting."""
+    from pathlib import Path
+    top = Path(__file__).resolve().parents[2]
+
+    def hooks():
+        out = subprocess.run(["git", "--no-optional-locks", "config", "--get", "core.hooksPath"], cwd=top,
+                             capture_output=True, text=True)
+        return out.stdout.strip(), (top / ".git" / "orch-hooks").exists()
+
+    before = hooks()
+    yield
+    assert hooks() == before, "a test changed the git hooks of the repository the tests live in"
+
+
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
-    """Every test gets its own state folder and Claude Code config folder, so nothing can
-    reach the real ones."""
+    """Every test gets its own state folder, Claude Code config folder and working folder, so
+    nothing can reach the real ones: a command run "here" (orch init, orch watch) acts on an
+    empty temporary folder, never on the repository the tests live in."""
     monkeypatch.setenv("ORCH_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     monkeypatch.setenv("ORCH_NO_COORDINATOR", "1")       # hooks start no coordinator unless a test asks
+    work = tmp_path / "cwd"
+    work.mkdir()
+    monkeypatch.chdir(work)
     return tmp_path
 
 
