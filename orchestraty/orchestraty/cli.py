@@ -20,6 +20,8 @@ def _settings_target(args):
 def _scope_line(args):
     if args.project:
         return f"They run in Claude Code sessions started in {os.getcwd()}."
+    if args.claude_config:
+        return f"They run in every Claude Code session that uses the config folder {os.path.abspath(args.claude_config)}."
     return "They run in every Claude Code session of this user, in every folder and worktree."
 
 

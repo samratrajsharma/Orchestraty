@@ -229,6 +229,15 @@ def test_orch_init_yes_installs_and_reports(settings, state, capsys):
     assert "Already installed" in capsys.readouterr().out
 
 
+def test_orch_init_says_which_sessions_the_hooks_run_in(tmp_path, capsys):
+    assert cli.main(["init", "--yes", "--claude-config", str(tmp_path / "profile")]) == 0
+    out = capsys.readouterr().out
+    assert f"session that uses the config folder {tmp_path / 'profile'}" in out
+    assert "every Claude Code session of this user" not in out
+    assert cli.main(["init", "--yes"]) == 0
+    assert "every Claude Code session of this user" in capsys.readouterr().out
+
+
 def test_orch_init_answers_from_a_terminal(settings, monkeypatch):
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
     monkeypatch.setattr("builtins.input", lambda prompt: "y")
