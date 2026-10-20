@@ -20,6 +20,8 @@ import sys
 import time
 
 HOOK_SOURCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook.py")
+MOD_SOURCE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mod")
+PLUGIN_DIRS = "CLAUDE_CODE_PLUGIN_DIRS"       # plugin folders Claude Code loads, as --plugin-dir does
 EDIT_MATCHER = "Edit|Write|MultiEdit|NotebookEdit"
 # The Claude Code events captured. PreToolUse runs for the edit tools only; PostToolUse for
 # every tool, since a shell command can change files too.
@@ -153,6 +155,56 @@ def without_ours(settings, script):
     return settings
 
 
+def _plugin_dirs(env):
+    sep = ";" if os.name == "nt" else ":"
+    return sep, [p for p in str(env.get(PLUGIN_DIRS, "")).split(sep) if p]
+
+
+def with_mod(settings, mod_dir):
+    """The settings with our mod's folder in env.CLAUDE_CODE_PLUGIN_DIRS (others kept)."""
+    settings = dict(settings)
+    env = dict(settings.get("env") or {})
+    sep, dirs = _plugin_dirs(env)
+    if not any(_same(d, mod_dir) for d in dirs):
+        dirs.append(mod_dir)
+    env[PLUGIN_DIRS] = sep.join(dirs)
+    settings["env"] = env
+    return settings
+
+
+def without_mod(settings, mod_dir):
+    """The settings with our mod's folder taken out of env.CLAUDE_CODE_PLUGIN_DIRS."""
+    if not isinstance(settings.get("env"), dict) or PLUGIN_DIRS not in settings["env"]:
+        return settings
+    settings = dict(settings)
+    env = dict(settings["env"])
+    sep, dirs = _plugin_dirs(env)
+    kept = [d for d in dirs if not _same(d, mod_dir)]
+    if kept:
+        env[PLUGIN_DIRS] = sep.join(kept)
+    else:
+        del env[PLUGIN_DIRS]
+    if env:
+        settings["env"] = env
+    else:
+        del settings["env"]
+    return settings
+
+
+def mod_in(settings, mod_dir):
+    env = settings.get("env") if isinstance(settings.get("env"), dict) else {}
+    return any(_same(d, mod_dir) for d in _plugin_dirs(env)[1])
+
+
+def install_mod(state):
+    """Copy the mod into the state folder (replacing an older copy); returns its folder."""
+    target = state.mod
+    if os.path.isdir(target):
+        shutil.rmtree(target)
+    shutil.copytree(MOD_SOURCE, target, ignore=shutil.ignore_patterns("__pycache__", "*.test.ts"))
+    return target
+
+
 def merged_settings(settings, python, script, wake=False):
     """The settings with our entries added after any others (earlier ones of ours replaced)."""
     settings = without_ours(settings, script)
@@ -253,15 +305,17 @@ def write_launch(state, python=None):
     return state.launch
 
 
-def install(state, path, python, wake=False):
+def install(state, path, python, wake=False, mod=False):
     """Install the hook script and merge our entries into the settings file at `path` (with
-    the wake entry when `wake`). Returns (changed, backup folder or None)."""
+    the wake entry when `wake`, and our Claude Code mod when `mod`). Returns (changed, backup
+    folder or None)."""
     check_python(python)
     check_settings_file(path)
     current = load_settings(path)
     script = install_script(state)
     write_launch(state)
     wanted = merged_settings(current, python, script, wake)
+    wanted = with_mod(wanted, install_mod(state)) if mod else without_mod(wanted, state.mod)
     if os.path.exists(path) and wanted == current:
         return False, None
     saved = backup(state, path, "install")
@@ -274,7 +328,7 @@ def uninstall(state, path):
     """Remove our entries from the settings file at `path`. Returns (changed, backup folder)."""
     check_settings_file(path)
     current = load_settings(path)
-    wanted = without_ours(current, state.hook_script)
+    wanted = without_mod(without_ours(current, state.hook_script), state.mod)
     if wanted == current:
         return False, None
     saved = backup(state, path, "uninstall")

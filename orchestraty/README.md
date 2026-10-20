@@ -26,6 +26,16 @@ The main package: the `orch` command, the hook shims, the coordinator, the live 
 
 The hooks record event names, session ids, folders and the paths of edited files; never prompts, file contents, commands or tool output. Nothing leaves the machine. When a session ends, its waiting notes are taken back. `orch unwatch` also takes the push line out of that repository's git hooks.
 
+## The Claude Code mod
+
+`orch init` also loads Orchestraty's [mod](https://code.claude.com/docs/en/plugins/mods/overview) (Claude Code 2.1.287 or later): it copies it into the state folder and adds that folder to `CLAUDE_CODE_PLUGIN_DIRS` in the same settings file. The mod shows; it detects nothing. Every few seconds it reads the status the coordinator keeps (`status.json`, the same as `orch status --json`) and draws:
+
+- a line under the prompt: how many other sessions work on this repository, and the overlaps that concern this session;
+- a band above the prompt, only for strong overlaps that concern this session, with **Show all** and **Dismiss**;
+- a pane with every session on the repository and every overlap: `/orch`. Also `/orch status`, `/orch steer on|off`, `/orch wake on|off`.
+
+Notes still reach Claude through the hooks. The one thing the mod hands over itself is a wake note for its own session while that session waits for its user: it asks the hook script to take the note (exactly once) and submits it as a prompt. The mod reads only Orchestraty's state folder, starts only Orchestraty's own Python, and makes no network request; `claude plugin validate` lists exactly that. `--no-mod` leaves it out. In the desktop app, WSL sessions load no plugins, so the mod is absent there while the hooks still work.
+
 ## Where state lives
 
 One folder per user and environment, never inside a repository: `%USERPROFILE%\.orchestraty` on Windows, `$XDG_STATE_HOME/orchestraty` (by default `~/.local/state/orchestraty`) elsewhere. `ORCH_HOME` overrides it. Windows and each WSL distribution have their own folder.

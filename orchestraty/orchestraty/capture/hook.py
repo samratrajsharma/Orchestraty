@@ -47,6 +47,9 @@ in the background for ``wake.txt``; when that appears it prints it to stderr and
 wakes Claude with the text. It leaves quietly when the session's spool grows (the person is
 back) or after an hour.
 
+Take: run as ``hook.py <agent> Take wake <session id>`` by Orchestraty's Claude Code mod, it
+takes that session's wake note the same way and prints it, so the mod can hand it over.
+
 git: run as ``hook.py git <hook name>`` from the git hooks ``orch init`` chains in, it
 records the event (with the worktree folder) and, for pre-push, prints the line in
 ``<state>/push/<key of the worktree>.txt`` if there is one. It never blocks a push.
@@ -504,6 +507,23 @@ def wait_for_wake(root, agent, raw):
     return 0
 
 
+def take_for_mod(root, agent, args):
+    """The Take mode: print a session's waiting wake note, taken exactly once."""
+    if len(args) < 2 or args[0] != "wake":
+        return 0
+    session = safe_name(args[1].encode("utf-8", "replace"), 64, b"nosession")
+    if session == b"nosession":
+        return 0
+    data = take_slot(os.path.join(root, "notes", session.decode("ascii"), "wake.txt"))
+    if data:
+        spool = os.path.join(root, "spool", agent.decode("ascii"), session.decode("ascii") + ".jsonl")
+        append(spool, b'{"ts":%d,"pid":%d,"agent":"%s","event":"Take","session_id":"%s","took":"wake"}\n'
+               % (time.time_ns(), os.getpid(), agent, session))
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+    return 0
+
+
 def git_event(root, event, argv):
     """git's hooks: record the event with the worktree folder; for pre-push, print the push line."""
     cwd = os.getcwd()
@@ -534,6 +554,8 @@ def main(argv, script=__file__):
         if agent == b"git":
             git_event(root, event, argv[2:])
             return 0
+        if event == b"Take":                     # before stdin: the mod gives none
+            return take_for_mod(root, agent, argv[2:])
         raw = sys.stdin.buffer.read()
         if event == b"Wake":
             return wait_for_wake(root, agent, raw)

@@ -57,9 +57,13 @@ def cmd_init(args):
         hooks.load_settings(path)
     except hooks.Refused as exc:
         return _refuse("init", exc)
+    mod = not args.no_mod
     print("orch init will:")
     print(f"  - copy the hook script to {state.hook_script}")
     print(f"  - add hooks for {len(hooks.EVENTS)} Claude Code events to {path}")
+    if mod:
+        print(f"  - load Orchestraty's Claude Code mod from {state.mod}: a status line, a band for strong")
+        print("    overlaps, a pane and /orch (Claude Code 2.1.287 or later; --no-mod leaves it out)")
     if os.path.exists(path):
         print(f"    (the current file is copied to {state.backups} first)")
     print(_scope_line(args) + " " + PRIVACY)
@@ -67,7 +71,7 @@ def cmd_init(args):
         print("Nothing changed.")
         return 1
     try:
-        changed, saved = hooks.install(state, path, python, wake)
+        changed, saved = hooks.install(state, path, python, wake, mod)
     except hooks.Refused as exc:
         return _refuse("init", exc)
     cfg = config.load(state)
@@ -174,7 +178,8 @@ def cmd_config(args):
             print("Run orch init to install the hooks; the wake hook comes with them.")
             return 0
         try:
-            changed, saved = hooks.install(state, path, hooks.hook_python(), cfg["wake"])
+            mod = hooks.mod_in(hooks.load_settings(path), state.mod)
+            changed, saved = hooks.install(state, path, hooks.hook_python(), cfg["wake"], mod)
         except hooks.Refused as exc:
             return _refuse("config", exc)
         if changed:
@@ -273,6 +278,7 @@ def build_parser():
     init.add_argument("--python", metavar="PATH", help="the interpreter the hooks run (default: this one's base)")
     init.add_argument("--print", action="store_true", help="only print the hook entries to add by hand")
     init.add_argument("--no-git-hooks", action="store_true", help="do not offer the push line in git's hooks")
+    init.add_argument("--no-mod", action="store_true", help="do not load Orchestraty's Claude Code mod")
     init.set_defaults(handler=cmd_init)
 
     restore = commands.add_parser("restore", help="remove the hooks from Claude Code",

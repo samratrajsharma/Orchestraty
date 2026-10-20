@@ -90,6 +90,16 @@ class State:
         return self._in("coordinator.stop")
 
     @property
+    def mod(self):
+        """Orchestraty's Claude Code mod, copied here by orch init."""
+        return self._in("mod")
+
+    @property
+    def status(self):
+        """The status the coordinator keeps current for the mod, as orch status --json gives it."""
+        return self._in("status.json")
+
+    @property
     def backups(self):
         return self._in("backups")
 

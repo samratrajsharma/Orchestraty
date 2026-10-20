@@ -1,0 +1,8 @@
+{
+  "name": "orchestraty",
+  "version": "0.0.1",
+  "description": "Shows the other coding-agent sessions on this repository and how their changes overlap with yours: a status line, a band above the prompt for strong overlaps, a pane, and /orch. Reads Orchestraty's state folder and starts Orchestraty's own Python; makes no network requests.",
+  "author": {
+    "name": "Orchestraty"
+  }
+}

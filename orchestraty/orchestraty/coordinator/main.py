@@ -73,6 +73,8 @@ class Coordinator:
         self.livemap = LiveMap(state, self.log)
         self.deliverer = Deliverer(state, self.record, self.log, now_ns)
         self._push_dirty = True
+        self._status_dirty = True
+        self._status_written = 0.0
         self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
         for session in self.sessions.values():
             self._track(session)
@@ -128,7 +130,28 @@ class Coordinator:
         self.update_map()
         self.update_findings()
         self.deliver()
+        if lines or self.changed:
+            self._status_dirty = True
+        self.write_status()
         return len(lines)
+
+    def write_status(self, force=False):
+        """Keep <state>/status.json (orch status --json) current for the mod, at most once a second."""
+        mono = time.monotonic()
+        if not (force or (self._status_dirty and mono - self._status_written >= 1.0)):
+            return False
+        from orchestraty import status
+        try:
+            data = status.collect(self.state)
+        except Exception:
+            self.log.exception("status not written")
+            return False
+        tmp = self.state.status + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        os.replace(tmp, self.state.status)
+        self._status_dirty, self._status_written = False, mono
+        return True
 
     def deliver(self):
         """Fill the slots that have notes waiting, and keep the push lines current."""
@@ -138,6 +161,7 @@ class Coordinator:
             self.log.info("note ready: %s", slot)
         if self._push_dirty:
             self._push_dirty = False
+            self._status_dirty = True
             self.deliverer.push_lines(self.sessions, self.record.findings())
         return written
 

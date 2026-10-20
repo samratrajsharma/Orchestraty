@@ -20,3 +20,7 @@ orch = "orchestraty.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["orchestraty*"]
+
+# The Claude Code mod is JavaScript that orch init copies out of the package.
+[tool.setuptools.package-data]
+orchestraty = ["mod/.claude-plugin/plugin.json", "mod/hooks/*.json", "mod/hooks/*.js"]
