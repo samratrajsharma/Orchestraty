@@ -35,13 +35,15 @@ def counts(result):
         "repositories": len(result["repositories"]),
         "parallel_pairs": len(pairs), "parallel_pairs_active": sum(1 for p in pairs if p["active"]),
         "pairs_both_committed": sum(1 for p in pairs if p["a"]["committed"] and p["b"]["committed"]),
+        "pairs_same_worktree": sum(1 for p in pairs if p.get("same_worktree")),
         "overlaps": {r: sum(1 for v in distinct.values() if v == r) for r in RULES},
         "pairs_with": {r: sum(1 for p in pairs if any(f["rule"] == r for f in p["findings"])) for r in RULES},
         "strong_overlaps": strong, "strong_per_week": round(strong / weeks, 2) if weeks else 0.0,
         "strong_pairs": len(with_strong), "strong_pairs_followed_by": followed_by(with_strong),
         "overlap_pairs": len(with_any), "overlap_pairs_followed_by": followed_by(with_any),
-        "unreadable_lines": result["unreadable_lines"], "unmapped_edits": result["unmapped_edits"],
-        "index_failures": result["index_failures"],
+        "unreadable_lines": result["unreadable_lines"],
+        "edits_outside_git": result["left_out"]["outside"], "edits_folder_gone": result["left_out"]["gone"],
+        "edits_ignored_by_git": result["left_out"]["ignored"], "index_failures": result["index_failures"],
     }
 
 
@@ -80,9 +82,10 @@ def report_html(result):
         if not p["findings"]:
             continue
         fol = [k for k in FOLLOWS if p["followed"].get(k)] or ["nothing seen"]
-        rows.append("<section><h3>%s</h3><p>A: %s<br>B: %s<br>Active at the same time: %s<br>"
+        where = " (both in one working tree: file overlaps only)" if p.get("same_worktree") else ""
+        rows.append("<section><h3>%s%s</h3><p>A: %s<br>B: %s<br>Active at the same time: %s<br>"
                     "What followed (%s days seen): %s</p><ul>%s</ul></section>"
-                    % (_e(p["repo"]), _session(p["a"]), _session(p["b"]), "yes" if p["active"] else "no",
+                    % (_e(p["repo"]), where, _session(p["a"]), _session(p["b"]), "yes" if p["active"] else "no",
                        _e(p["followed"].get("window_days")), _e(", ".join(fol)),
                        "".join(_finding(f) for f in p["findings"])))
     summary = ("<p>%d sessions in the last %d days (%d with edits), %d repositories, %d parallel pairs "
@@ -92,9 +95,10 @@ def report_html(result):
                   c["strong_overlaps"], c["strong_per_week"]))
     notes = ("<p><small>O1 the same file changed in both; O2 the same function; O3 a breaking change used in a "
              "file the other changed; O4 a removed function still used there; O6 callers neither session "
-             "updated. Function-level rules need the session to have committed its work. Not seen: calls "
-             "made at module level, dynamic calls, %d edits in folders that no longer exist.</small></p>"
-             % c["unmapped_edits"])
+             "updated. Function-level rules need the session to have committed its work, in a working tree "
+             "of its own. Not seen: calls made at module level, dynamic calls, %d edits in folders that no "
+             "longer exist; left out: %d edits outside any repository and %d to files git ignores.</small></p>"
+             % (c["edits_folder_gone"], c["edits_outside_git"], c["edits_ignored_by_git"]))
     return ("<!doctype html><html><head><meta charset='utf-8'><title>Overlap history</title>"
             "<style>body{font-family:system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem}"
             "section{border-top:1px solid #ccc;padding:.5rem 0}</style></head><body>"

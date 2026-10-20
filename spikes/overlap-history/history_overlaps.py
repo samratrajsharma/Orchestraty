@@ -68,10 +68,19 @@ def _graph(change, indexes, with_own=True):
     return view(idx, files_at(change.work.top, change.end, py)) if py else idx.graph
 
 
+def same_worktree(a, b):
+    return a.work.top == b.work.top
+
+
 def findings_for(a, b, indexes):
-    """The findings for one pair of Changes, latent ones left out."""
+    """The findings for one pair of Changes, latent ones left out. Two sessions in one working
+    tree share its commits, so what each changed in a function cannot be told apart: for them
+    only the files each edited count (O1), as the product marks such changes not attributed."""
     changes = {a.work.session.id: a, b.work.session.id: b}
     views = {sid: _view(c) for sid, c in changes.items()}
+    if same_worktree(a, b):
+        for v in views.values():
+            v.symbols = {}
     graphs = {sid: _graph(c, indexes) for sid, c in changes.items()}
     bases = {sid: _graph(c, indexes, with_own=False) for sid, c in changes.items()}
     out = evaluate(views, lambda sid: graphs.get(sid), lambda sid: bases.get(sid))

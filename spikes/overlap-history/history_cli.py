@@ -48,14 +48,14 @@ def run(projects=None, days=30, now=None, progress=None):
     """Everything the two files are made from."""
     from history_changes import change_of
     from history_logs import read_sessions
-    from history_overlaps import Indexes, findings_for, followed
+    from history_overlaps import Indexes, findings_for, followed, same_worktree
     from history_repos import parallel_pairs, place_sessions
 
     say = progress or (lambda message: None)
     now = time.time() if now is None else now
     sessions, skipped = read_sessions(projects, days, now)
     say("%d sessions read" % len(sessions))
-    repos, unmapped = place_sessions(sessions)
+    repos, left_out = place_sessions(sessions)
     pairs = parallel_pairs(repos)
     say("%d repositories, %d parallel pairs" % (len(repos), len(pairs)))
     indexes, changes, out = Indexes(), {}, []
@@ -67,7 +67,7 @@ def run(projects=None, days=30, now=None, progress=None):
             ca, cb = changes[(repo, wa.session.id)], changes[(repo, wb.session.id)]
             found = findings_for(ca, cb, indexes)
             out.append({
-                "repo": os.path.basename(wa.top), "active": active,
+                "repo": os.path.basename(wa.top), "active": active, "same_worktree": same_worktree(ca, cb),
                 "a": _side(ca), "b": _side(cb),
                 "findings": [f.as_dict() for f in found],
                 "followed": followed(ca, cb, found, now),
@@ -79,7 +79,7 @@ def run(projects=None, days=30, now=None, progress=None):
     return {"days": days, "now": now, "sessions": len(sessions),
             "sessions_with_edits": sum(1 for s in sessions.values() if s.edits),
             "repositories": sorted(repos), "pairs": out, "unreadable_lines": skipped["lines"],
-            "unmapped_edits": unmapped, "index_failures": indexes.failed}
+            "left_out": left_out, "index_failures": indexes.failed}
 
 
 def _side(change):

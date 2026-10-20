@@ -111,6 +111,37 @@ def test_a_parallel_pair_with_a_strong_overlap_and_what_followed(history):
     assert pair["followed"]["fix"] is True and pair["followed"]["revert"] is False
 
 
+def test_one_working_tree_gives_file_overlaps_only_and_left_out_edits_are_counted(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "2026-10-15T09:00:00Z", "init", "-q")
+    write(repo / "a.py", A_PY)
+    write(repo / "b.py", B_PY)
+    write(repo / ".gitignore", "notes.md\n")
+    git(repo, "2026-10-15T09:00:00Z", "add", "-A")
+    git(repo, "2026-10-15T09:00:00Z", "commit", "-q", "-m", "base")
+    write(repo / "a.py", BROKEN)
+    git(repo, "2026-10-15T10:20:00Z", "commit", "-q", "-am", "keyword-only currency")
+    (tmp_path / "scratch").mkdir()
+    projects = tmp_path / "projects"
+    write_log(projects, "sx", log_lines("sx", repo, [("2026-10-15T10:00:00Z", "prompt", None),
+                                                     ("2026-10-15T10:15:00Z", "edit", repo / "a.py"),
+                                                     ("2026-10-15T10:16:00Z", "edit", repo / "notes.md"),
+                                                     ("2026-10-15T10:17:00Z", "edit", tmp_path / "scratch" / "x.txt"),
+                                                     ("2026-10-15T10:18:00Z", "edit", tmp_path / "gone" / "y.py"),
+                                                     ("2026-10-15T10:30:00Z", "prompt", None)]))
+    write_log(projects, "sy", log_lines("sy", repo, [("2026-10-15T10:10:00Z", "prompt", None),
+                                                     ("2026-10-15T10:25:00Z", "edit", repo / "a.py"),
+                                                     ("2026-10-15T10:26:00Z", "edit", repo / "b.py")]))
+    result = run(str(projects), days=30, now=NOW)
+    [pair] = result["pairs"]
+    assert pair["same_worktree"] is True
+    assert [(f["rule"], f["file"]) for f in pair["findings"]] == [("O1", "a.py")]   # no O3/O6: not attributable
+    assert result["left_out"] == {"outside": 1, "gone": 1, "ignored": 1}
+    c = counts(result)
+    assert (c["pairs_same_worktree"], c["edits_outside_git"], c["edits_folder_gone"], c["edits_ignored_by_git"]) == (1, 1, 1, 1)
+
+
 def test_the_counts_file_holds_numbers_only(history):
     c = counts(history)
     assert c["parallel_pairs"] == 1 and c["strong_overlaps"] == 2 and c["overlaps"]["O1"] == 0
