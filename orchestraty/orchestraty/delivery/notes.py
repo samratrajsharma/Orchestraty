@@ -69,20 +69,43 @@ def _cap(text):
     return text if len(text) <= MAX_NOTE else text[:MAX_NOTE - 1] + "~"
 
 
-def for_user(finding, changer, before_edit=True):
+def both_forms(reasons):
+    """A way to write a use that works before and after the change, from its first reason that
+    has one, or None (a new required argument, for one, has none)."""
+    for r in reasons:
+        if r == "positional parameters reordered" or "can no longer be passed by position" in r:
+            return "passing the arguments by name works with both forms"
+        if (r.startswith("parameter ") and " renamed to " in r) or "can no longer be passed by name" in r:
+            return "passing it by position works with both forms"
+        if r == "*args removed":
+            return "passing no extra positional arguments works with both forms"
+        if r == "**kwargs removed":
+            return "passing only the named parameters works with both forms"
+        if r.startswith("parameter ") and r.endswith(" removed"):
+            return "leaving that argument out works with both forms, where it was optional"
+    return None
+
+
+def for_user(finding, changer, before_edit=True, elsewhere=True):
     """O3/O4, to the session whose file uses what another session broke or removed; given
-    before its next edit of that file, or with its next tool result (before_edit=False)."""
+    before its next edit of that file, or with its next tool result (before_edit=False).
+    `elsewhere`: the change is in another working tree, so this session's copy lacks it."""
     d = finding["detail"]
     uses = _list(d.get("uses", []), lambda u: _name(u["symbol"]) + _lines(u.get("lines", [])))
     target = f"{_name(finding['symbol'])} in {_path(finding['symbol'])}"
+    hint = None
     if finding["rule"] == "O4":
         what = f"{describe(changer)} removed {target}."
     else:
         what = f"{describe(changer)} changed the contract of {target}: {_reasons(d.get('reasons', []))}."
         if d.get("moved_to"):
             what += f" It now lives in {_path(d['moved_to'])}."
+        hint = both_forms([str(r) for r in d.get("reasons", [])])
+    if elsewhere:
+        what += " The change is in that worktree, so your copy does not show it yet; both meet when merged."
     when = "before you change this file" if before_edit else "in the code you changed"
-    return _cap(f"{what} {clean(finding['file'])} uses it: {uses}. Check these uses {when}, and agree with that "
+    act = f": {hint}; otherwise agree" if hint else ", and agree"
+    return _cap(f"{what} {clean(finding['file'])} uses it: {uses}. Check these uses {when}{act} with that "
                 f"session if the old form must stay. {COVERAGE}")
 
 

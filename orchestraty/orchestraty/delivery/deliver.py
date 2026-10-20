@@ -79,13 +79,15 @@ class Deliverer:
             user, changer = finding["receiver"], finding["changer"]
             if hooked(user) and changer in sessions:
                 path = os.path.join(sessions[user]["worktree"], *finding["file"].split("/"))
-                text = templates.for_user(finding, sessions[changer])
+                elsewhere = sessions[changer].get("worktree") != sessions[user].get("worktree")
+                text = templates.for_user(finding, sessions[changer], elsewhere=elsewhere)
                 out.append((user, "edit", slots.edit_slot(self.state, user, path), text))
                 if not finding["detail"].get("latent"):
                     # it already changed that file and may never edit it again: tell it with
                     # its next tool result too (whichever note it takes first counts)
                     out.append((user, "next", slots.next_slot(self.state, user),
-                                templates.for_user(finding, sessions[changer], before_edit=False)))
+                                templates.for_user(finding, sessions[changer], before_edit=False,
+                                                   elsewhere=elsewhere)))
                 if wake and sessions[user].get("turn") == "idle" and not finding["detail"].get("latent"):
                     out.append((user, "wake", slots.wake_slot(self.state, user), text))
             if hooked(changer) and user in sessions and not finding["detail"].get("latent"):

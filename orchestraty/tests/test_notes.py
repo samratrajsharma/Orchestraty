@@ -34,6 +34,23 @@ def test_the_note_to_the_session_that_uses_a_broken_contract():
     assert text.endswith(notes.COVERAGE)
 
 
+def test_the_note_says_where_the_change_is_and_what_works_with_both_forms():
+    text = notes.for_user(finding("O3", reasons=["positional parameters reordered", "type of a changed"]), A)
+    assert "The change is in that worktree, so your copy does not show it yet; both meet when merged." in text
+    assert ("Check these uses before you change this file: passing the arguments by name works with both forms; "
+            "otherwise agree with that session if the old form must stay.") in text
+    same = notes.for_user(finding("O3", reasons=["new required parameter key"]), A, elsewhere=False)
+    assert "your copy does not show it" not in same
+    assert "Check these uses before you change this file, and agree with that session" in same
+    assert notes.both_forms(["parameter currency renamed to cur"]) == "passing it by position works with both forms"
+    assert notes.both_forms(["parameter b can no longer be passed by name"]) == "passing it by position works with both forms"
+    assert notes.both_forms(["*args removed"]).startswith("passing no extra positional")
+    assert notes.both_forms(["**kwargs removed"]).startswith("passing only the named")
+    assert notes.both_forms(["parameter b removed"]).startswith("leaving that argument out")
+    assert notes.both_forms(["removed"]) is None and notes.both_forms(["now async"]) is None
+    assert notes.both_forms(["parameter x placed before existing ones"]) is None
+
+
 def test_the_note_about_a_removed_function_and_a_moved_one():
     assert "removed charge in pay/charge.py." in notes.for_user(finding("O4"), A)
     assert "It now lives in pay/new.py." in notes.for_user(finding("O3", moved_to="pay/new.py::charge"), A)
