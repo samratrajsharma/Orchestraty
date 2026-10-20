@@ -27,6 +27,7 @@ EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostT
           "PostToolUseFailure", "Stop", "SubagentStop", "StopFailure")
 MATCHERS = {"PreToolUse": EDIT_MATCHER, "PostToolUse": "*", "PostToolUseFailure": "*"}
 TIMEOUT_SECONDS = 10
+WAKE_TIMEOUT_SECONDS = 3600     # the wake waiter leaves on its own a little before this
 AGENT = "claude"
 BACKUP_NAME = "settings.json"
 BACKUP_SOURCE = "source.txt"
@@ -105,9 +106,18 @@ def hook_entry(python, script, event):
     return entry
 
 
-def hook_block(python, script):
+def wake_entry(python, script):
+    """The opt-in Stop entry that waits in the background for a note to wake the session with."""
+    return {"hooks": [{"type": "command", "command": python, "args": ["-S", "-I", script, AGENT, "Wake"],
+                       "asyncRewake": True, "timeout": WAKE_TIMEOUT_SECONDS}]}
+
+
+def hook_block(python, script, wake=False):
     """The ``hooks`` object with only our entries, for people who add it by hand."""
-    return {event: [hook_entry(python, script, event)] for event in EVENTS}
+    block = {event: [hook_entry(python, script, event)] for event in EVENTS}
+    if wake:
+        block["Stop"].append(wake_entry(python, script))
+    return block
 
 
 def _ours(entry, script):
@@ -143,13 +153,15 @@ def without_ours(settings, script):
     return settings
 
 
-def merged_settings(settings, python, script):
+def merged_settings(settings, python, script, wake=False):
     """The settings with our entries added after any others (earlier ones of ours replaced)."""
     settings = without_ours(settings, script)
     hooks = dict(settings.get("hooks") or {})
     for event in EVENTS:
         entries = hooks.get(event)
         hooks[event] = (list(entries) if isinstance(entries, list) else []) + [hook_entry(python, script, event)]
+    if wake:
+        hooks["Stop"].append(wake_entry(python, script))
     settings["hooks"] = hooks
     return settings
 
@@ -241,15 +253,15 @@ def write_launch(state, python=None):
     return state.launch
 
 
-def install(state, path, python):
-    """Install the hook script and merge our entries into the settings file at `path`.
-    Returns (changed, backup folder or None)."""
+def install(state, path, python, wake=False):
+    """Install the hook script and merge our entries into the settings file at `path` (with
+    the wake entry when `wake`). Returns (changed, backup folder or None)."""
     check_python(python)
     check_settings_file(path)
     current = load_settings(path)
     script = install_script(state)
     write_launch(state)
-    wanted = merged_settings(current, python, script)
+    wanted = merged_settings(current, python, script, wake)
     if os.path.exists(path) and wanted == current:
         return False, None
     saved = backup(state, path, "install")

@@ -70,6 +70,20 @@ CREATE TABLE IF NOT EXISTS findings (
     last_seen INTEGER NOT NULL,
     resolved INTEGER);
 CREATE INDEX IF NOT EXISTS findings_by_repo ON findings (repo_id, state);
+CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY,
+    finding_key TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    slot TEXT NOT NULL,
+    text TEXT NOT NULL,
+    state TEXT NOT NULL,
+    created INTEGER NOT NULL,
+    cause_ts INTEGER,
+    written INTEGER,
+    delivered INTEGER,
+    UNIQUE (finding_key, session_id, kind));
+CREATE INDEX IF NOT EXISTS notes_by_slot ON notes (slot, state);
 CREATE TABLE IF NOT EXISTS session_symbols (
     session_id TEXT NOT NULL,
     symbol TEXT NOT NULL,
@@ -258,6 +272,58 @@ class Record:
             d["detail"] = json.loads(d["detail"])
             out.append(d)
         return out
+
+    # notes: pending (made), written (in a slot), delivered (taken by a hook) or withdrawn
+    def add_note(self, finding_key, session_id, kind, slot, text, now, cause_ts=None):
+        """Make a note unless this finding already has one of this kind for this session that
+        is waiting or was delivered. A note withdrawn before its agent saw it is made again.
+        Returns True when a note was made."""
+        cur = self.db.execute(
+            "INSERT INTO notes (finding_key, session_id, kind, slot, text, state, created, cause_ts) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?) "
+            "ON CONFLICT (finding_key, session_id, kind) DO UPDATE SET state = 'pending', slot = excluded.slot, "
+            "text = excluded.text, created = excluded.created, cause_ts = excluded.cause_ts, written = NULL, "
+            "delivered = NULL WHERE notes.state = 'withdrawn'",
+            (finding_key, session_id, kind, slot, text, now, cause_ts))
+        return cur.rowcount == 1
+
+    def note(self, note_id):
+        row = self.db.execute("SELECT * FROM notes WHERE id = ?", (note_id,)).fetchone()
+        return dict(row) if row else None
+
+    def notes(self, finding_key=None, slot=None, session_id=None, states=None):
+        sql, args, where = "SELECT * FROM notes", [], []
+        for column, value in (("finding_key", finding_key), ("slot", slot), ("session_id", session_id)):
+            if value is not None:
+                where.append(f"{column} = ?")
+                args.append(value)
+        if states:
+            where.append("state IN (%s)" % ", ".join("?" * len(states)))
+            args.extend(states)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        return [dict(r) for r in self.db.execute(sql + " ORDER BY id", args)]
+
+    def slots_with(self, states):
+        return [r[0] for r in self.db.execute(
+            "SELECT DISTINCT slot FROM notes WHERE state IN (%s) ORDER BY slot" % ", ".join("?" * len(states)),
+            list(states))]
+
+    def set_note_state(self, note_id, state):
+        self.db.execute("UPDATE notes SET state = ? WHERE id = ?", (state, note_id))
+
+    def mark_written(self, note_ids, now):
+        self.db.executemany("UPDATE notes SET state = 'written', written = ? WHERE id = ? AND state = 'pending'",
+                            [(now, i) for i in note_ids])
+
+    def mark_delivered(self, slot, now):
+        self.db.execute("UPDATE notes SET state = 'delivered', delivered = ? WHERE slot = ? AND state = 'written'",
+                        (now, slot))
+
+    def unwrite_slot(self, slot):
+        """A withdrawn slot: its other written notes wait for the next write."""
+        self.db.execute("UPDATE notes SET state = 'pending', written = NULL WHERE slot = ? AND state = 'written'",
+                        (slot,))
 
     def sessions(self, states=None, repo_id=None):
         sql, args = "SELECT * FROM sessions", []

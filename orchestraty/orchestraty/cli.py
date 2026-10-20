@@ -43,11 +43,13 @@ def _refuse(command, exc):
 
 
 def cmd_init(args):
+    from orchestraty import config
     state = State()
     path = _settings_target(args)
     python = args.python or hooks.hook_python()
+    wake = config.load(state)["wake"]
     if args.print:
-        print(json.dumps({"hooks": hooks.hook_block(python, state.hook_script)}, indent=2))
+        print(json.dumps({"hooks": hooks.hook_block(python, state.hook_script, wake)}, indent=2))
         return 0
     try:
         hooks.check_python(python)
@@ -65,16 +67,44 @@ def cmd_init(args):
         print("Nothing changed.")
         return 1
     try:
-        changed, saved = hooks.install(state, path, python)
+        changed, saved = hooks.install(state, path, python, wake)
     except hooks.Refused as exc:
         return _refuse("init", exc)
+    cfg = config.load(state)
+    if cfg["settings"] != path:
+        cfg["settings"] = path
+        config.save(state, cfg)
     if not changed:
         print(f"Already installed in {path}; nothing changed.")
     else:
         print(f"Installed in {path}." + (f" Backup: {saved}" if saved else ""))
         print("Sessions started from now on are seen; restart running sessions to include them.")
-    _watch_here(state, os.getcwd(), quiet_outside=True)
-    return 0
+    code = _watch_here(state, os.getcwd(), quiet_outside=True)
+    if code == 0 and not args.no_git_hooks:
+        _git_chain_here(state, python, args.yes)
+    return code
+
+
+def _git_chain_here(state, python, assume_yes):
+    """Offer the push line: a pre-push hook chained in front of the repository's own hooks."""
+    from orchestraty import gitio
+    from orchestraty.capture import githooks
+    try:
+        if gitio.worktree_info(os.getcwd()) is None:
+            return
+        if githooks.installed(os.getcwd()):
+            print("The push line is already in this repository's git hooks.")
+            return
+    except (gitio.GitError, gitio.UntrustedRepositoryError):
+        return
+    print("The push line: before each push, git prints one line when this push leaves callers of a")
+    print("changed function behind. It sets core.hooksPath in this repository's own git config to a")
+    print("folder inside .git; the hooks you have keep running, and their exit codes still decide.")
+    if not confirm("Add it?", assume_yes):
+        print("No git hooks changed (orch init --no-git-hooks skips this question).")
+        return
+    chain = githooks.install(os.getcwd(), python, state.hook_script)
+    print(f"Added: {chain}")
 
 
 def _watch_here(state, path, quiet_outside=False):
@@ -114,6 +144,42 @@ def cmd_unwatch(args):
         print(f"No longer watching {common_dir}.")
     else:
         print(f"{common_dir} was not watched.")
+    if info:
+        from orchestraty.capture import githooks
+        try:
+            if githooks.uninstall(path):
+                print("Took the push line out of this repository's git hooks.")
+        except gitio.GitError as exc:
+            print(f"Could not take the push line out of the git hooks: {exc}", file=sys.stderr)
+    return 0
+
+
+def cmd_config(args):
+    from orchestraty import config
+    state = State()
+    cfg = config.load(state)
+    if args.name is None:
+        for name in ("steer", "wake"):
+            print(f"{name}: {'on' if cfg[name] else 'off'}")
+        return 0
+    if args.value is None:
+        print(f"{args.name}: {'on' if cfg[args.name] else 'off'}")
+        return 0
+    cfg[args.name] = args.value == "on"
+    config.save(state, cfg)
+    print(f"{args.name}: {args.value}")
+    if args.name == "wake":
+        path = cfg["settings"]
+        if not path:
+            print("Run orch init to install the hooks; the wake hook comes with them.")
+            return 0
+        try:
+            changed, saved = hooks.install(state, path, hooks.hook_python(), cfg["wake"])
+        except hooks.Refused as exc:
+            return _refuse("config", exc)
+        if changed:
+            print(f"Updated the hooks in {path}." + (f" Backup: {saved}" if saved else ""))
+            print("Sessions started from now on use it.")
     return 0
 
 
@@ -206,6 +272,7 @@ def build_parser():
     _add_target_options(init)
     init.add_argument("--python", metavar="PATH", help="the interpreter the hooks run (default: this one's base)")
     init.add_argument("--print", action="store_true", help="only print the hook entries to add by hand")
+    init.add_argument("--no-git-hooks", action="store_true", help="do not offer the push line in git's hooks")
     init.set_defaults(handler=cmd_init)
 
     restore = commands.add_parser("restore", help="remove the hooks from Claude Code",
@@ -229,6 +296,14 @@ def build_parser():
     status.add_argument("--json", action="store_true", help="print JSON (schema in the 'schema' field)")
     status.add_argument("--all", action="store_true", help="include ended sessions")
     status.set_defaults(handler=cmd_status)
+
+    cfg = commands.add_parser("config", help="show or switch steer and wake",
+                              description="steer: a strong note stops the edit it rides on, so the agent re-plans "
+                                          "(off: the note only informs). wake: a strong note wakes a session that "
+                                          "waits for its user (installs a background hook).")
+    cfg.add_argument("name", nargs="?", choices=["steer", "wake"])
+    cfg.add_argument("value", nargs="?", choices=["on", "off"])
+    cfg.set_defaults(handler=cmd_config)
 
     coordinator = commands.add_parser("coordinator", help="run or stop the coordinator by hand",
                                       description="Hooks start the coordinator when needed; these are for "

@@ -9,11 +9,17 @@ changes. A missing or unreadable file means the defaults.
 * ``session_timeout``: a session with no event for this long counts as ended.
 * ``level0_seconds``: how often every live session is refreshed from git and the worktrees
   without a hooked session are looked at.
+* ``steer``: a strong note stops the edit it rides on (the agent re-plans) instead of only
+  informing it. Off by default.
+* ``wake``: a strong note for a session that is waiting for its user wakes it. Off by default;
+  needs the wake hook, which ``orch config wake on`` installs.
+* ``settings``: the Claude Code settings file ``orch init`` installed the hooks in.
 """
 import json
 import os
 
-DEFAULTS = {"repos": [], "idle_seconds": 600, "session_timeout": 1800, "level0_seconds": 5}
+DEFAULTS = {"repos": [], "idle_seconds": 600, "session_timeout": 1800, "level0_seconds": 5,
+            "steer": False, "wake": False, "settings": ""}
 
 
 def _same(a, b):
@@ -31,7 +37,7 @@ def load(state):
     if isinstance(data, dict):
         for key, default in DEFAULTS.items():
             value = data.get(key)
-            if isinstance(value, type(default)) and not isinstance(value, bool):
+            if isinstance(value, type(default)) and (isinstance(default, bool) or not isinstance(value, bool)):
                 cfg[key] = value
         cfg["repos"] = [r for r in cfg["repos"] if isinstance(r, str) and os.path.isabs(r)]
     return cfg

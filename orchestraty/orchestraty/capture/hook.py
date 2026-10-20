@@ -32,6 +32,25 @@ coordinator's import path), and with no GIT_ or PYTHON variable of the agent's e
 ``orch init`` writes the interpreter and the import path to use into ``hooks/launch.txt``.
 Setting ``ORCH_NO_COORDINATOR`` turns the start-up off (tests and measurements).
 
+Notes. The coordinator writes each note in advance into a slot file under
+``<state>/notes/<session>/``; the hook only takes the slot its event calls for and prints it,
+exactly as written (it builds no JSON):
+
+* PreToolUse of an edit tool: ``edit/<key of the file>.json``, before the edit;
+* PostToolUse: ``next.json``, with the tool's result;
+* Stop: ``stop.json``, unless ``stop_hook_active`` says a stop hook already kept Claude going.
+
+A slot is taken exactly once (``take_slot``) and the spool line records ``"took"``.
+
+Wake (opt-in): run as ``hook.py <agent> Wake`` from an ``asyncRewake`` Stop hook, it waits
+in the background for ``wake.txt``; when that appears it prints it to stderr and exits 2, which
+wakes Claude with the text. It leaves quietly when the session's spool grows (the person is
+back) or after an hour.
+
+git: run as ``hook.py git <hook name>`` from the git hooks ``orch init`` chains in, it
+records the event (with the worktree folder) and, for pre-push, prints the line in
+``<state>/push/<key of the worktree>.txt`` if there is one. It never blocks a push.
+
 Built-in modules only (sys, os, time, and _winapi on Windows), and no json and no site, so the
 interpreter starts fast. The append is atomic with several writers: on Windows the file is
 opened with FILE_APPEND_DATA only, so the kernel places every write at the end of the file
@@ -56,6 +75,12 @@ EDIT_TOOLS = {b'"Edit"': b"file_path", b'"Write"': b"file_path", b'"MultiEdit"':
 EVENT_FIELDS = {b"SessionStart": b"source", b"SessionEnd": b"reason"}
 FLAG_EVENTS = (b"Stop", b"SubagentStop")
 MAX_FIELD = 4096            # bytes; longer values are left out
+KEY_TAIL = 24
+_KEY_SAFE = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-."
+_UNESCAPE = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
+WAKE_GRACE = 1.5            # seconds: the Stop line of the same turn is written meanwhile
+WAKE_POLL = 0.25
+WAKE_MAX = 3500.0           # leave before the hook's one-hour timeout
 STALE_SECONDS = 10.0        # the coordinator touches its heartbeat every 2 seconds
 RESPAWN_SECONDS = 5.0       # at most one start attempt in this time, by any hook
 COORDINATOR_ARGS = ("-m", "orchestraty", "coordinator", "run")
@@ -139,6 +164,84 @@ def flag(raw, key):
         if raw[j:after] == word and (after == len(raw) or raw[after] in b" \t\r\n,}"):
             return value
     return None
+
+
+def json_unescape(token):
+    """The text of a JSON string token (bytes, quotes included), without the json module."""
+    s = token[1:-1].decode("utf-8")
+    out, i = [], 0
+    while i < len(s):
+        ch = s[i]
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        e = s[i + 1]
+        if e == "u":
+            code = int(s[i + 2:i + 6], 16)
+            i += 6
+            if 0xD800 <= code <= 0xDBFF and s[i:i + 2] == "\\u":       # a surrogate pair
+                low = int(s[i + 2:i + 6], 16)
+                if 0xDC00 <= low <= 0xDFFF:
+                    code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)
+                    i += 6
+            out.append(chr(code))
+        else:
+            out.append(_UNESCAPE[e])
+            i += 2
+    return "".join(out)
+
+
+def json_string(value):
+    """A JSON string literal (bytes) for any text, without the json module."""
+    out = [b'"']
+    for ch in value:
+        o = ord(ch)
+        if ch == '"':
+            out.append(b'\\"')
+        elif ch == "\\":
+            out.append(b"\\\\")
+        elif o < 32 or 0xD800 <= o <= 0xDFFF:
+            out.append(b"\\u%04x" % o)
+        else:
+            out.append(ch.encode("utf-8"))
+    out.append(b'"')
+    return b"".join(out)
+
+
+def _fnv1a64(text):
+    h = 0xCBF29CE484222325
+    for byte in text.encode("utf-8", "surrogatepass"):
+        h = ((h ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return "%016x" % h
+
+
+def file_key(path):
+    """The slot key of an absolute path: the same as orchestraty.delivery.slots.file_key (a
+    test compares them), written again here because the hook imports nothing of ours."""
+    p = os.path.normpath(path).replace("\\", "/")
+    if sys.platform in ("win32", "darwin"):
+        p = p.lower()
+    tail = "".join(c if c in _KEY_SAFE else ("__" if c == "_" else "_%x_" % ord(c)) for c in p[-KEY_TAIL:])
+    return tail[-KEY_TAIL:] + "~" + _fnv1a64(p)
+
+
+def slot_for(root, raw, event, session):
+    """(slot path, kind) of the note this event may take, or (None, None)."""
+    if session == b"nosession":
+        return None, None
+    folder = os.path.join(root, "notes", session.decode("ascii"))
+    if event == b"PreToolUse":
+        key = EDIT_TOOLS.get(field(raw, b"tool_name"))
+        token = field(raw, key) if key else None
+        if token is None:
+            return None, None
+        return os.path.join(folder, "edit", file_key(json_unescape(token)) + ".json"), b"edit"
+    if event in (b"PostToolUse", b"PostToolUseFailure"):
+        return os.path.join(folder, "next.json"), b"next"
+    if event == b"Stop" and flag(raw, b"stop_hook_active") is not True:
+        return os.path.join(folder, "stop.json"), b"stop"
+    return None, None
 
 
 def safe_name(value, limit, fallback):
@@ -252,6 +355,29 @@ if os.name == "nt":
                 result.append('"')
         return "".join(result)
 
+    def take_slot(path):
+        """The bytes of a ready-made slot file, taken exactly once, or None. The file is opened
+        with no sharing, so a second hook trying at the same moment fails, and deleted when
+        closed. (A rename is not enough here: Windows lets two renames of one file both
+        succeed through handles that are already open.)"""
+        try:
+            handle = _winapi.CreateFile(path, 0x80000000 | 0x00010000,   # GENERIC_READ | DELETE
+                                        0,                               # no sharing at all
+                                        0, 3,                            # OPEN_EXISTING
+                                        0x04000000, 0)                   # FILE_FLAG_DELETE_ON_CLOSE
+        except OSError:
+            return None
+        try:
+            chunks = []
+            while True:
+                data, _ = _winapi.ReadFile(handle, 65536)
+                if not data:
+                    break
+                chunks.append(data)
+            return b"".join(chunks)
+        finally:
+            _winapi.CloseHandle(handle)
+
     def _spawn(argv, cwd, env):
         line = command_line(argv)
         try:
@@ -268,6 +394,23 @@ else:
             os.write(fd, line)
         finally:
             os.close(fd)
+
+    def take_slot(path):
+        """The bytes of a ready-made slot file, taken exactly once, or None: renamed to a name
+        of this process's own (only one rename of a name can succeed), read, deleted."""
+        mine = "%s.%d.taken" % (path, os.getpid())
+        try:
+            os.rename(path, mine)
+        except OSError:
+            return None
+        try:
+            with open(mine, "rb") as fh:
+                return fh.read()
+        finally:
+            try:
+                os.remove(mine)
+            except OSError:
+                pass
 
     def _spawn(argv, cwd, env):
         if os.fork():
@@ -331,19 +474,79 @@ def state_folder(script):
     return os.path.dirname(folder)
 
 
+def wait_for_wake(root, agent, raw):
+    """The Wake mode: 2 (after printing the wake note to stderr) when one arrives, else 0."""
+    token = field(raw, b"session_id")
+    session = safe_name(token[1:-1] if token else b"", 64, b"nosession")
+    if session == b"nosession":
+        return 0
+    wake = os.path.join(root, "notes", session.decode("ascii"), "wake.txt")
+    spool = os.path.join(root, "spool", agent.decode("ascii"), session.decode("ascii") + ".jsonl")
+    started, baseline = time.time(), None
+    while time.time() - started < WAKE_MAX:
+        data = take_slot(wake)
+        if data:
+            append(spool, b'{"ts":%d,"pid":%d,"agent":"%s","event":"Wake","session_id":"%s","took":"wake"}\n'
+                   % (time.time_ns(), os.getpid(), agent, session))
+            sys.stderr.buffer.write(data)
+            sys.stderr.buffer.flush()
+            return 2
+        if time.time() - started >= WAKE_GRACE:
+            try:
+                size = os.stat(spool).st_size
+            except OSError:
+                size = 0
+            if baseline is None:
+                baseline = size
+            elif size > baseline:
+                return 0                          # a new event: the person is back
+        time.sleep(WAKE_POLL)
+    return 0
+
+
+def git_event(root, event, argv):
+    """git's hooks: record the event with the worktree folder; for pre-push, print the push line."""
+    cwd = os.getcwd()
+    line = b'{"ts":%d,"pid":%d,"agent":"git","event":"%s","cwd":%s,"args":%d}\n' % (
+        time.time_ns(), os.getpid(), event, json_string(cwd), len(argv))
+    append(os.path.join(root, "spool", "git", time.strftime("%Y-%m-%d") + ".jsonl"), line)
+    if event == b"pre-push":
+        try:
+            with open(os.path.join(root, "push", file_key(cwd) + ".txt"), "rb") as fh:
+                text = fh.read(2000)
+        except OSError:
+            return
+        if text:
+            sys.stderr.buffer.write(text if text.endswith(b"\n") else text + b"\n")
+            sys.stderr.buffer.flush()
+
+
 def main(argv, script=__file__):
+    """Returns the exit code: 0, or 2 when a Wake waiter wakes its session."""
     root = state_folder(script)
     if root is None or not argv:                 # nowhere to write, or no agent named: stay silent
-        return
+        return 0
     agent = safe_name(argv[0].encode("utf-8", "replace"), 32, b"unknown")
     folder = os.path.join(root, "spool", agent.decode("ascii"))
     path = None
     try:
         event = safe_name(argv[1].encode("utf-8", "replace") if len(argv) > 1 else b"", 40, b"")
+        if agent == b"git":
+            git_event(root, event, argv[2:])
+            return 0
         raw = sys.stdin.buffer.read()
+        if event == b"Wake":
+            return wait_for_wake(root, agent, raw)
         name, line = event_line(raw, agent, event, time.time_ns(), os.getpid())
         path = os.path.join(folder, name)
+        slot, kind = slot_for(root, raw, event, name[:-6].encode("ascii"))
+        note = take_slot(slot) if slot else None
+        if note:
+            line = line[:-2] + b',"took":"' + kind + b'"}\n'
         append(path, line)
+        if note:
+            sys.stdout.buffer.write(note)
+            sys.stdout.buffer.flush()
         start_coordinator(root, time.time())
     except BaseException as exc:                 # fail open, but leave a trace in the data
         line = error_line(agent, exc, time.time_ns(), os.getpid())
@@ -355,10 +558,12 @@ def main(argv, script=__file__):
                 break
             except BaseException:
                 continue
+    return 0
 
 
 if __name__ == "__main__":
     try:
-        main(sys.argv[1:])
+        code = main(sys.argv[1:])
     except BaseException:
-        pass
+        code = 0
+    sys.exit(code)

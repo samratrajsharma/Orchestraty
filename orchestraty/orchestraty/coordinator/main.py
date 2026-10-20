@@ -28,6 +28,8 @@ from orchestraty import __version__, config, gitio
 from orchestraty.coordinator.lock import Heartbeat, Lock
 from orchestraty.coordinator.record import Record, SchemaError, repo_key
 from orchestraty.coordinator.spool import SpoolReader
+from orchestraty.delivery import slots
+from orchestraty.delivery.deliver import Deliverer
 from orchestraty.livemap import changes as git_changes
 from orchestraty.livemap.map import LiveMap
 from orchestraty.rules import overlap
@@ -40,7 +42,7 @@ MAX_FAILURES = 20
 NS = 1_000_000_000
 WORKING_EVENTS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure")
 IDLE_EVENTS = ("SessionStart", "Stop", "StopFailure")
-DETAIL_FIELDS = ("source", "reason", "stop_hook_active", "len")
+DETAIL_FIELDS = ("source", "reason", "stop_hook_active", "len", "took")
 LOCK_WAIT_SECONDS = 3.0
 LEVEL0_AGENT = "git"
 
@@ -69,6 +71,8 @@ class Coordinator:
         self._dirty_repos = set()          # repositories whose findings must be worked out again
         self.reload_config()
         self.livemap = LiveMap(state, self.log)
+        self.deliverer = Deliverer(state, self.record, self.log, now_ns)
+        self._push_dirty = True
         self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
         for session in self.sessions.values():
             self._track(session)
@@ -87,8 +91,10 @@ class Coordinator:
         session["state"], session["note"], session["turn"] = "ended", note, ""
         self.record.put_session(session)
         self.livemap.forget(session["id"])
+        self.deliverer.forget_session(session["id"])
         self.sessions.pop(session["id"], None)
         self._dirty_repos.add(session["repo_id"])
+        self._push_dirty = True
 
     # configuration
     def reload_config(self):
@@ -121,7 +127,30 @@ class Coordinator:
             self.clean_spool(now)
         self.update_map()
         self.update_findings()
+        self.deliver()
         return len(lines)
+
+    def deliver(self):
+        """Fill the slots that have notes waiting, and keep the push lines current."""
+        with self.record.transaction():
+            written = self.deliverer.fill(steer=self.cfg["steer"])
+        for slot in written:
+            self.log.info("note ready: %s", slot)
+        if self._push_dirty:
+            self._push_dirty = False
+            self.deliverer.push_lines(self.sessions, self.record.findings())
+        return written
+
+    def _took(self, session, line, ts):
+        """A hook took a slot (its spool line says which kind)."""
+        kind, sid = line.get("took"), session["id"]
+        if kind == "edit" and isinstance(line.get("file_path"), str):
+            slot = slots.edit_slot(self.state, sid, line["file_path"])
+        elif kind in ("next", "stop", "wake"):
+            slot = {"next": slots.next_slot, "stop": slots.stop_slot, "wake": slots.wake_slot}[kind](self.state, sid)
+        else:
+            return
+        self.deliverer.taken(os.path.relpath(slot, self.state.root).replace(os.sep, "/"), ts)
 
     def update_map(self):
         """Refresh the live map where needed and record what changed. On the timer every live
@@ -162,6 +191,9 @@ class Coordinator:
                     if self.record.put_finding(repo_id, f, now):
                         self.new_findings.append(f)
                         self.log.info("finding %s (%s)", f.key, f.strength)
+                        cause = max((self.sessions[s]["last_seen"] for s in f.sessions if s in self.sessions),
+                                    default=now)
+                        self.deliverer.add(f.as_dict(), self.sessions, cause, wake=self.cfg["wake"])
                 keys = {f.key for f in found}
                 for old in self.record.findings(repo_id=repo_id):
                     if old["key"] in keys:
@@ -170,6 +202,8 @@ class Coordinator:
                                or (old["rule"] == "O6" and base_ready.get(old["changer"]) is False))
                     if not waiting:
                         self.record.resolve_finding(old["key"], now)
+                        self.deliverer.withdraw(old["key"])
+            self._push_dirty = True
         return self.new_findings
 
     def scan_level0(self):
@@ -251,11 +285,15 @@ class Coordinator:
                for c in ("session_id", "tool_name", "tool_use_id", "cwd", "file_path")}
         row.update(ts=ts, agent=agent, event=event)
         self.record.add_event(row, {k: line[k] for k in DETAIL_FIELDS if k in line})
+        if line.get("took"):
+            self._took(session, line, ts)
         self.apply(session, event, line, ts)
         self.record.put_session(session)
         if session["state"] != "live":
             self.livemap.forget(sid)
+            self.deliverer.forget_session(sid)
             self._dirty_repos.add(session["repo_id"])
+            self._push_dirty = True
             return
         if sid not in self.livemap.sessions:
             self._track(session)
@@ -322,7 +360,10 @@ class Coordinator:
         for s in stale:
             del self.sessions[s["id"]]
             self.livemap.forget(s["id"])
+            with self.record.transaction():
+                self.deliverer.forget_session(s["id"])
             self._dirty_repos.add(s["repo_id"])
+            self._push_dirty = True
 
     def clean_spool(self, now):
         """Delete spool files read to the end whose session is ignored, or ended more than a

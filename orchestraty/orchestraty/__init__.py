@@ -1,8 +1,8 @@
 """Orchestraty keeps parallel coding-agent sessions aware of each other.
 
-The subpackages name the components. Capture (the hook script and its installer), the
-coordinator (the record of sessions, orch status), the live map and the overlap rules work;
-the others arrive one by one.
+The subpackages name the components: capture (the hook script, its installer, the git hook
+chain), the coordinator, the live map, the overlap rules and delivery all work; the
+adapters for other agents come later.
 """
 
 __version__ = "0.0.1.dev0"
