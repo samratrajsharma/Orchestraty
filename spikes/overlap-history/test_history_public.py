@@ -45,10 +45,12 @@ def raws(sha):
 def fake_gh(pulls, calls):
     def run(args):
         calls.append(list(args))
-        if args[:2] == ["search", "prs"]:
-            hits = {"generated with an agent": [1, 5], "copilot-swe-agent": [2]}
-            return [{"repository": {"nameWithOwner": "o/r"}, "number": n}
-                    for key, numbers in hits.items() if key in args for n in numbers]
+        if args[:4] == ["api", "-X", "GET", "search/issues"]:
+            query = next(a for a in args if a.startswith("q="))
+            numbers = [n for key, found in (("Claude Code", [1, 5]), ("copilot-swe-agent", [2])) if key in query
+                       for n in found]
+            return {"total_count": len(numbers),
+                    "items": [{"repository_url": "https://api.github.com/repos/o/r", "number": n} for n in numbers]}
         if args[:2] == ["pr", "list"]:
             return pulls
         if args[0] == "api":
@@ -163,7 +165,7 @@ def test_select_lists_candidates_and_clones_nothing(tmp_path):
     assert (row["repo"], row["size_mb"], row["agent_prs"], row["agent_prs_from_forks"], row["parallel_pairs"]) == \
         ("o/r", 2.0, 4, 1, 2)
     assert (doc["repositories_found"], doc["searches_cut_short"]) == (1, 0)
-    assert {c[0] for c in calls} == {"search", "pr", "api"}
+    assert {c[0] for c in calls} == {"pr", "api"} and all(c[1] == "list" for c in calls if c[0] == "pr")
     assert not (tmp_path / "repos").exists()
     assert "o/r" in hp.candidates_table(doc)
 

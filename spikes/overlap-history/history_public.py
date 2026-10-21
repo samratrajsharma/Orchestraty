@@ -38,8 +38,9 @@ import time
 
 DAYS = 183
 OUT = os.path.join(os.path.expanduser("~"), "orch-phase0", "agent-history")
-SEARCH_LIMIT = 1000                   # GitHub's search gives at most 1,000 results a query
-SEARCH_PACE = 21.0                    # seconds between searches: GitHub allows 30 search requests a minute
+SEARCH_PAGES = 10                     # 100 results a page; GitHub's search stops at 1,000
+SEARCH_PACE = 3.0                     # seconds before each request: GitHub allows 30 searches a minute, not in bursts
+SLOW_DOWN = (120, 300, 600)           # seconds to wait each time GitHub says to slow down
 LIST_LIMIT = 3000
 FETCH_CHUNK = 2000
 AGENT_TEXT = (("generated with an agent", "claude-code"), ("Generated with [an agent]", "claude-code"),
@@ -47,8 +48,7 @@ AGENT_TEXT = (("generated with an agent", "claude-code"), ("Generated with [an a
 AGENT_APPS = frozenset({"copilot-swe-agent", "copilot", "claude", "devin-ai-integration", "google-labs-jules",
                         "chatgpt-codex-connector", "codegen-sh", "sweep-ai"})
 AGENT_BRANCHES = ("claude/", "codex/", "copilot/")
-SEARCHES = (["--match", "body", "generated with an agent"], ["--match", "body", "chatgpt.com/codex/tasks"],
-            ["--app", "copilot-swe-agent"])
+SEARCHES = ('"generated with an agent" in:body', '"chatgpt.com/codex/tasks" in:body', "author:app/copilot-swe-agent")
 PR_FIELDS = ("number,author,body,createdAt,mergedAt,baseRefName,baseRefOid,headRefName,headRefOid,"
              "isCrossRepository,mergeCommit")
 PASS, RARE = 0.05, 0.02               # strong overlaps in 5% of pairs or more passes; below 2% they look rare
@@ -141,30 +141,38 @@ def _write(path, text):
         fh.write(text)
 
 
+def _ask(run, args, pace, say):
+    """One API request, after a pause; when GitHub says to slow down, wait and ask again."""
+    for wait in SLOW_DOWN + (None,):
+        time.sleep(pace)
+        try:
+            return run(args)
+        except RuntimeError as e:
+            if wait is None or "rate limit" not in str(e).lower():
+                raise
+            say("GitHub asks to slow down: waiting %d s" % wait)
+            time.sleep(wait)
+
+
 def search(since, now, run=gh, pace=SEARCH_PACE, say=None):
     """({repository: agent pull requests found}, searches cut short): GitHub's search for merged
-    agent pull requests in Python repositories, 30 days at a time. A search that returns
-    SEARCH_LIMIT results was cut short, so its repositories are undercounted."""
+    agent pull requests in Python repositories, 30 days and one page at a time. A search with
+    more than 1,000 results is cut short there, so its repositories are undercounted."""
     say = say or (lambda message: None)
-    seen, cut, first = set(), 0, True
+    seen, cut = set(), 0
     start = since
     while start < now:
         end = min(start + 29 * 86400, now)
-        for args in SEARCHES:
-            if not first:
-                time.sleep(pace)
-            first = False
-            query = ["search", "prs", *args, "--language", "python", "--merged", "--merged-at",
-                     "%s..%s" % (_day(start), _day(end)), "--limit", str(SEARCH_LIMIT), "--json", "repository,number"]
-            try:
-                hits = run(query)
-            except RuntimeError as e:
-                if "rate limit" not in str(e).lower():
-                    raise
-                time.sleep(60)
-                hits = run(query)
-            cut += len(hits or []) >= SEARCH_LIMIT
-            seen.update((h["repository"]["nameWithOwner"], h["number"]) for h in hits or [])
+        for text in SEARCHES:
+            query = "%s is:pr is:merged language:python merged:%s..%s" % (text, _day(start), _day(end))
+            for page in range(1, SEARCH_PAGES + 1):
+                found = _ask(run, ["api", "-X", "GET", "search/issues", "-f", "q=" + query, "-f", "per_page=100",
+                                   "-f", "page=%d" % page], pace, say) or {}
+                items = found.get("items") or []
+                seen.update((i["repository_url"].split("/repos/", 1)[-1], i["number"]) for i in items)
+                if len(items) < 100:
+                    break
+            cut += (found.get("total_count") or 0) > SEARCH_PAGES * 100
         say("searched to %s: %d agent pull requests so far" % (_day(end), len(seen)))
         start = end + 86400
     found = {}
@@ -183,8 +191,8 @@ def select(days=DAYS, now=None, out_dir=OUT, top=40, run=gh, pace=SEARCH_PACE, s
     rows = []
     for repo, hits in sorted(found.items(), key=lambda kv: (-kv[1], kv[0]))[:top]:
         try:
-            prs = list_prs(repo, since, run)
-            meta = run(["api", "repos/" + repo]) or {}
+            prs = list_prs(repo, since, lambda args: _ask(run, args, pace, say))
+            meta = _ask(run, ["api", "repos/" + repo], pace, say) or {}
         except (RuntimeError, ValueError) as e:
             say("%s left out: %s" % (repo, e))
             continue
@@ -198,7 +206,7 @@ def select(days=DAYS, now=None, out_dir=OUT, top=40, run=gh, pace=SEARCH_PACE, s
                      "parallel_pairs": len(parallel_prs(prs))})
         say("%s: %d agent pull requests, %d parallel pairs" % (repo, len(agent), rows[-1]["parallel_pairs"]))
     rows.sort(key=lambda r: (-r["parallel_pairs"], r["repo"]))
-    doc = {"days": days, "since": since, "now": now, "searches": [" ".join(a) for a in SEARCHES],
+    doc = {"days": days, "since": since, "now": now, "searches": list(SEARCHES),
            "searches_cut_short": cut, "repositories_found": len(found), "candidates": rows}
     _write(os.path.join(out_dir, CANDIDATES), json.dumps(doc, indent=2) + "\n")
     return doc
