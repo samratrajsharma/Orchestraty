@@ -18,7 +18,7 @@ from orch_engine.config import Config
 from orch_engine.pipeline import build_index_at
 from orchestraty.livemap.index import view
 from orchestraty.livemap.map import SessionView, analyse
-from orchestraty.rules.overlap import evaluate
+from orchestraty.rules.overlap import BREAKING, evaluate
 
 from history_changes import files_at
 from history_repos import git, git_code
@@ -69,20 +69,25 @@ def _graph(change, indexes, with_own=True):
 
 
 def same_worktree(a, b):
-    return a.work.top == b.work.top
+    """True for two sessions in one working tree. Work that names a place of its own (a pull
+    request read from a shared clone) is told apart by that place instead."""
+    return getattr(a.work, "place", a.work.top) == getattr(b.work, "place", b.work.top)
 
 
 def findings_for(a, b, indexes):
     """The findings for one pair of Changes, latent ones left out. Two sessions in one working
     tree share its commits, so what each changed in a function cannot be told apart: for them
-    only the files each edited count (O1), as the product marks such changes not attributed."""
+    only the files each edited count (O1), as the product marks such changes not attributed.
+    A code graph is built only where a breaking change needs it: the other side's copy (O3,
+    O4) and the changer's base commit (O6)."""
     changes = {a.work.session.id: a, b.work.session.id: b}
     views = {sid: _view(c) for sid, c in changes.items()}
     if same_worktree(a, b):
         for v in views.values():
             v.symbols = {}
-    graphs = {sid: _graph(c, indexes) for sid, c in changes.items()}
-    bases = {sid: _graph(c, indexes, with_own=False) for sid, c in changes.items()}
+    broke = {sid for sid, v in views.items() if any(s.contract == BREAKING for s in v.symbols.values())}
+    graphs = {sid: _graph(c, indexes) if broke - {sid} else None for sid, c in changes.items()}
+    bases = {sid: _graph(c, indexes, with_own=False) if sid in broke else None for sid, c in changes.items()}
     out = evaluate(views, lambda sid: graphs.get(sid), lambda sid: bases.get(sid))
     return [f for f in out if not f.detail.get("latent")]
 
@@ -120,20 +125,28 @@ def followed(a, b, findings, now):
     out = {"conflict": False, "revert": False, "fix": False, "window_days": round((until - since) / 86400, 1)}
     if a.committed and b.committed and _contains_both(top, a.end, b.end):
         out["conflict"] = _conflicts(top, a.end, b.end)
-    own = set(a.commits) | set(b.commits)
-    log = git(top, "log", "--all", "--since=%d" % int(since), "--until=%d" % int(until),
+    wanted = set().union(*(involved(f) for f in findings)) if findings else set()
+    out["revert"], out["fix"] = later(top, set(a.commits) | set(b.commits), since, until, wanted)
+    return out
+
+
+def later(top, own, since, until, wanted, refs=("--all",), read=files_at):
+    """(revert, fix) among the commits on `refs` dated from `since` to `until`, those in `own`
+    left out: a commit whose message says it reverts one of `own`, and one that changes a
+    function in `wanted`. `read` gives files at a commit, as ``files_at`` does."""
+    revert = fix = False
+    log = git(top, "log", *refs, "--since=%d" % int(since), "--until=%d" % int(until),
               "--format=%H%x1f%B%x1e", check=False) or ""
-    later = []
+    shas = []
     for record in log.split("\x1e"):
         sha, _, body = record.strip().partition("\x1f")
         if not sha or sha in own:
             continue
-        later.append(sha)
+        shas.append(sha)
         if any(("reverts commit " + c) in body for c in own):
-            out["revert"] = True
-    wanted = set().union(*(involved(f) for f in findings)) if findings else set()
-    for sha in later:
-        if out["fix"] or not wanted:
+            revert = True
+    for sha in shas:
+        if fix or not wanted:
             break
         files = (git(top, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", sha, check=False) or "").split()
         hit = sorted({s.split("::", 1)[0] for s in wanted} & set(files))
@@ -141,8 +154,8 @@ def followed(a, b, findings, now):
         if not hit:
             continue
         parent = (git(top, "rev-parse", "--verify", "--quiet", sha + "^", check=False) or "").strip()
-        before = files_at(top, parent, hit) if parent else {p: None for p in hit}
-        changed = analyse(before, files_at(top, sha, hit))
+        before = read(top, parent, hit) if parent else {p: None for p in hit}
+        changed = analyse(before, read(top, sha, hit))
         if any((c.moved_from or k) in wanted and c.kind != "added" for k, c in changed.items()):
-            out["fix"] = True
-    return out
+            fix = True
+    return revert, fix
