@@ -41,6 +41,7 @@ include = ["orchestraty", "orchestraty.*", "orch_engine", "orch_engine.*"]
 namespaces = false
 
 # orch init copies these out of the package: the Claude Code mod. The hook script is a module
-# (orchestraty/capture/hook.py), so it is in the package anyway.
+# (orchestraty/capture/hook.py), so it is in the package anyway. orch ui serves the dashboard's
+# page from ui/static.
 [tool.setuptools.package-data]
-orchestraty = ["mod/.claude-plugin/plugin.json", "mod/hooks/*.json", "mod/hooks/*.js"]
+orchestraty = ["mod/.claude-plugin/plugin.json", "mod/hooks/*.json", "mod/hooks/*.js", "ui/static/*"]
