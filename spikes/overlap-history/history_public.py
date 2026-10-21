@@ -27,11 +27,13 @@ counted. Merged pull requests miss the rework done before merging, so the rate i
 """
 import argparse
 import calendar
+import collections
 import json
 import os
 import random
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -52,6 +54,9 @@ SEARCHES = ('"generated with an agent" in:body', '"chatgpt.com/codex/tasks" in:b
 PR_FIELDS = ("number,author,body,createdAt,mergedAt,baseRefName,baseRefOid,headRefName,headRefOid,"
              "isCrossRepository,mergeCommit")
 PASS, RARE = 0.05, 0.02               # strong overlaps in 5% of pairs or more passes; below 2% they look rare
+MAX_PAIRS = 300                       # pairs analysed per repository, so no one repository decides the rate
+NET_ENV = {"GIT_TERMINAL_PROMPT": "0",                       # a repository gone private fails; it never asks
+           "GIT_HTTP_LOW_SPEED_LIMIT": "1000", "GIT_HTTP_LOW_SPEED_TIME": "120"}   # nor hangs on a stalled transfer
 CANDIDATES, RESULT, COUNTS, REPORT = "candidates.json", "public-result.json", "public-counts.json", "public-report.html"
 _NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -122,6 +127,14 @@ def parallel_prs(prs):
             if b["base"] == a["base"]:
                 out.append((a, b))
     return out
+
+
+def sample_pairs(pairs, cap, seed):
+    """At most `cap` of the pairs, in their order, drawn at random with a fixed seed (the
+    repository's name), so a rerun draws the same ones. All of them when cap is 0 or None."""
+    if not cap or len(pairs) <= cap:
+        return list(pairs)
+    return [pairs[i] for i in sorted(random.Random(seed).sample(range(len(pairs)), cap))]
 
 
 def list_prs(repo, since, run=gh, limit=LIST_LIMIT):
@@ -225,20 +238,24 @@ def candidates_table(doc):
 
 # ---------------- a partial clone, read only as far as needed ----------------
 
-def clone(url, top):
+def clone(url, top, say=None):
     """A partial clone of `url` at `top`: commits and trees, nothing checked out. One already
-    there is brought up to date instead."""
-    from history_repos import git
+    there is brought up to date instead, or used as it is when that fails."""
     if os.path.isdir(os.path.join(top, ".git")):
-        git(top, "fetch", "--quiet", "--no-tags", "origin")
+        if _run(top, ["fetch", "--quiet", "--no-tags", "origin"])[0] and say:
+            say("%s: could not update the clone; using it as it is" % url)
         return
     os.makedirs(os.path.dirname(top), exist_ok=True)
-    git(os.path.dirname(top), "clone", "--quiet", "--filter=blob:none", "--no-checkout", "--no-tags", url, top)
+    code, _ = _run(os.path.dirname(top), ["clone", "--quiet", "--filter=blob:none", "--no-checkout", "--no-tags",
+                                          url, top])
+    if code:
+        raise RuntimeError("could not clone %s" % url)
 
 
 def _run(top, args, stdin=b"", env=None):
     from history_repos import GIT
-    proc = subprocess.run(GIT + list(args), cwd=top, input=stdin, capture_output=True, env=env)
+    proc = subprocess.run(GIT + list(args), cwd=top, input=stdin, capture_output=True,
+                          env=dict(env or os.environ, **NET_ENV))
     return proc.returncode, proc.stdout.decode("utf-8", "replace")
 
 
@@ -294,17 +311,33 @@ def _read(top, commit, paths):
 
 class _Fetching:
     """history_overlaps.Indexes for a partial clone: a commit's files are fetched in one go
-    before the engine reads them."""
+    before the engine reads them, and only the last KEEP indexes stay in memory. A large
+    repository's index is large; pairs come in time order, so nearby ones share bases."""
+
+    KEEP = 6
 
     def __init__(self, indexes):
         self.indexes = indexes
-        self.done = set()
+        self.kept = collections.OrderedDict()
+        self.failed = set()
 
     def get(self, top, commit):
-        if (top, commit) not in self.done:
-            self.done.add((top, commit))
-            prefetch(top, [(commit, None)])
-        return self.indexes.get(top, commit)
+        key = (top, commit)
+        if key in self.failed:
+            return None
+        if key in self.kept:
+            self.kept.move_to_end(key)
+            return self.kept[key]
+        prefetch(top, [(commit, None)])
+        idx = self.indexes.get(top, commit)
+        self.indexes._built.pop(key, None)            # kept here instead, a few at a time
+        if idx is None:
+            self.failed.add(key)
+            return None
+        self.kept[key] = idx
+        while len(self.kept) > self.KEEP:
+            self.kept.popitem(last=False)
+        return idx
 
 
 # ---------------- a pull request as a session's work ----------------
@@ -413,12 +446,14 @@ def _side(pr, change):
             "files": change.work.files, "commits": len(change.commits)}
 
 
-def scan_repo(repo, prs, url, top, now, say=None):
-    """One repository: its parallel agent pairs, their findings and what followed."""
+def scan_repo(repo, prs, url, top, now, say=None, max_pairs=MAX_PAIRS):
+    """One repository: its parallel agent pairs (at most max_pairs of them, sample_pairs),
+    their findings and what followed."""
     from history_overlaps import Indexes, findings_for
     say = say or (lambda message: None)
-    clone(url, top)
-    pairs = parallel_prs(prs)
+    clone(url, top, say)
+    every = parallel_prs(prs)
+    pairs = sample_pairs(every, max_pairs, repo)
     used = {p["number"]: p for pair in pairs for p in pair}
     fetch_heads(top, sorted(used))
     left_out = {"fork": sum(1 for p in prs if p["agent"] and p["fork"]), "no_head": 0, "no_base": 0, "pairs": 0}
@@ -430,7 +465,7 @@ def scan_repo(repo, prs, url, top, now, say=None):
         else:
             changes[n] = c
     pr_symbols(top, list(changes.values()))
-    say("%s: %d pull requests in %d parallel pairs" % (repo, len(changes), len(pairs)))
+    say("%s: %d pull requests in %d parallel pairs (of %d)" % (repo, len(changes), len(pairs), len(every)))
     indexes, out = Indexes(), []
     try:
         fetching = _Fetching(indexes)
@@ -449,18 +484,26 @@ def scan_repo(repo, prs, url, top, now, say=None):
         if p["agent"]:
             markers[p["agent"]] = markers.get(p["agent"], 0) + 1
     return {"repo": repo, "merged_prs": len(prs), "agent_prs": sum(markers.values()), "markers": markers,
-            "pairs": out, "left_out": left_out, "index_failures": indexes.failed}
+            "pairs_total": len(every), "pairs": out, "left_out": left_out, "index_failures": indexes.failed}
 
 
-def scan(repos, out_dir=OUT, days=DAYS, now=None, run=gh, url=None, say=None):
+def scan(repos, out_dir=OUT, days=DAYS, now=None, run=gh, url=None, say=None, max_pairs=MAX_PAIRS):
     """Scans the named repositories, and only those, and writes public-result.json,
-    public-counts.json and public-report.html into a folder named for the day."""
+    public-counts.json and public-report.html into a folder named for the day. Each
+    repository's result is saved there as it finishes, and a rerun the same day reuses it."""
     say = say or (lambda message: None)
     now = time.time() if now is None else now
     since = now - days * 86400
     url = url or (lambda name: "https://github.com/%s.git" % name)
+    folder = os.path.join(out_dir, _day(now))
     rows = []
     for repo in repos:
+        done = os.path.join(folder, "by-repo", _key(repo) + ".json")
+        if os.path.exists(done):
+            with open(done, encoding="utf-8") as fh:
+                rows.append(json.load(fh))
+            say("%s: scanned earlier today" % repo)
+            continue
         path = _prs_path(out_dir, repo)
         if os.path.exists(path):
             with open(path, encoding="utf-8") as fh:
@@ -470,12 +513,13 @@ def scan(repos, out_dir=OUT, days=DAYS, now=None, run=gh, url=None, say=None):
             _write(path, json.dumps({"repo": repo, "since": since, "now": now, "prs": prs}) + "\n")
         prs = [p for p in prs if p["merged"] and p["merged"] >= since]
         try:
-            rows.append(scan_repo(repo, prs, url(repo), os.path.join(out_dir, "repos", _key(repo)), now, say))
+            row = scan_repo(repo, prs, url(repo), os.path.join(out_dir, "repos", _key(repo)), now, say, max_pairs)
+            _write(done, json.dumps(row) + "\n")
         except RuntimeError as e:
             say("%s failed: %s" % (repo, e))
-            rows.append({"repo": repo, "error": str(e)[:300]})
-    result = {"days": days, "since": since, "now": now, "repos": rows}
-    folder = os.path.join(out_dir, _day(now))
+            row = {"repo": repo, "error": str(e)[:300]}
+        rows.append(row)
+    result = {"days": days, "since": since, "now": now, "max_pairs": max_pairs, "repos": rows}
     _write(os.path.join(folder, RESULT), json.dumps(result, indent=1) + "\n")
     _write(os.path.join(folder, COUNTS), json.dumps(public_counts(result), indent=2, sort_keys=True) + "\n")
     _write(os.path.join(folder, REPORT), report_html(result))
@@ -534,12 +578,15 @@ def public_counts(result):
     with_strong = [p for p in pairs if _strong(p)]
     with_any = [p for p in pairs if p["findings"]]
     rate = len(with_strong) / float(len(pairs)) if pairs else None
+    rates = [sum(1 for p in r["pairs"] if _strong(p)) / float(len(r["pairs"])) for r in rows if r["pairs"]]
     return {
         "tool": "overlap-history-public", "version": 1, "days": result["days"],
         "repositories": len(rows), "repositories_failed": len(result["repos"]) - len(rows),
         "merged_prs": sum(r["merged_prs"] for r in rows), "agent_prs": sum(r["agent_prs"] for r in rows),
         "agent_prs_by_marker": total("markers"), "left_out": total("left_out"),
-        "parallel_pairs": len(pairs),
+        "parallel_pairs_found": sum(r.get("pairs_total", len(r["pairs"])) for r in rows),
+        "max_pairs_per_repository": result.get("max_pairs"), "parallel_pairs": len(pairs),
+        "repository_rate_median": round(statistics.median(rates), 4) if rates else None,
         "pairs_with": {k: sum(1 for p in pairs if any(f["rule"] == k for f in p["findings"])) for k in RULES},
         "strong_pairs": len(with_strong), "strong_rate": None if rate is None else round(rate, 4),
         "strong_rate_95": repo_interval([(sum(1 for p in r["pairs"] if _strong(p)), len(r["pairs"])) for r in rows]),
@@ -557,19 +604,22 @@ def report_html(result):
     c = public_counts(result)
     rate = "%.1f%%" % (100 * c["strong_rate"]) if c["strong_rate"] is not None else "none"
     ci = c["strong_rate_95"]
-    summary = ("<p>%d repositories, %d agent pull requests, %d parallel pairs. Pairs with a strong overlap: "
-               "%d, %s%s. The mark: 5%% or more passes; below 2%% collisions look rare. Reading: <b>%s</b>.</p>"
-               % (c["repositories"], c["agent_prs"], c["parallel_pairs"], c["strong_pairs"], rate,
+    summary = ("<p>%d repositories, %d agent pull requests, %d parallel pairs analysed (of %d found; at most %s a "
+               "repository, drawn at random). Pairs with a strong overlap: %d, %s%s. The mark: 5%% or more passes; "
+               "below 2%% collisions look rare. Reading: <b>%s</b>.</p>"
+               % (c["repositories"], c["agent_prs"], c["parallel_pairs"], c["parallel_pairs_found"],
+                  _e(c["max_pairs_per_repository"] or "all"), c["strong_pairs"], rate,
                   (" (95%% interval %.1f%% to %.1f%%, resampling repositories)" % (100 * ci[0], 100 * ci[1])) if ci else "",
                   _e(c["reading"])))
-    table = ["<tr><th>Repository</th><th>Agent PRs</th><th>Pairs</th><th>Strong</th><th>Left out</th></tr>"]
+    table = ["<tr><th>Repository</th><th>Agent PRs</th><th>Pairs analysed</th><th>Strong</th><th>Left out</th></tr>"]
     sections = []
     for r in result["repos"]:
         if "error" in r:
             table.append("<tr><td>%s</td><td colspan=4>failed: %s</td></tr>" % (_e(r["repo"]), _e(r["error"])))
             continue
-        table.append("<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%s</td></tr>"
-                     % (_e(r["repo"]), r["agent_prs"], len(r["pairs"]), sum(1 for p in r["pairs"] if _strong(p)),
+        table.append("<tr><td>%s</td><td>%d</td><td>%d of %d</td><td>%d</td><td>%s</td></tr>"
+                     % (_e(r["repo"]), r["agent_prs"], len(r["pairs"]), r.get("pairs_total", len(r["pairs"])),
+                        sum(1 for p in r["pairs"] if _strong(p)),
                         _e(", ".join("%s %d" % kv for kv in sorted(r["left_out"].items()) if kv[1]) or "-")))
         for p in r["pairs"]:
             if not p["findings"]:
@@ -597,6 +647,8 @@ def main(argv=None):
     s.add_argument("--top", type=int, default=40, help="how many of the repositories found to list (default 40)")
     c = sub.add_parser("scan", help="clone the named repositories and run the rules on their pairs")
     c.add_argument("repos", nargs="+", metavar="OWNER/NAME")
+    c.add_argument("--max-pairs", type=int, default=MAX_PAIRS,
+                   help="pairs analysed per repository, drawn at random with a fixed seed (300; 0 for all)")
     for q in (s, c):
         q.add_argument("--days", type=int, default=DAYS, help="pull requests merged in the last DAYS days (183)")
         q.add_argument("--out", default=OUT, help="where everything goes (default: %s)" % OUT)
@@ -612,7 +664,7 @@ def main(argv=None):
     except ValueError as e:
         print(e, file=sys.stderr)
         return 2
-    result = scan(args.repos, args.out, args.days, say=print)
+    result = scan(args.repos, args.out, args.days, say=print, max_pairs=args.max_pairs)
     print(json.dumps(public_counts(result), indent=2, sort_keys=True))
     return 0
 

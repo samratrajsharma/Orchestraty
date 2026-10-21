@@ -40,7 +40,8 @@ python history_public.py scan OWNER/NAME [...]        # partial clones of the na
 - **Each change:** the head against its merge base with the base branch just before it merged. Each pull request is a place of its own, so the function-level rules apply.
 - **What followed, within 14 days of the later merge:** a text conflict between the two heads in a file both changed, and a revert or a later fix on the base branch.
 - **What it downloads:** `select` calls the API only and lists each candidate's size. `scan` clones the repositories it is named, and only those: partial clones (commits and trees) under `--out` (default `~/orch-phase0/agent-history`). A file's contents are fetched in batches when a commit that needs them is read. Nothing is checked out or run.
-- **What it writes:** `public-result.json`, `public-counts.json` and `public-report.html`, in a folder named for the day. Pull-request titles and descriptions are not kept.
+- **Sampling:** at most 300 parallel pairs per repository (`--max-pairs`), drawn at random with the repository's name as the seed. So no one repository decides the rate, and a rerun draws the same pairs. The median of the repositories' own rates is reported beside the pooled rate.
+- **What it writes:** `public-result.json`, `public-counts.json` and `public-report.html`, in a folder named for the day. Each repository's result is saved there as it finishes, and a rerun the same day reuses it. Pull-request titles and descriptions are not kept.
 - **Limits:** merged pull requests only, so rework done before merging is not seen and the rate is a lower bound. Python only. Pull requests from forks are left out and counted.
 
 ## Files

@@ -115,7 +115,7 @@ def scanned(tmp_path):
 def test_parallel_agent_pairs_their_overlaps_and_what_followed(scanned):
     result, _, _ = scanned
     [repo] = result["repos"]
-    assert (repo["merged_prs"], repo["agent_prs"]) == (5, 4)                # 6 merged before the window
+    assert (repo["merged_prs"], repo["agent_prs"], repo["pairs_total"]) == (5, 4, 2)   # 6 merged before the window
     assert repo["markers"] == {"claude-code": 2, "app": 1, "branch": 1}
     assert repo["left_out"] == {"fork": 1, "no_head": 0, "no_base": 0, "pairs": 0}
     pairs = {(p["a"]["number"], p["b"]["number"]): p for p in repo["pairs"]}
@@ -146,6 +146,7 @@ def test_the_counts_the_report_and_no_descriptions_kept(scanned):
     c = hp.public_counts(result)
     assert (c["parallel_pairs"], c["strong_pairs"], c["strong_rate"], c["reading"]) == (2, 1, 0.5, "pass")
     assert c["strong_rate_95"] == [0.5, 0.5]
+    assert (c["parallel_pairs_found"], c["max_pairs_per_repository"], c["repository_rate_median"]) == (2, 300, 0.5)
     assert (c["pairs_with"]["O3"], c["pairs_with"]["O6"], c["pairs_with"]["O1"]) == (1, 1, 0)
     assert c["strong_pairs_followed_by"]["fix"] == 1 and c["overlap_pairs"] == 1
     assert c["left_out"]["fork"] == 1 and c["agent_prs_by_marker"]["app"] == 1
@@ -155,6 +156,44 @@ def test_the_counts_the_report_and_no_descriptions_kept(scanned):
     assert "https://github.com/o/r/pull/1" in page and "a.py::charge" in page and "<b>pass</b>" in page
     kept = (out / "prs" / "o__r.json").read_text(encoding="utf-8")
     assert "Generated with" not in kept and "Keyword-only currency" not in kept
+
+
+def test_a_rerun_the_same_day_reuses_each_repository_scanned(scanned, monkeypatch):
+    result, out, _ = scanned
+
+    def again(*args, **kwargs):
+        raise AssertionError("scanned a second time")
+    monkeypatch.setattr(hp, "scan_repo", again)
+    rerun = hp.scan(["o/r"], str(out), days=183, now=NOW, run=fake_gh([], []), url=lambda name: "unused")
+    assert rerun["repos"] == result["repos"]
+
+
+def test_sampling_caps_the_pairs_and_draws_the_same_ones_again():
+    pairs = [(i, i + 1) for i in range(50)]
+    first = hp.sample_pairs(pairs, 10, "o/r")
+    assert len(first) == 10 and first == hp.sample_pairs(pairs, 10, "o/r") and first == sorted(first)
+    assert first != hp.sample_pairs(pairs, 10, "o/other")
+    assert hp.sample_pairs(pairs, 0, "o/r") == pairs and hp.sample_pairs(pairs[:5], 10, "o/r") == pairs[:5]
+
+
+def test_only_a_few_indexes_are_kept_in_memory(monkeypatch):
+    class Built:
+        def __init__(self):
+            self._built, self.asked = {}, []
+
+        def get(self, top, commit):
+            self.asked.append(commit)
+            self._built[(top, commit)] = None if commit == "gone" else object()
+            return self._built[(top, commit)]
+    monkeypatch.setattr(hp, "prefetch", lambda top, wants: 0)
+    inner = Built()
+    fetching = hp._Fetching(inner)
+    first = fetching.get("t", "c0")
+    assert fetching.get("t", "c0") is first and inner.asked == ["c0"]
+    for n in range(1, 10):
+        fetching.get("t", "c%d" % n)
+    assert len(fetching.kept) == hp._Fetching.KEEP and not inner._built
+    assert fetching.get("t", "gone") is None and fetching.get("t", "gone") is None and inner.asked.count("gone") == 1
 
 
 def test_select_lists_candidates_and_clones_nothing(tmp_path):
