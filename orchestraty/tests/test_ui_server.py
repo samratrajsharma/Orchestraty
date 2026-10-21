@@ -1,0 +1,407 @@
+"""orch ui's server: on port 0, in a thread, with a temporary state folder."""
+import hashlib
+import html.parser
+import http.client
+import json
+import os
+import re
+import socket
+import threading
+from pathlib import Path
+from urllib.parse import quote
+
+import pytest
+
+from orchestraty import cli, config
+from orchestraty.coordinator.record import Record
+from orchestraty.paths import State
+from orchestraty.rules.overlap import Finding
+from orchestraty.ui import data, server as ui_server
+
+S = 1_000_000_000
+STATIC = Path(ui_server.STATIC_DIR)
+
+
+@pytest.fixture
+def state(state_root):
+    return State(str(state_root))
+
+
+@pytest.fixture
+def srv(state):
+    s = ui_server.Server(state, 0)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    t.start()
+    yield s
+    s.shutdown()
+    s.server_close()
+    t.join(10)
+
+
+def ask(s, method, path, headers=None, body=None, cookie=True):
+    """(status, {header: value}, body bytes) for one request on a fresh connection."""
+    conn = http.client.HTTPConnection("127.0.0.1", s.port, timeout=30)
+    sent = dict(headers or {})
+    if cookie:
+        sent.setdefault("Cookie", f"{s.cookie}={s.secret}")
+    try:
+        conn.request(method, path, body=body, headers=sent)
+        res = conn.getresponse()
+        return res.status, {k.lower(): v for k, v in res.getheaders()}, res.read()
+    finally:
+        conn.close()
+
+
+def change(s, payload, **headers):
+    sent = {"Content-Type": "application/json", "X-Orch-UI": "1", "Origin": f"http://127.0.0.1:{s.port}"}
+    sent.update({k.replace("_", "-"): v for k, v in headers.items()})
+    for k in [k for k, v in sent.items() if v is None]:
+        del sent[k]
+    return ask(s, "POST", "/api/config", sent, json.dumps(payload).encode())
+
+
+def fill(state, tmp_path):
+    common = str(tmp_path / "repo" / ".git")
+    config.watch(state, common)
+    rec = Record(state.record)
+    with rec.transaction():
+        rid = rec.repo_id(common)
+        for sid in ("A", "B"):
+            wt = str(tmp_path / ("wt-" + sid.lower()))
+            rec.put_session({"id": sid, "agent": "claude", "repo_id": rid, "cwd": wt, "worktree": wt, "branch": "b",
+                             "base_commit": "abc", "base_guessed": 0, "started": 1 * S, "last_seen": 2 * S,
+                             "state": "live", "turn": "working", "note": ""})
+            rec.add_event({"ts": 2 * S, "agent": "claude", "event": "Stop", "session_id": sid})
+        f = Finding("O3|a.py::charge|A|B|c.py", "O3", "strong", ("A", "B"), changer="A", receiver="B",
+                    symbol="a.py::charge", file="c.py", detail={"uses": [{"symbol": "c.py::use", "lines": [5]}]})
+        rec.put_finding(rid, f, 3 * S)
+        rec.add_note(f.key, "B", "edit", "notes/B/edit/x.json", "a note", 3 * S, cause_ts=2 * S)
+    rec.close()
+
+
+# --------------------------------------------------------------------------------------- #
+# Who may ask
+# --------------------------------------------------------------------------------------- #
+def test_it_listens_on_127_0_0_1_only(srv):
+    assert srv.server_address[0] == "127.0.0.1" and srv.port > 0
+    assert srv.url == f"http://127.0.0.1:{srv.port}/?token={srv.token}" and len(srv.token) >= 40
+
+
+@pytest.mark.parametrize("path", ["/", "/app.js", "/app.css", "/favicon.svg", "/api/status", "/api/health", "/nope"])
+def test_every_request_needs_the_cookie(srv, path):
+    code, headers, body = ask(srv, "GET", path, cookie=False)
+    assert code == 403 and b"open the link" in body
+    code, _, _ = ask(srv, "GET", path, {"Cookie": f"{srv.cookie}=not-the-secret"})
+    assert code == 403
+    code, _, _ = ask(srv, "GET", path, {"Cookie": f"orch_ui_1={srv.secret}"})          # another server's name
+    assert code == 403
+
+
+def test_the_link_sets_the_cookie_and_works_once(srv):
+    code, headers, _ = ask(srv, "GET", "/?token=" + srv.token, cookie=False)
+    assert code == 303 and headers["location"] == "/" and headers["cache-control"] == "no-store"
+    cookie = headers["set-cookie"]
+    assert cookie.startswith(f"{srv.cookie}={srv.secret};")
+    assert {p.strip() for p in cookie.split(";")[1:]} == {"HttpOnly", "SameSite=Strict", "Path=/"}
+    value = cookie.split(";")[0]
+    code, headers, body = ask(srv, "GET", "/", {"Cookie": value}, cookie=False)
+    assert code == 200 and headers["content-type"].startswith("text/html") and b"<title>Orchestraty</title>" in body
+    code, _, body = ask(srv, "GET", "/?token=" + srv.token, cookie=False)                # used: no second browser
+    assert code == 403 and b"used already" in body
+    code, headers, _ = ask(srv, "GET", "/?token=" + srv.token, {"Cookie": value}, cookie=False)
+    assert code == 303 and "set-cookie" not in headers                                   # the same browser again
+
+
+def test_a_wrong_token_sets_nothing(srv):
+    for token in ("", "x", srv.token[:-1], srv.token + "x", "é" * 43):
+        code, headers, body = ask(srv, "GET", "/?token=" + quote(token), cookie=False)
+        assert code == 403 and "set-cookie" not in headers and b"not the link" in body
+    code, headers, _ = ask(srv, "GET", "/?token=" + srv.token, cookie=False)
+    assert code == 303 and "set-cookie" in headers                                       # still good once
+
+
+@pytest.mark.parametrize("host", ["evil.example:{port}", "127.0.0.1:1", "localhost", "127.0.0.1", "127.0.0.2:{port}",
+                                  "[::1]:{port}", "localhost.:{port}", "0.0.0.0:{port}"])
+def test_any_other_host_is_refused(srv, host):
+    code, _, body = ask(srv, "GET", "/api/status", {"Host": host.format(port=srv.port)})
+    assert code == 403 and b"answers only to" in body
+    code, _, _ = ask(srv, "GET", "/?token=" + srv.token, {"Host": host.format(port=srv.port)}, cookie=False)
+    assert code == 403 and not srv._redeemed
+
+
+def test_localhost_with_the_port_is_this_server(srv):
+    assert ask(srv, "GET", "/api/status", {"Host": f"localhost:{srv.port}"})[0] == 200
+    assert ask(srv, "GET", "/api/status", {"Host": f"LOCALHOST:{srv.port}"})[0] == 200
+
+
+def test_two_host_headers_are_refused(srv):
+    raw = (f"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1:{srv.port}\r\nHost: evil.example\r\n"
+           f"Cookie: {srv.cookie}={srv.secret}\r\nConnection: close\r\n\r\n").encode()
+    with socket.create_connection(("127.0.0.1", srv.port), timeout=30) as sock:
+        sock.sendall(raw)
+        reply = b""
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            reply += chunk
+    assert reply.startswith(b"HTTP/1.1 403")
+
+
+def test_a_change_needs_the_cookie_the_header_and_the_origin(srv, state):
+    assert change(srv, {"steer": "on"}, X_Orch_UI=None)[0] == 403
+    assert change(srv, {"steer": "on"}, X_Orch_UI="yes")[0] == 403
+    assert change(srv, {"steer": "on"}, Origin=None)[0] == 403
+    assert change(srv, {"steer": "on"}, Origin="http://evil.example")[0] == 403
+    assert change(srv, {"steer": "on"}, Origin=f"http://127.0.0.1:{srv.port + 1}")[0] == 403
+    assert change(srv, {"steer": "on"}, Origin="null")[0] == 403
+    assert change(srv, {"steer": "on"}, Cookie=f"{srv.cookie}=nope")[0] == 403
+    assert config.load(state)["steer"] is False                                          # none got through
+    code, headers, body = change(srv, {"steer": "on"})
+    assert code == 200 and headers["cache-control"] == "no-store"
+    out = json.loads(body)
+    assert out["steer"] is True and out["lines"] == ["steer: on"] and out["error"] is None
+    assert config.load(state)["steer"] is True
+    code, _, _ = change(srv, {"steer": "off"}, Host=f"localhost:{srv.port}", Origin=f"http://localhost:{srv.port}")
+    assert code == 200 and config.load(state)["steer"] is False
+
+
+def test_a_change_is_checked_as_orch_config_checks_it(srv, state):
+    for bad in ({}, {"steer": "maybe"}, {"steer": True}, {"steer": "on", "wake": "on"}, {"idle_seconds": "on"}, []):
+        code, _, body = change(srv, bad)
+        assert code == 400 and json.loads(body)["schema"] == data.SCHEMA, bad
+    assert ask(srv, "POST", "/api/config", {"X-Orch-UI": "1", "Origin": f"http://127.0.0.1:{srv.port}",
+                                           "Content-Type": "text/plain"}, b'{"steer": "on"}')[0] == 415
+    assert ask(srv, "POST", "/api/config", {"X-Orch-UI": "1", "Origin": f"http://127.0.0.1:{srv.port}",
+                                           "Content-Type": "application/json"}, b"{nope")[0] == 400
+    big = json.dumps({"steer": "on", "x": "y" * 5000}).encode()
+    assert ask(srv, "POST", "/api/config", {"X-Orch-UI": "1", "Origin": f"http://127.0.0.1:{srv.port}",
+                                           "Content-Type": "application/json"}, big)[0] == 413
+    assert config.load(state) == config.DEFAULTS
+    assert ask(srv, "GET", "/api/config?steer=on")[0] == 200 and config.load(state)["steer"] is False   # GET changes nothing
+
+
+def test_wake_goes_through_orch_config_and_its_hooks(srv, state):
+    code, _, body = change(srv, {"wake": "on"})
+    assert code == 200 and json.loads(body)["lines"] == ["wake: on", "Run orch init to install the hooks; the wake "
+                                                         "hook comes with them."]
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0          # in the test's own empty folder
+    settings = Path(config.load(state)["settings"])
+    code, _, body = change(srv, {"wake": "off"})
+    out = json.loads(body)
+    assert code == 200 and out["wake"] is False and out["lines"][1].startswith("Updated the hooks in")
+    stop = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["Stop"]
+    assert [e["hooks"][0]["args"][-1] for e in stop] == ["Stop"]       # the wake hook came out
+
+
+# --------------------------------------------------------------------------------------- #
+# What it answers
+# --------------------------------------------------------------------------------------- #
+@pytest.mark.parametrize("path,ctype", [("/", "text/html"), ("/app.css", "text/css"), ("/app.js", "text/javascript"),
+                                        ("/mark.svg", "image/svg+xml"), ("/favicon.svg", "image/svg+xml")])
+def test_static_files_come_with_the_security_headers(srv, path, ctype):
+    code, headers, body = ask(srv, "GET", path)
+    assert code == 200 and headers["content-type"].startswith(ctype)
+    assert headers["content-security-policy"] == ui_server.CSP
+    assert headers["x-content-type-options"] == "nosniff" and headers["referrer-policy"] == "no-referrer"
+    name = ui_server.STATIC[path][0]
+    assert body == (STATIC / name).read_bytes()
+
+
+def test_every_answer_has_the_security_headers_and_the_api_is_never_stored(srv):
+    for method, path, cookie in (("GET", "/api/status", True), ("GET", "/api/nope", True), ("GET", "/nope", True),
+                                 ("GET", "/api/status", False), ("PUT", "/api/status", True), ("POST", "/api/nope", True)):
+        code, headers, _ = ask(srv, method, path, {"X-Orch-UI": "1", "Origin": f"http://127.0.0.1:{srv.port}",
+                                                   "Content-Type": "application/json"} if method == "POST" else None,
+                               b"{}" if method == "POST" else None, cookie=cookie)
+        assert headers["content-security-policy"] == ui_server.CSP, (method, path)
+        assert headers["x-content-type-options"] == "nosniff" and headers["referrer-policy"] == "no-referrer"
+        if path.startswith("/api/"):
+            assert headers["cache-control"] == "no-store", (method, path, code)
+
+
+@pytest.mark.parametrize("path", ["/../server.py", "/static/../server.py", "/..%2fserver.py", "/%2e%2e/%2e%2e/etc/passwd",
+                                  "/app.js/../server.py", "//etc/passwd", "/static/app.js", "/static/", "/server.py",
+                                  "/data.py", "/ui/server.py", "/index.html/", "/app.js%00.html", "/.%2e/server.py",
+                                  "/..\\server.py", "/app.js/", "/APP.JS"])
+def test_only_the_listed_files_are_served(srv, path):
+    code, _, body = ask(srv, "GET", path)
+    assert code == 404 and b"import" not in body and b"<html" not in body
+
+
+def test_the_api_answers_with_a_schema(srv, state, tmp_path):
+    fill(state, tmp_path)
+    for path in ("/api/status", "/api/status?ended=1", "/api/sessions/A", "/api/findings", "/api/findings?state=all",
+                 "/api/findings/" + "O3%7Ca.py%3A%3Acharge%7CA%7CB%7Cc.py", "/api/notes?session=B&kind=edit&state=pending",
+                 "/api/push", "/api/health", "/api/config"):
+        code, headers, body = ask(srv, "GET", path)
+        out = json.loads(body)
+        assert code == 200 and headers["content-type"] == "application/json; charset=utf-8", path
+        assert out["schema"] == 1, path
+    status = json.loads(ask(srv, "GET", "/api/status")[2])
+    assert status["ui"] == {"version": cli.__version__, "demo": False}
+    assert [s["id"] for s in status["repositories"][0]["sessions"]] == ["A", "B"]
+    assert json.loads(ask(srv, "GET", "/api/sessions/B")[2])["notes_received"][0]["text"] == "a note"
+    assert json.loads(ask(srv, "GET", "/api/findings/O3%7Ca.py%3A%3Acharge%7CA%7CB%7Cc.py")[2])["finding"]["rule"] == "O3"
+    for path in ("/api/sessions/nobody", "/api/findings/nothing", "/api/other"):
+        code, _, body = ask(srv, "GET", path)
+        assert code == 404 and json.loads(body)["schema"] == 1
+    for path in ("/api/status?ended=2", "/api/findings?state=gone", "/api/notes?kind=email", "/api/notes?state=lost"):
+        code, _, body = ask(srv, "GET", path)
+        assert code == 400 and "must be one of" in json.loads(body)["error"]
+
+
+def test_an_unchanged_answer_gets_a_304(srv, state, tmp_path):
+    fill(state, tmp_path)
+    for path in ("/api/status", "/api/sessions/A", "/api/notes", "/app.js"):
+        code, headers, _ = ask(srv, "GET", path)
+        tag = headers["etag"]
+        code, again, body = ask(srv, "GET", path, {"If-None-Match": tag})
+        assert code == 304 and body == b"" and again["etag"] == tag, path
+        assert again["content-security-policy"] == ui_server.CSP
+        assert ask(srv, "GET", path, {"If-None-Match": '"other", ' + tag})[0] == 304
+        assert ask(srv, "GET", path, {"If-None-Match": '"other"'})[0] == 200
+    tag = ask(srv, "GET", "/api/config")[1]["etag"]
+    assert change(srv, {"steer": "on"})[0] == 200
+    assert ask(srv, "GET", "/api/config", {"If-None-Match": tag})[0] == 200                # it changed
+
+
+def test_a_status_that_only_grew_older_keeps_its_etag():
+    payload = {"schema": 1, "repositories": [{"sessions": [{"id": "A", "last_event": "x", "seconds_since_last_event": 3}]}]}
+    older = json.loads(json.dumps(payload))
+    older["repositories"][0]["sessions"][0]["seconds_since_last_event"] = 4
+    newer = json.loads(json.dumps(payload))
+    newer["repositories"][0]["sessions"][0]["last_event"] = "y"
+
+    def tag(p):
+        return ui_server._etag(ui_server._dump(ui_server._without(p, ui_server.VOLATILE)), weak=True)
+    assert tag(payload) == tag(older) and tag(payload) != tag(newer)
+
+
+def test_the_record_is_never_written(srv, state, tmp_path):
+    fill(state, tmp_path)
+    before = Path(state.record).read_bytes()
+    stamp = os.stat(state.record).st_mtime_ns
+    rec = Record(state.record, readonly=True)
+    rows = [list(map(tuple, rec.db.execute(f"SELECT * FROM {t}"))) for t in ("sessions", "findings", "notes", "events")]
+    rec.close()
+    for _ in range(3):
+        for path in ("/api/status", "/api/status?ended=1", "/api/sessions/A", "/api/findings?state=all",
+                     "/api/findings/O3%7Ca.py%3A%3Acharge%7CA%7CB%7Cc.py", "/api/notes", "/api/push", "/api/health",
+                     "/api/config"):
+            assert ask(srv, "GET", path)[0] == 200
+        assert change(srv, {"steer": "on"})[0] == 200
+    assert Path(state.record).read_bytes() == before and os.stat(state.record).st_mtime_ns == stamp
+    rec = Record(state.record, readonly=True)
+    assert [list(map(tuple, rec.db.execute(f"SELECT * FROM {t}"))) for t in ("sessions", "findings", "notes", "events")] == rows
+    rec.close()
+    assert sorted(p.name for p in Path(state.root).iterdir() if p.name.startswith("record")) == ["record.sqlite"]
+
+
+def test_without_a_record_none_is_made(srv, state):
+    for path in ("/api/status", "/api/sessions/A", "/api/findings", "/api/notes", "/api/push", "/api/health"):
+        assert ask(srv, "GET", path)[0] in (200, 404)
+    assert not os.path.exists(state.record)
+
+
+# --------------------------------------------------------------------------------------- #
+# The page's files
+# --------------------------------------------------------------------------------------- #
+class _Refs(html.parser.HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.refs = []
+
+    def handle_starttag(self, tag, attrs):
+        for name, value in attrs:
+            if name in ("src", "href", "action", "srcset", "data", "poster", "xlink:href") and value:
+                self.refs.append((tag, value))
+
+
+def test_the_page_refers_only_to_its_own_files():
+    page = (STATIC / "index.html").read_text(encoding="utf-8")
+    parser = _Refs()
+    parser.feed(page)
+    files = [v for tag, v in parser.refs if not v.startswith("#")]
+    assert sorted(files) == ["/app.css", "/app.js", "/favicon.svg"]
+    for ref in files:
+        assert ref in ui_server.STATIC and (STATIC / ui_server.STATIC[ref][0]).is_file()
+    assert "<style" not in page and " style=" not in page and "<script>" not in page        # nothing inline
+    assert sorted(p.name for p in STATIC.iterdir()) == sorted(name for name, _ in ui_server.STATIC.values())
+
+
+def test_the_page_makes_no_request_elsewhere():
+    for name in ("index.html", "app.css", "app.js", "favicon.svg", "mark.svg"):
+        text = (STATIC / name).read_text(encoding="utf-8")
+        urls = re.findall(r"(?:https?:)?//[A-Za-z0-9.-]+\.[A-Za-z]{2,}[^\s'\")]*", text)
+        assert set(urls) <= {"http://www.w3.org/2000/svg"}, (name, urls)        # an XML namespace, never fetched
+        assert "@import" not in text and "url(" not in text.replace("data:", "")
+    js = (STATIC / "app.js").read_text(encoding="utf-8")
+    assert "innerHTML" not in js.split("\n", 3)[3] and "insertAdjacentHTML" not in js and "eval(" not in js
+    assert set(re.findall(r"""['"](/api/[a-z/]+)""", js)) <= {"/api/status?ended=", "/api/demo", "/api/push",
+                                                            "/api/sessions/", "/api/findings/", "/api/notes?",
+                                                            "/api/config", "/api/health", "/api/demo/next"} | {
+        "/api/status", "/api/sessions", "/api/findings", "/api/notes"}
+
+
+def test_the_mark_and_the_favicon_are_the_brand_s():
+    mark = (STATIC / "mark.svg").read_text(encoding="utf-8")
+    assert 'viewBox="0 0 96 96"' in mark and 'd="M19 18 L50.2 36 M19 78 L50.2 60"' in mark
+    assert 'stroke="#38000A" stroke-width="10"' in mark and 'cx="71" cy="48" r="11" fill="#CD1C18"' in mark
+    favicon = (STATIC / "favicon.svg").read_text(encoding="utf-8")
+    assert favicon.startswith('<svg xmlns="http://www.w3.org/2000/svg" viewBox="10 10 76 76">')
+    assert "@media (prefers-color-scheme:dark){.i{stroke:#FFF3F0}.a{fill:#FFA896}}" in favicon
+    assert hashlib.sha256(mark.encode()).hexdigest() != hashlib.sha256(favicon.encode()).hexdigest()
+
+
+# --------------------------------------------------------------------------------------- #
+# orch ui
+# --------------------------------------------------------------------------------------- #
+def test_orch_ui_serves_the_state_folder_until_stopped(state, monkeypatch, capsys):
+    seen = {}
+
+    def fake_serve(s, browser=True, out=None):
+        seen.update(address=s.server_address, browser=browser, root=s.state.root)
+        s.server_close()
+        return 0
+    monkeypatch.setattr(ui_server, "serve", fake_serve)
+    assert cli.main(["ui", "--no-browser"]) == 0
+    assert seen["address"][0] == "127.0.0.1" and seen["browser"] is False and seen["root"] == state.root
+
+
+def test_orch_ui_refuses_a_bad_port(capsys):
+    for bad in ("70000", "-1", "http"):
+        with pytest.raises(SystemExit) as exit_info:
+            cli.main(["ui", "--port", bad])
+        assert exit_info.value.code == 2
+    assert "not a port number" in capsys.readouterr().err
+
+
+def test_a_port_in_use_is_reported(state, capsys):
+    taken = socket.socket()
+    taken.bind(("127.0.0.1", 0))
+    taken.listen(1)
+    try:
+        assert ui_server.main(port=taken.getsockname()[1], browser=False) == 2
+        assert "cannot listen on 127.0.0.1" in capsys.readouterr().err
+    finally:
+        taken.close()
+
+
+def test_serve_prints_the_link_and_stops_on_ctrl_c(state, monkeypatch):
+    s = ui_server.Server(state, 0)
+
+    def interrupted(poll_interval=0.5):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(s, "serve_forever", interrupted)
+    lines = []
+
+    class Out:
+        def write(self, text):
+            lines.append(text)
+
+        def flush(self):
+            pass
+    assert ui_server.serve(s, browser=False, out=Out()) == 0
+    text = "".join(lines)
+    assert s.url in text and "works once" in text and "stopped" in text

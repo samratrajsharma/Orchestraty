@@ -343,6 +343,35 @@ def cmd_doctor(args):
     return doctor.run(State(), os.getcwd(), index=not args.no_index)
 
 
+def set_switch(state, name, on):
+    """Turn steer or wake on or off in config.json; for wake, also update the plugin's switch
+    when the plugin runs the hooks, or else reinstall the hooks where orch init installed them. orch config and orch ui both
+    use it. Returns (the lines to show, hooks.Refused or None when the settings file would not
+    take the change; config.json is saved either way)."""
+    from orchestraty import config
+    cfg = config.load(state)
+    cfg[name] = on
+    config.save(state, cfg)
+    lines = [f"{name}: {'on' if on else 'off'}"]
+    if name == "wake":
+        switch = plugin.read_switch(state)
+        if switch is not None:                   # the plugin runs the hooks: its switch carries wake
+            plugin.write_switch(state, switch[0], cfg["wake"])
+            return lines + ["Updated the plugin's hooks; sessions started from now on use it."], None
+        path = cfg["settings"]
+        if not path:
+            return lines + ["Run orch init to install the hooks; the wake hook comes with them."], None
+        try:
+            mod = hooks.mod_in(hooks.load_settings(path), state.mod)
+            changed, saved = hooks.install(state, path, hooks.hook_python(), cfg["wake"], mod)
+        except hooks.Refused as exc:
+            return lines, exc
+        if changed:
+            lines.append(f"Updated the hooks in {path}." + (f" Backup: {saved}" if saved else ""))
+            lines.append("Sessions started from now on use it.")
+    return lines, None
+
+
 def cmd_config(args):
     from orchestraty import config
     state = State()
@@ -354,27 +383,10 @@ def cmd_config(args):
     if args.value is None:
         print(f"{args.name}: {'on' if cfg[args.name] else 'off'}")
         return 0
-    cfg[args.name] = args.value == "on"
-    config.save(state, cfg)
-    print(f"{args.name}: {args.value}")
-    if args.name == "wake":
-        switch = plugin.read_switch(state)
-        if switch is not None:                   # the plugin runs the hooks: its switch carries wake
-            plugin.write_switch(state, switch[0], cfg["wake"])
-            print("Updated the plugin's hooks; sessions started from now on use it.")
-            return 0
-        path = cfg["settings"]
-        if not path:
-            print("Run orch init to install the hooks; the wake hook comes with them.")
-            return 0
-        try:
-            mod = hooks.mod_in(hooks.load_settings(path), state.mod)
-            changed, saved = hooks.install(state, path, hooks.hook_python(), cfg["wake"], mod)
-        except hooks.Refused as exc:
-            return _refuse("config", exc)
-        if changed:
-            print(f"Updated the hooks in {path}." + (f" Backup: {saved}" if saved else ""))
-            print("Sessions started from now on use it.")
+    lines, refused = set_switch(state, args.name, args.value == "on")
+    print("\n".join(lines))
+    if refused:
+        return _refuse("config", refused)
     return 0
 
 
@@ -948,6 +960,21 @@ def cmd_events(args):
         return 0
 
 
+def cmd_ui(args):
+    from orchestraty.ui import server
+    return server.main(port=args.port, browser=not args.no_browser)
+
+
+def _port(text):
+    try:
+        port = int(text)
+    except ValueError:
+        port = -1
+    if not 0 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"not a port number: {text}")
+    return port
+
+
 def cmd_coordinator(args):
     from orchestraty.coordinator import main as coordinator
     from orchestraty.coordinator.lock import Lock, touch
@@ -1320,6 +1347,13 @@ def build_parser():
                                              "with its fix; the exit code is 1 when there is one.")
     doctor.add_argument("--no-index", action="store_true", help="do not time the first index of this repository")
     doctor.set_defaults(handler=cmd_doctor)
+
+    ui = commands.add_parser("ui", help="the dashboard, in your browser (this computer only)",
+                             description="Serve the dashboard on 127.0.0.1 and open it in the browser through a link "
+                                         "that works once. Runs until Ctrl+C.")
+    ui.add_argument("--port", type=_port, default=0, metavar="N", help="the port to listen on (default: a free one)")
+    ui.add_argument("--no-browser", action="store_true", help="only print the link")
+    ui.set_defaults(handler=cmd_ui)
 
     coordinator = commands.add_parser("coordinator", help="run or stop the coordinator by hand",
                                       description="Hooks start the coordinator when needed; these are for "
