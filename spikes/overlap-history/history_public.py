@@ -289,10 +289,12 @@ def prefetch(top, wants):
     for commit, paths in wants:
         if not commit or paths == []:
             continue
-        _, out = _run(top, ["ls-tree", "-r", "-z", "--full-tree", commit] + (["--"] + list(paths) if paths else []))
-        for record in out.split("\0"):
-            parts = record.partition("\t")[0].split()
-            if len(parts) == 3 and parts[1] == "blob":
+        wanted = None if paths is None else set(paths)
+        _, out = _run(top, ["ls-tree", "-r", "-z", "--full-tree", commit])   # filtered here: a long list of paths
+        for record in out.split("\0"):                                      # would not fit on a command line
+            meta, _, path = record.partition("\t")
+            parts = meta.split()
+            if len(parts) == 3 and parts[1] == "blob" and (wanted is None or path in wanted):
                 oids.add(parts[2])
     missing = _missing(top, sorted(oids))
     for i in range(0, len(missing), FETCH_CHUNK):

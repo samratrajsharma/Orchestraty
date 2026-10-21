@@ -18,6 +18,7 @@ from history_repos import git
 
 GRACE = 10 * 60
 PYTHON = (".py",)
+ARG_BUDGET = 16000          # characters of paths per git call: Windows caps a command line at 32,767
 
 
 def reflog(top):
@@ -53,15 +54,29 @@ def own_commits(top, start, end, log=None):
             if start <= t <= end + GRACE and subject.startswith("commit")]
 
 
+def _batches(paths):
+    """The paths in lists that each fit on one command line."""
+    batch, size = [], 0
+    for p in paths:
+        if batch and size + len(p) + 3 > ARG_BUDGET:
+            yield batch
+            batch, size = [], 0
+        batch.append(p)
+        size += len(p) + 3
+    if batch:
+        yield batch
+
+
 def files_at(top, commit, paths):
     """{path: ParsedFile or None} for the given posix paths at `commit`."""
-    out = git(top, "ls-tree", "-z", commit, "--", *paths, check=False) if paths else ""
     blobs = {}
-    for record in (out or "").split("\0"):
-        meta, _, path = record.partition("\t")
-        parts = meta.split()
-        if len(parts) == 3 and parts[1] == "blob":
-            blobs[path] = parts[2]
+    for batch in _batches(paths):
+        out = git(top, "ls-tree", "-z", commit, "--", *batch, check=False) or ""
+        for record in out.split("\0"):
+            meta, _, path = record.partition("\t")
+            parts = meta.split()
+            if len(parts) == 3 and parts[1] == "blob":
+                blobs[path] = parts[2]
     data = read_blobs(top, list(blobs.values())) if blobs else {}
     return {p: (parse_file(p, None, text=blob_text(data[blobs[p]])) if p in blobs else None) for p in paths}
 

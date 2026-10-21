@@ -158,6 +158,16 @@ def test_the_counts_the_report_and_no_descriptions_kept(scanned):
     assert "Generated with" not in kept and "Keyword-only currency" not in kept
 
 
+def test_thousands_of_paths_do_not_overflow_a_command_line(scanned):
+    from history_changes import files_at
+    _, out, sha = scanned
+    top = str(out / "repos" / "o__r")
+    many = ["deep/" * 25 + "f%d.py" % i for i in range(3000)]        # far past Windows' 32,767 characters
+    assert hp.prefetch(top, [(sha["s3"], many + ["c.py"])]) >= 0
+    found = files_at(top, sha["s3"], many + ["a.py"])
+    assert found["a.py"] is not None and all(found[p] is None for p in many)
+
+
 def test_a_rerun_the_same_day_reuses_each_repository_scanned(scanned, monkeypatch):
     result, out, _ = scanned
 
