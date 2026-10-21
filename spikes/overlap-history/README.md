@@ -26,6 +26,23 @@ It needs Python 3.10 or later (as the engine does). It shows what it reads and a
 4. Overlaps by rule, with the product's own rule code (`orchestraty.rules.overlap`): O1 the same file, O2 the same function, O3 a breaking change used in a file the other changed, O4 a removed function still used there, O6 callers neither session updated.
 5. What followed within 14 days: a text conflict when both were merged, a revert, or a later fix to a function the overlap involves.
 
+## Public history
+
+`history_public.py` runs the same rules on agent pull requests in public GitHub repositories: Python, merged in the last 183 days.
+
+```
+python history_public.py select                      # GitHub's API only, through gh: candidates.json
+python history_public.py scan OWNER/NAME [...]        # partial clones of the named repositories, then the rules
+```
+
+- **Agent pull requests:** Claude Code's footer or a Codex task link in the description, a coding agent's GitHub app as the author, or an agent's branch prefix (`claude/`, `codex/`, `copilot/`).
+- **Parallel pairs:** two agent pull requests into one base branch whose open periods (created to merged) overlap.
+- **Each change:** the head against its merge base with the base branch just before it merged. Each pull request is a place of its own, so the function-level rules apply.
+- **What followed, within 14 days of the later merge:** a text conflict between the two heads in a file both changed, and a revert or a later fix on the base branch.
+- **What it downloads:** `select` calls the API only and lists each candidate's size. `scan` clones the repositories it is named, and only those: partial clones (commits and trees) under `--out` (default `~/orch-phase0/agent-history`). A file's contents are fetched in batches when a commit that needs them is read. Nothing is checked out or run.
+- **What it writes:** `public-result.json`, `public-counts.json` and `public-report.html`, in a folder named for the day. Pull-request titles and descriptions are not kept.
+- **Limits:** merged pull requests only, so rework done before merging is not seen and the rate is a lower bound. Python only. Pull requests from forks are left out and counted.
+
 ## Files
 
 | File | What it is |
@@ -37,7 +54,8 @@ It needs Python 3.10 or later (as the engine does). It shows what it reads and a
 | `history_report.py` | The local report and the counts file. |
 | `history_cli.py` | The command, with the consent text. |
 | `history_build.py` | Builds the one-file zipapp (this folder, the engine and the product package). |
-| `test_history_*.py` | Tests: synthetic logs with planted strings that must never come back out, and a real tiny repository with two parallel sessions. |
+| `history_public.py` | The public history: candidates through gh, partial clones, and the rules on pairs of agent pull requests. |
+| `test_history_*.py` | Tests: synthetic logs with planted strings that must never come back out, a real tiny repository with two parallel sessions, and a local stand-in for GitHub with pull-request refs. |
 
 ## Run the tests
 

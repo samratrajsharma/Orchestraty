@@ -8,7 +8,7 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 
 collect_ignore = []
 if sys.version_info < (3, 10):
-    collect_ignore = ["test_history_pairs.py", "test_history_cli.py"]
+    collect_ignore = ["test_history_pairs.py", "test_history_cli.py", "test_history_public.py"]
 else:
     for sub in ("orchestraty", "engine"):
         path = os.path.join(REPO, sub)
