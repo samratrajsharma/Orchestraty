@@ -22,6 +22,7 @@ The API answers in JSON, always with a ``schema`` number:
 | GET /api/push                                | the push lines, with their worktree and session            |
 | GET /api/health                              | the coordinator, the record and the state folder           |
 | GET /api/config, POST /api/config            | the switches and watched repositories; set steer or wake   |
+| GET /api/demo, POST /api/demo/next           | the sandbox's steps; run the next (orch ui --demo only)    |
 
 It reads the state folder through ``ui.data`` (the record read-only, per request); the
 switches go through the same code as orch config. JSON comes with an ETag, and an unchanged
@@ -29,6 +30,7 @@ answer gets a 304. The ETag leaves out the seconds since each session's last eve
 page works out from the time of that event, so a status that only grew older is not sent
 again.
 """
+import atexit
 import hashlib
 import hmac
 import http.cookies
@@ -69,6 +71,7 @@ NO_COOKIE = "Forbidden: open the link that orch ui printed in your terminal."
 WRONG = "Forbidden: this is not the link orch ui printed. Open the one in your terminal."
 USED = ("Forbidden: this link was used already. To open the dashboard in another browser, stop orch ui "
         "(Ctrl+C) and run it again (with --no-browser to open the new link yourself).")
+DEMO_WAKE = "In the demo this changes only the demo's own state folder; no Claude Code settings are touched."
 
 
 def _dump(payload):
@@ -107,6 +110,7 @@ class Server(ThreadingHTTPServer):
 
     def __init__(self, state, port=0):
         self.state = state
+        self.demo = None
         self.token = secrets.token_urlsafe(32)        # the link's
         self.secret = secrets.token_urlsafe(32)       # the cookie's
         self._redeemed = False
@@ -276,7 +280,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _api(self, path, query):
         """(status, payload) for one GET under /api/."""
-        state = self.server.state
+        state, demo = self.server.state, self.server.demo is not None
 
         def arg(name, allowed=None):
             value = query.get(name) or None
@@ -288,7 +292,7 @@ class Handler(BaseHTTPRequestHandler):
             return (200, payload) if payload is not None else (404, _err(f"no such {what}"))
 
         if path == "/api/status":
-            return 200, data.status_payload(state, include_ended=arg("ended", ("0", "1")) == "1")
+            return 200, data.status_payload(state, include_ended=arg("ended", ("0", "1")) == "1", demo=demo)
         if path.startswith("/api/sessions/"):
             return found(data.session_payload(state, unquote(path[len("/api/sessions/"):])), "session")
         if path == "/api/findings":
@@ -301,9 +305,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/push":
             return 200, data.push_payload(state)
         if path == "/api/health":
-            return 200, data.health_payload(state)
+            return 200, data.health_payload(state, demo=demo)
         if path == "/api/config":
             return 200, data.config_payload(state)
+        if path == "/api/demo":
+            return (200, self.server.demo.payload()) if demo else (404, _err("not a demo: run orch ui --demo"))
         return 404, _err("no such endpoint")
 
     # ------------------------------------------------------------------ POST
@@ -339,7 +345,18 @@ class Handler(BaseHTTPRequestHandler):
         """(status, payload) for one POST under /api/."""
         if path == "/api/config":
             return self._set_switch(body)
+        if path == "/api/demo/next":
+            return self._demo_next()
         return 404, _err("no such endpoint")
+
+    def _demo_next(self):
+        from orchestraty.ui import demo
+        if self.server.demo is None:
+            return 404, _err("not a demo: run orch ui --demo")
+        try:
+            return 200, self.server.demo.next_step()
+        except (demo.Busy, demo.Finished) as exc:
+            return 409, _err(str(exc))
 
     def _set_switch(self, body):
         """{"steer": "on"|"off"} or {"wake": "on"|"off"}, checked as orch config checks them."""
@@ -348,6 +365,8 @@ class Handler(BaseHTTPRequestHandler):
             raise BadRequest('send {"steer": "on"} or "off", or {"wake": "on"} or "off"')
         [(name, value)] = body.items()
         lines, refused = cli.set_switch(self.server.state, name, value == "on")
+        if self.server.demo is not None and name == "wake":
+            lines = lines[:1] + [DEMO_WAKE]                # the demo has no hooks to reinstall
         cfg = config.load(self.server.state)
         return 200, {"schema": data.SCHEMA, "steer": cfg["steer"], "wake": cfg["wake"], "lines": lines,
                      "error": f"orch config: {refused}" if refused else None}
@@ -373,6 +392,8 @@ def serve(server, browser=True, out=None):
     """Print the link, open it in the browser, and serve until Ctrl+C."""
     out = out or sys.stdout
     print(f"orch ui: {server.url}", file=out)
+    if server.demo is not None:
+        print(f"Sandbox demo in {server.demo.root}: removed when orch ui stops.", file=out)
     print("The link works once, in one browser on this computer (the server listens on 127.0.0.1 only). "
           "Ctrl+C stops it.", file=out, flush=True)
     if threading.current_thread() is threading.main_thread():
@@ -391,10 +412,24 @@ def serve(server, browser=True, out=None):
     return 0
 
 
-def main(port=0, browser=True):
+def main(port=0, browser=True, demo=False):
+    sandbox = None
+    if demo:
+        from orchestraty.ui.demo import Demo
+        try:
+            sandbox = Demo()
+        except Exception as exc:
+            print(f"orch ui --demo: no sandbox: {exc}", file=sys.stderr)
+            return 2
+        atexit.register(sandbox.close)                 # also when something unexpected ends the process
     try:
-        server = Server(State(), port)
-    except OSError as exc:
-        print(f"orch ui: cannot listen on 127.0.0.1:{port}: {exc.strerror or exc}", file=sys.stderr)
-        return 2
-    return serve(server, browser)
+        try:
+            server = Server(sandbox.state if sandbox else State(), port)
+        except OSError as exc:
+            print(f"orch ui: cannot listen on 127.0.0.1:{port}: {exc.strerror or exc}", file=sys.stderr)
+            return 2
+        server.demo = sandbox
+        return serve(server, browser)
+    finally:
+        if sandbox is not None:
+            sandbox.close()

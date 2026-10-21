@@ -962,7 +962,7 @@ def cmd_events(args):
 
 def cmd_ui(args):
     from orchestraty.ui import server
-    return server.main(port=args.port, browser=not args.no_browser)
+    return server.main(port=args.port, browser=not args.no_browser, demo=args.demo)
 
 
 def _port(text):
@@ -1353,6 +1353,8 @@ def build_parser():
                                          "that works once. Runs until Ctrl+C.")
     ui.add_argument("--port", type=_port, default=0, metavar="N", help="the port to listen on (default: a free one)")
     ui.add_argument("--no-browser", action="store_true", help="only print the link")
+    ui.add_argument("--demo", action="store_true",
+                    help="a sandbox: two pretend sessions in a temporary folder, run step by step from the page")
     ui.set_defaults(handler=cmd_ui)
 
     coordinator = commands.add_parser("coordinator", help="run or stop the coordinator by hand",
