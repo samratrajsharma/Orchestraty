@@ -1,0 +1,1 @@
+"""The dashboard (orch ui): a page on 127.0.0.1 that shows the state folder full screen, the sessions, their changes, the overlaps and the notes; read-only toward the record. Also the sandbox demo (orch ui --demo)."""
