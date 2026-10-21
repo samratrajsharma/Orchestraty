@@ -313,6 +313,43 @@ def test_events_repos_and_sessions(tmp_path):
     assert rec.repos()[0]["name"] == "Repo"
 
 
+def test_a_sessions_recent_events_come_latest_first(tmp_path):
+    path = str(tmp_path / "record.sqlite")
+    rec = Record(path)
+    with rec.transaction():
+        for i in range(5):
+            rec.add_event({"ts": i, "agent": "claude", "event": f"E{i}", "session_id": "s1"})
+        rec.add_event({"ts": 9, "agent": "claude", "event": "Other", "session_id": "s2"})
+    rec.close()
+    reader = Record(path, readonly=True)
+    try:
+        assert [e["event"] for e in reader.recent_events("s1", limit=3)] == ["E4", "E3", "E2"]
+        assert len(reader.recent_events("s1")) == 5 and reader.recent_events("nope") == []
+    finally:
+        reader.close()
+
+
+def test_one_finding_by_its_key_in_any_state(tmp_path):
+    from orchestraty.rules.overlap import Finding
+    path = str(tmp_path / "record.sqlite")
+    rec = Record(path)
+    f = Finding("O6|a.py::charge|A", "O6", "strong", ("A",), changer="A", symbol="a.py::charge", file="a.py",
+                detail={"left": [{"symbol": "b.py::pay", "file": "b.py", "lines": [5]}]})
+    with rec.transaction():
+        rec.put_finding(1, f, 10)
+        rec.resolve_finding(f.key, 20)
+    rec.close()
+    reader = Record(path, readonly=True)
+    try:
+        got = reader.finding(f.key)
+        assert got["state"] == "resolved" and got["resolved"] == 20 and got["sessions"] == ["A"]
+        assert got["detail"]["left"][0]["lines"] == [5]
+        assert got == reader.findings(states=None)[0]
+        assert reader.finding("O6|nope|A") is None
+    finally:
+        reader.close()
+
+
 def test_a_failed_transaction_leaves_nothing(tmp_path):
     rec = Record(str(tmp_path / "record.sqlite"))
     with pytest.raises(RuntimeError):

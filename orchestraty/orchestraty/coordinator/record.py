@@ -271,6 +271,12 @@ class Record:
             "SELECT ts, session_id, cwd, file_path FROM events WHERE event = 'PostToolUse' AND file_path IS NOT NULL "
             "AND ts >= ? ORDER BY id", (since,))]
 
+    def recent_events(self, session_id, limit=200):
+        """A session's last `limit` events, latest first."""
+        rows = self.db.execute("SELECT * FROM events WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+                               (session_id, int(limit)))
+        return [dict(r) for r in rows]
+
     # repositories
     def repo_id(self, common_dir):
         key = repo_key(common_dir)
@@ -369,6 +375,7 @@ class Record:
         return [_finding_row(r) for r in self.db.execute(sql + " ORDER BY key", args)]
 
     def finding(self, key):
+        """One finding by its key, in whatever state, or None."""
         row = self.db.execute("SELECT * FROM findings WHERE key = ?", (key,)).fetchone()
         return _finding_row(row) if row else None
 
