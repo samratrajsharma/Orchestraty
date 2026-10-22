@@ -592,6 +592,21 @@ def cmd_resume(args):
         return _refuse("resume", f"the agent could not start: {exc}")
 
 
+def cmd_merge_order(args):
+    from orchestraty import status
+    data = status.collect(State())
+    lines = []
+    for repo in data["repositories"]:
+        if repo["merge_order"]:
+            lines.append(f"{repo['name']}  ({repo['common_dir']})")
+            lines += ["  " + m["line"] for m in repo["merge_order"]]
+    if not lines:
+        print("Nothing to say about merge order: no session uses a change another session made that breaks it.")
+        return 0
+    print("\n".join(lines))
+    return 0
+
+
 def _seconds(text):
     try:
         value = int(text)
@@ -985,6 +1000,11 @@ def build_parser():
     res.add_argument("--dry-run", action="store_true", help="only say what would run")
     res.add_argument("--yes", action="store_true", help="do not ask first")
     res.set_defaults(handler=cmd_resume)
+    merge = commands.add_parser("merge-order", help="which session's branch to merge first",
+                                description="Merge-order advice from the findings: a session whose work uses "
+                                            "another's breaking change merges after it; two that use each other's "
+                                            "merge together. Reads the record without changing it.")
+    merge.set_defaults(handler=cmd_merge_order)
 
     stats = commands.add_parser("stats", help="how Orchestraty was used, week by week",
                                 description="Usage, week by week, from the record: sessions, findings, notes and "

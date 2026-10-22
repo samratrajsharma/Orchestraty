@@ -6,14 +6,15 @@ and when it does not; ``render`` turns the result into text. The JSON form (``--
 branches (``orch remote``) are a group of their own in each repository, with the last fetch's
 result, which the shadow repository keeps beside it. Each session says which kinds of note its
 agent can be handed (``adapters``), and the text says what an agent there cannot be told. A
-live session's claims (``orch claim``) that hold are listed with it.
+live session's claims (``orch claim``) that hold are listed with it, and each repository has
+its merge-order advice (``mergeorder``).
 """
 import calendar
 import json
 import os
 import time
 
-from orchestraty import adapters, claims as claiming, config, remote
+from orchestraty import adapters, claims as claiming, config, mergeorder, remote
 from orchestraty.coordinator.lock import is_fresh
 from orchestraty.coordinator.record import Record, repo_key, repo_name
 
@@ -68,7 +69,7 @@ def collect(state, include_ended=False, now=None):
     now = time.time() if now is None else now
     cfg = config.load(state)
     data = {"schema": STATUS_SCHEMA, "coordinator": _coordinator(state, now), "repositories": []}
-    sessions_by_repo, repo_rows, changes, findings, declared, claimed = {}, {}, {}, {}, {}, {}
+    sessions_by_repo, repo_rows, changes, findings, declared, claimed, every = {}, {}, {}, {}, {}, {}, {}
     if os.path.exists(state.record):
         record = Record(state.record, readonly=True)
         try:
@@ -82,6 +83,7 @@ def collect(state, include_ended=False, now=None):
             for c in record.claims(active_at=int(now * NS)):
                 claimed.setdefault(c["session_id"], []).append(c)
             for f in record.findings():
+                every.setdefault(f["repo_id"], []).append(f)
                 if include_ended or not f["detail"].get("latent"):
                     findings.setdefault(f["repo_id"], []).append(f)
         finally:
@@ -98,6 +100,7 @@ def collect(state, include_ended=False, now=None):
                                   claimed.get(s["id"], ()) if s["state"] == "live" else ())
                          for s in sorted(local, key=lambda s: (s["started"], s["id"]))],
             "overlaps": [_finding(f) for f in sorted(findings.get(row["id"], []) if row else [], key=_finding_order)],
+            "merge_order": mergeorder.advise(every.get(row["id"], []) if row else [], {s["id"]: s for s in sessions}),
             "cloud": _cloud(state, cfg, common_dir, now, cloud, changes)})
     return data
 
@@ -227,6 +230,8 @@ def render(data, wake=False):
         if repo["overlaps"]:
             lines.append("  overlaps:")
             lines += ["    " + _overlap_line(f, names) for f in repo["overlaps"]]
+        for m in repo.get("merge_order", ()):
+            lines.append("  merge order: " + m["line"])
     if any(s["base_guessed"] for r in data["repositories"] for s in r["sessions"]):
         lines += ["", "base?: the session was first seen after it started, so its base is the commit at that time."]
     return "\n".join(lines) + "\n"

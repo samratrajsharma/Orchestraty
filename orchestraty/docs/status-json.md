@@ -42,6 +42,7 @@ Times are UTC, as `YYYY-MM-DDTHH:MM:SSZ`. Paths of files in a repository are rel
 | `common_dir` | string (folder) | Its git common directory, as watched: what makes worktrees one repository. |
 | `sessions` | array | Its live sessions, oldest first; with `--all`, also the ended ones. See [session](#session). |
 | `overlaps` | array | The open findings between its sessions, strongest first. Latent findings only with `--all`. See [overlap](#overlap). |
+| `merge_order` | array | Merge-order advice, one entry per pair of sessions that it concerns; `[]` when there is nothing to say. See [merge_order](#merge_order). |
 | `cloud` | object | Its cloud agents' branches (`orch remote`): the settings, the last fetch, and the branches followed. See [cloud](#cloud). |
 
 ### Session
@@ -141,6 +142,17 @@ A claim reserves a file, a folder or a Python function or class for one session:
 | `O7` the work two sessions declared or claimed overlaps | medium | `what`: the narrower of the two overlapping items, a path or `path::name`; `kind`: `path` or `symbol`; `how`: `{session id: "declared" or "claimed"}`, how each named it (`claimed` when it did both) |
 
 A latent finding is left out of `overlaps` unless `--all` is given.
+
+### `merge_order`
+
+Worked out from the open findings, the same way every time: when one session is changing a file that uses what another changed in a way that breaks it, or removed (O3, O4, not latent), the other merges first; when each of two sessions uses what the other broke, they merge together, or coordinate.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `sessions` | array of strings | The two sessions: for a one-way order, the one to merge first, then the other; else sorted. |
+| `first` | string | The session to merge first; `""` when the two depend on each other. |
+| `symbols` | array of strings | The functions and classes it is about, `path::name`. |
+| `line` | string | The advice in a line, as `orch status` and `orch merge-order` print it: sessions named by their branch, else the start of their id. |
 
 ### `cloud`
 
