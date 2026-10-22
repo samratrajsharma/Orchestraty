@@ -289,6 +289,21 @@ def cmd_mcp(args):
     return server.main(args.folder)
 
 
+def cmd_events(args):
+    from orchestraty import events
+    try:
+        since = events.parse_since(args.since) if args.since is not None else None
+    except ValueError as exc:
+        return _refuse("events", exc)
+    try:
+        return events.run(State(), sys.stdout, as_json=args.json, follow=args.follow, since=since)
+    except KeyboardInterrupt:
+        return 0
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())     # nothing left to flush at exit
+        return 0
+
+
 def cmd_coordinator(args):
     from orchestraty.coordinator import main as coordinator
     from orchestraty.coordinator.lock import Lock, touch
@@ -440,6 +455,19 @@ def build_parser():
     mcp.add_argument("--folder", metavar="DIR", help="the caller's workspace folder (default: CLAUDE_PROJECT_DIR, "
                                                      "else here)")
     mcp.set_defaults(handler=cmd_mcp)
+
+    events = commands.add_parser("events", help="what changes in the record, as a stream",
+                                 description="Sessions started and ended, findings opened and resolved, notes "
+                                             "written, delivered and withdrawn, and declarations, in the order the "
+                                             "record learned of them. Reads the record without changing it.")
+    how = events.add_mutually_exclusive_group()
+    how.add_argument("--follow", action="store_true", help="keep printing the changes as they come, from now on or "
+                                                           "from --since (polls about once a second)")
+    how.add_argument("--once", action="store_true", help="print the changes there are and end (the default)")
+    events.add_argument("--json", action="store_true", help="one JSON object per line (schema in the 'schema' field)")
+    events.add_argument("--since", metavar="TS", help="from this time on: ISO 8601 (Z for UTC, else local), seconds "
+                                                      "since the epoch, or a time ago such as 10m, 2h or 1d")
+    events.set_defaults(handler=cmd_events)
 
     cfg = commands.add_parser("config", help="show or switch steer and wake",
                               description="steer: a strong note stops the edit it rides on, so the agent re-plans "

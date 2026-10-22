@@ -484,6 +484,12 @@ class Record:
             sql, args = sql + " LIMIT ?", args + [limit]
         return [dict(r) for r in self.db.execute(sql, args)]
 
+    def last_change(self):
+        """The id of the latest change in the log, 0 for none."""
+        if not self.has_table("changes"):
+            return 0
+        return self.db.execute("SELECT COALESCE(MAX(id), 0) FROM changes").fetchone()[0]
+
     def sessions(self, states=None, repo_id=None):
         sql, args = "SELECT * FROM sessions", []
         where = []
