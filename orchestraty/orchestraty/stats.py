@@ -3,8 +3,8 @@
 The weeks are the last 7 days, the 7 before them, and so on back over ``--days`` (default 7).
 Each week counts:
 
-* sessions live at some time in it, agent sessions (with hooks) and plain-git ones, and pairs:
-  two agent sessions on one repository working at the same time;
+* sessions live at some time in it, agent sessions (with hooks), plain-git ones and cloud
+  agents' branches, and pairs: two agent sessions on one repository working at the same time;
 * findings first seen in it, by rule and by strength (latent ones apart);
 * notes made in it, by kind and by state, how many were delivered, and the median and 90th
   percentile of their time to awareness: from the event that caused a note to the note written,
@@ -38,6 +38,7 @@ NS = 1_000_000_000
 DAY = 86400
 WEEK = 7
 LEVEL0_AGENT = "git"
+CLOUD_AGENT = "cloud"
 RULES = ("O1", "O2", "O3", "O4", "O6", "W1")
 STRENGTHS = ("strong", "medium", "weak")
 KINDS = ("edit", "next", "stop", "wake")
@@ -132,7 +133,7 @@ def _weeks(now, days):
 def _week(n, start, end, rec, window_ns):
     lo, hi = int(start * NS), int(end * NS)
     live = [s for s in rec["sessions"].values() if s["started"] < hi and s["last_seen"] >= lo]
-    agents = [s for s in live if s["agent"] != LEVEL0_AGENT]
+    agents = [s for s in live if s["agent"] not in (LEVEL0_AGENT, CLOUD_AGENT)]
     pairs = sum(1 for i, a in enumerate(agents) for b in agents[i + 1:]
                 if a["repo_id"] == b["repo_id"]
                 and max(a["started"], b["started"], lo) <= min(a["last_seen"], b["last_seen"], hi))
@@ -151,7 +152,9 @@ def _week(n, start, end, rec, window_ns):
             latest[row["finding_key"]] = row["verdict"]
     return {
         "week": n, "start": _iso(start), "end": _iso(end),
-        "sessions": {"live": len(live), "agents": len(agents), "plain_git": len(live) - len(agents)},
+        "sessions": {"live": len(live), "agents": len(agents),
+                     "plain_git": sum(1 for s in live if s["agent"] == LEVEL0_AGENT),
+                     "cloud": sum(1 for s in live if s["agent"] == CLOUD_AGENT)},
         "pairs": pairs,
         "findings": {"total": len(shown), "by_rule": _counts((f["rule"] for f in shown), RULES),
                      "by_strength": _counts((f["strength"] for f in shown), STRENGTHS),
@@ -200,7 +203,8 @@ def summary(data):
         notes, aware = w["notes"], w["notes"]["awareness_ms"]
         weeks.append({
             "week": int(w["week"]),
-            "sessions": {k: int(w["sessions"][k]) for k in ("live", "agents", "plain_git")}, "pairs": int(w["pairs"]),
+            "sessions": {k: int(w["sessions"][k]) for k in ("live", "agents", "plain_git", "cloud")},
+            "pairs": int(w["pairs"]),
             "findings": {"total": int(w["findings"]["total"]), "by_rule": known(w["findings"]["by_rule"], RULES),
                          "by_strength": known(w["findings"]["by_strength"], STRENGTHS),
                          "latent": int(w["findings"]["latent"])},
@@ -234,7 +238,8 @@ def render(data):
         s, f, notes = w["sessions"], w["findings"], w["notes"]
         aware = notes["awareness_ms"]
         lines += ["", f"Week {w['week']}  {_day(w['start'])} to {_day(w['end'])}",
-                  f"  sessions    {s['live']} live ({s['agents']} agent, {s['plain_git']} plain git); "
+                  f"  sessions    {s['live']} live ({s['agents']} agent, {s['plain_git']} plain git"
+                  + (f", {s['cloud']} cloud branch" + ("es" if s["cloud"] != 1 else "") if s["cloud"] else "") + "); "
                   f"{_plural(w['pairs'], 'pair')} working at the same time",
                   f"  findings    {f['total']}" + (f" ({_some(f['by_strength'])}): {_some(f['by_rule'])}" if f["total"] else "")
                   + (f"; {f['latent']} latent" if f["latent"] else ""),

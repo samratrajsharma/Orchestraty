@@ -18,6 +18,7 @@ COVERAGE = "Static calls only; dynamic calls are not analysed."
 _UNSAFE = re.compile(r"[^A-Za-z0-9_.:/<>\-\[\]]")
 _UNSAFE_REASON = re.compile(r"[^A-Za-z0-9_ *./]")      # reasons are our own words around identifiers
 AGENTS = {"claude": "Claude Code", "codex": "Codex", "git": "plain-git"}
+CLOUD = "cloud"             # a cloud agent's branch: its agent works elsewhere and is never told
 
 
 def clean(value, limit=MAX_VALUE):
@@ -61,6 +62,8 @@ def _reasons(reasons):
 def describe(session):
     """'another Claude Code session (worktree wt-b, branch feat-b)' from a session row."""
     agent = session.get("agent", "")
+    if agent == CLOUD:
+        return f"the cloud branch {clean(session.get('branch') or '?', 80)}"
     where = f"worktree {clean(os.path.basename(session.get('worktree', '')) or '?', 60)}"
     if session.get("branch"):
         where += f", branch {clean(session['branch'], 60)}"
@@ -106,12 +109,18 @@ def for_user(finding, changer, before_edit=True, elsewhere=True):
         if d.get("moved_to"):
             what += f" It now lives in {_path(d['moved_to'])}."
         hint = both_forms([str(r) for r in d.get("reasons", [])])
+    cloud = changer.get("agent") == CLOUD
     if elsewhere:
-        what += " The change is in that worktree, so your copy does not show it yet; both meet when merged."
+        what += (f" The change is in that {'branch' if cloud else 'worktree'}, so your copy does not show it yet; "
+                 "both meet when merged.")
     when = "before you change this file" if before_edit else "in the code you changed"
-    act = f": {hint}; otherwise agree" if hint else ", and agree"
-    return _cap(f"{what} {clean(finding['file'])} uses it: {uses}. Check these uses {when}{act} with that "
-                f"session if the old form must stay. {COVERAGE}")
+    if cloud:
+        act = f": {hint}; otherwise tell your user" if hint else ", and tell your user"
+        tail = " if the old form must stay: the agent on that branch works elsewhere and is not told."
+    else:
+        act = f": {hint}; otherwise agree" if hint else ", and agree"
+        tail = " with that session if the old form must stay."
+    return _cap(f"{what} {clean(finding['file'])} uses it: {uses}. Check these uses {when}{act}{tail} {COVERAGE}")
 
 
 def for_changer(finding, user, told=None):
@@ -122,17 +131,24 @@ def for_changer(finding, user, told=None):
     uses = _list(d.get("uses", []), lambda u: _name(u["symbol"]) + _lines(u.get("lines", [])))
     how = "removed" if finding["rule"] == "O4" else f"changed ({_reasons(d.get('reasons', []))})"
     if told is None:
-        told = user.get("agent") != "git"
-    then = ("That session is told before it next edits that file." if told else
-            "No session with Orchestraty works in that worktree, so nobody there is told; mention it to your user.")
+        told = user.get("agent") not in ("git", CLOUD)
+    if user.get("agent") == CLOUD:
+        then = "The agent on that branch works elsewhere and is not told; mention it to your user."
+    elif told:
+        then = "That session is told before it next edits that file."
+    else:
+        then = "No session with Orchestraty works in that worktree, so nobody there is told; mention it to your user."
     return _cap(f"{_name(finding['symbol'])} in {_path(finding['symbol'])}, which you {how}, is used in "
                 f"{clean(finding['file'])} by {describe(user)}: {uses}. {then} {COVERAGE}")
 
 
 def for_both(finding, other):
     """O2, to each of two sessions changing the same function."""
+    settle = ("The agent on that branch works elsewhere and is not told: settle on one version with your user "
+              "before either is merged." if other.get("agent") == CLOUD else
+              "Agree on one version before either of you merges.")
     return _cap(f"{describe(other)} is also changing {_name(finding['symbol'])} in {_path(finding['symbol'])}. "
-                "Agree on one version before either of you merges.")
+                + settle)
 
 
 def same_folder(other):

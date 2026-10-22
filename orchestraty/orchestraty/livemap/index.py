@@ -5,6 +5,8 @@
 * ``BaseIndexes``: the engine's index of a whole commit (``build_index_at``, read from git's
   objects), built once per (repository, commit) on a thread of its own, since a cold build can
   take minutes on a large repository; until it is ready only file- and function-level rules run.
+  A commit read from a bare repository (the shadow of cloud branches) goes through the same
+  engine readers, ``index_from_objects``.
 * ``view``: a session's code graph, the base commit's parsed files with the session's changed
   files put in, for finding who calls what in that session's copy of the code.
 """
@@ -17,9 +19,29 @@ from collections import OrderedDict
 
 from orch_engine.config import Config
 from orch_engine.graph import build_graph
-from orch_engine.ingest import blob_text
+from orch_engine.ingest import blob_text, commit_files, read_blobs, resolve_commit
+from orch_engine.models import RepoMeta
 from orch_engine.parsing import parse_file
-from orch_engine.pipeline import build_index_at
+from orch_engine.pipeline import RepoIndex, build_index_at
+
+
+def is_bare(path):
+    """Whether `path` is a bare repository (a git directory with no worktree)."""
+    return (os.path.isfile(os.path.join(path, "HEAD")) and os.path.isdir(os.path.join(path, "objects"))
+            and not os.path.exists(os.path.join(path, ".git")))
+
+
+def index_from_objects(git_dir, commit, config):
+    """The engine's index of `commit` in the bare repository `git_dir`, read the way
+    build_index_at reads a commit (its files listed, then read from the object store), which
+    needs a worktree's top folder; nothing is cached on disk."""
+    sha = resolve_commit(git_dir, commit)
+    code, docs, not_analysed = commit_files(git_dir, sha)
+    files = code + docs
+    blobs = read_blobs(git_dir, [blob for _, blob in files])
+    parsed = [parse_file(rel, None, text=blob_text(blobs[blob])) for rel, blob in files]
+    meta = RepoMeta(name=os.path.basename(git_dir.rstrip("/\\")), path=git_dir, commit=sha, is_git=True)
+    return RepoIndex(meta, parsed, build_graph(parsed), config, not_analysed)
 
 
 def blob_id(data):
@@ -93,6 +115,12 @@ class BaseIndexes:
         with self._lock:
             return self._failed.get((repo_key, commit))
 
+    def forget_failures(self, repo_key):
+        """Let the failed builds of a repository be tried again (its shadow was fetched afresh)."""
+        with self._lock:
+            for key in [k for k in self._failed if k[0] == repo_key]:
+                del self._failed[key]
+
     def take_fresh(self):
         """Keys of the indexes finished since the last call."""
         with self._lock:
@@ -115,7 +143,10 @@ class BaseIndexes:
                 worktree.set()                 # a wait() marker
                 continue
             try:
-                idx = build_index_at(worktree, key[1], self.config, use_cache=True)
+                if is_bare(worktree):
+                    idx = index_from_objects(worktree, key[1], self.config)
+                else:
+                    idx = build_index_at(worktree, key[1], self.config, use_cache=True)
             except Exception as exc:          # untrusted folder, a commit gone, ...
                 with self._lock:
                     self._failed[key] = f"{type(exc).__name__}: {exc}"[:300]

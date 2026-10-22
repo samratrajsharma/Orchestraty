@@ -21,6 +21,12 @@ worktrees are looked at at once: a worktree it left with changes is followed as 
 its changes stay on the map (and its push line stays) after the agent has gone. A hooked
 session whose edits land in another worktree of its repository moves there: its agent left the
 folder (for one, after a note said two sessions shared it).
+
+In a repository whose cloud branches are on (``orch remote on``), each branch an agent pushed
+that matches the patterns is a session too (agent ``cloud``, level 0, see
+``coordinator.cloud``): based on its merge base with the remote's default branch, read from the
+shadow repository, and ended when the branch is gone or merged. Its last event is its last
+commit's time; it never times out, and its own agent is never told.
 """
 import hashlib
 import json
@@ -30,7 +36,8 @@ import os
 import sys
 import time
 
-from orchestraty import __version__, config, declarations, feedback, gitio
+from orchestraty import __version__, config, declarations, feedback, gitio, remote
+from orchestraty.coordinator.cloud import CloudBranches, session_id as cloud_session_id
 from orchestraty.coordinator.lock import Heartbeat, Lock
 from orchestraty.coordinator.record import Record, SchemaError, repo_key
 from orchestraty.coordinator.spool import SpoolReader
@@ -51,6 +58,7 @@ IDLE_EVENTS = ("SessionStart", "Stop", "StopFailure")
 DETAIL_FIELDS = ("source", "reason", "stop_hook_active", "len", "took")
 LOCK_WAIT_SECONDS = 3.0
 LEVEL0_AGENT = "git"
+CLOUD_AGENT = remote.CLOUD_AGENT
 
 # Exit codes of run()
 OK, ALREADY_RUNNING, NEWER_RECORD, FAILED = 0, 3, 4, 5
@@ -85,15 +93,17 @@ class Coordinator:
         self._status_dirty = True
         self._status_written = 0.0
         self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
+        self.cloud = CloudBranches(state, self.log)
         for session in self.sessions.values():
-            self._track(session)
+            if session["agent"] != CLOUD_AGENT:            # cloud branches are tracked by scan_cloud, from their tips
+                self._track(session)
 
     def close(self):
         self.record.close()
 
     def _ended_hooked(self, session):
         """A hooked session ended: look at its repository's worktrees at once."""
-        if session["agent"] != LEVEL0_AGENT and session.get("repo_id") is not None:
+        if session["agent"] not in NO_NOTES and session.get("repo_id") is not None:
             self._repo_paths[session["repo_id"]] = session["worktree"]
             self._scan_now.add(session["repo_id"])
 
@@ -203,6 +213,7 @@ class Coordinator:
             self.livemap.mark_all()
             forced, self._scan_now = self._scan_now, set()
             self.scan_level0(forced)
+            self.scan_cloud()
         self.changed = self.livemap.refresh_pending()
         if self.changed:
             with self.record.transaction():
@@ -257,7 +268,7 @@ class Coordinator:
     def scan_level0(self, forced=()):
         """Plain-git sessions: worktrees with changes and no live hooked session, in each
         repository with a live session of any kind, or whose hooked session just ended."""
-        live = [s for s in self.sessions.values() if s["state"] == "live"]
+        live = [s for s in self.sessions.values() if s["state"] == "live" and s["worktree"]]
         hooked = [s for s in live if s["agent"] != LEVEL0_AGENT]
         repos = {}
         for s in live:
@@ -309,6 +320,91 @@ class Coordinator:
                 self.log.info("plain-git session %s in %s, base %s", sid, path, base[:12])
             existing["last_seen"] = now
             self.record.put_session(existing)
+
+    def scan_cloud(self):
+        """Cloud branches: fetch where due (on a thread), then make each matching branch of the
+        last fetch a session, follow the ones that moved, and end the ones gone or merged."""
+        now = self.now_ns()
+        watched = set()
+        for common_dir in self.cfg["repos"]:
+            key = repo_key(common_dir)
+            watched.add(key)
+            chosen = remote.settings(self.cfg, common_dir)
+            mine = {sid: s for sid, s in self.sessions.items()
+                    if s["agent"] == CLOUD_AGENT and self._repo_keys.get(s["repo_id"]) == key}
+            if not chosen["on"]:
+                self._end_cloud(mine.values(), "remote branches off")
+                continue
+            shadow = remote.Shadow(self.state, common_dir)
+            if key in self.cloud.fetched:                   # a fetch finished: what failed to read may read now
+                self.cloud.fetched.discard(key)
+                self.livemap.indexes.forget_failures(key)
+                for sid in mine:
+                    self.livemap.reread_cloud(sid)
+            branches = None
+            broken = shadow.broken() or any(remote.broken_error(self.livemap.views[sid].error)
+                                            for sid in mine if sid in self.livemap.views)
+            if not broken:
+                try:
+                    branches = self.cloud.branches(common_dir, chosen)
+                except remote.ShadowBroken as exc:
+                    self.log.warning("the shadow of %s lost an object it relied on (%s): fetching it afresh",
+                                     common_dir, exc)
+                    broken = True
+                except (gitio.GitError, gitio.UntrustedRepositoryError) as exc:
+                    self.log.warning("cloud branches of %s not read: %s", common_dir, exc)
+                    continue
+            if broken:
+                if not shadow.broken():
+                    shadow.mark_broken(now / NS)           # one fetch due now; failures then wait longer
+                self.cloud.forget(common_dir)
+            self.cloud.fetch_if_due(common_dir, chosen, self.cfg["remote_fetch_minutes"] * 60, now / NS)
+            if not broken and branches is not None:       # None: nothing fetched yet, so nothing to end either
+                self._sync_cloud(common_dir, key, chosen, branches, mine)
+        self._end_cloud([s for s in self.sessions.values() if s["agent"] == CLOUD_AGENT
+                         and self._repo_keys.get(s["repo_id"]) not in watched], "not watched")
+
+    def _sync_cloud(self, common_dir, key, chosen, branches, mine):
+        seen = set()
+        with self.record.transaction():
+            for name, b in branches.items():
+                sid = cloud_session_id(common_dir, chosen["remote"], name)
+                session = self.sessions.get(sid)
+                if b["merged"]:
+                    if session is not None:
+                        self._end(session, "merged into the default branch")
+                    continue
+                seen.add(sid)
+                tip_ns = b["time"] * NS
+                if session is None:
+                    rid = self.record.repo_id(common_dir)
+                    self._repo_keys[rid] = key
+                    session = {"id": sid, "agent": CLOUD_AGENT, "repo_id": rid, "cwd": "", "worktree": "",
+                               "branch": f"{chosen['remote']}/{name}", "base_commit": b["base"], "base_guessed": 0,
+                               "started": self.now_ns(), "last_seen": tip_ns, "state": "live", "turn": "", "note": ""}
+                    self.sessions[sid] = session
+                    self.record.put_session(session)
+                    self.log.info("cloud branch %s/%s, base %s", chosen["remote"], name, b["base"][:12])
+                elif (session["base_commit"], session["last_seen"]) != (b["base"], tip_ns):
+                    session["base_commit"], session["last_seen"] = b["base"], tip_ns
+                    self.record.put_session(session)
+                view = self.livemap.views.get(sid)
+                if view is None or view.base != b["base"]:
+                    self.livemap.forget(sid)
+                    self._dirty_repos.add(session["repo_id"])
+                    self.livemap.track_cloud(session, key, remote.Shadow(self.state, common_dir).path, b["tip"])
+                elif self.livemap.cloud[sid][1] != b["tip"]:
+                    self.livemap.move_cloud(sid, b["tip"])
+            for sid, s in mine.items():
+                if sid not in seen and sid in self.sessions and s["state"] == "live":
+                    self._end(s, "the branch is gone")
+
+    def _end_cloud(self, sessions, why):
+        sessions = [s for s in sessions if s["state"] == "live"]
+        if sessions:
+            with self.record.transaction():
+                for s in sessions:
+                    self._end(s, why)
 
     def handle(self, agent, raw):
         try:
@@ -472,7 +568,8 @@ class Coordinator:
     def expire(self, now):
         """End live sessions with no event for longer than the session timeout."""
         limit = now - self.cfg["session_timeout"] * NS
-        stale = [s for s in self.sessions.values() if s["state"] == "live" and s["last_seen"] < limit]
+        stale = [s for s in self.sessions.values()        # a cloud branch lives as long as the branch does
+                 if s["state"] == "live" and s["last_seen"] < limit and s["agent"] != CLOUD_AGENT]
         if stale:
             with self.record.transaction():
                 for s in stale:
@@ -523,9 +620,10 @@ class Coordinator:
                     self.record.forget_position(path)
 
     def live_count(self, hooked_only=False):
-        """Live sessions; with hooked_only, plain-git ones left out (they keep nothing awake)."""
+        """Live sessions; with hooked_only, plain-git ones and cloud branches left out (they keep
+        nothing awake)."""
         return sum(1 for s in self.sessions.values()
-                   if s["state"] == "live" and not (hooked_only and s["agent"] == LEVEL0_AGENT))
+                   if s["state"] == "live" and not (hooked_only and s["agent"] in NO_NOTES))
 
 
 def _same(a, b):

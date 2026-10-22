@@ -1,5 +1,6 @@
 """What git says about a worktree: the files changed since a commit, the worktrees of a
-repository, and the blobs of files at a commit. Read-only: no index refresh is written."""
+repository, and the blobs of files at a commit; and, for a cloud branch, the files changed
+between two commits. Read-only: no index refresh is written."""
 import os
 
 from orchestraty import gitio
@@ -25,6 +26,16 @@ def changed_files(worktree, base):
             out[path] = "A"
     for path in _paths(gitio.run(["ls-files", "--others", "--exclude-standard", "-z"], worktree, text=False)):
         out[path] = "A"
+    return out
+
+
+def commit_diff(git_dir, base, tip):
+    """{posix path: "A" | "M" | "D"} for the files commit `tip` differs in from commit `base`,
+    in any repository (a bare one too)."""
+    out = {}
+    parts = _paths(gitio.run(["diff"] + DIFF_OPTIONS + [base, tip, "--"], git_dir, text=False))
+    for status, path in zip(parts[0::2], parts[1::2]):
+        out[path] = status[:1] if status[:1] in ("A", "D") else "M"
     return out
 
 

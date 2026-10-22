@@ -13,6 +13,10 @@ Which files belong to a session:
 * a file already changed when the session was first seen is not, until its size or time changes;
 * in a folder that two live sessions share, other changes are marked not attributed rather
   than guessed.
+
+A cloud agent's branch (``remote``) has no folder: its view is read from a shadow
+repository's objects, base commit to the branch's tip, through the same parses and analysis,
+and only when the tip or the base moved.
 """
 import logging
 import os
@@ -62,6 +66,13 @@ class SessionView:
     head: dict = field(default_factory=dict)           # changed .py path -> ParsedFile (None: deleted)
     head_blobs: dict = field(default_factory=dict)     # changed .py path -> blob id on disk (None: none)
     error: str = ""
+    git_dir: str = ""                                  # a cloud branch: the shadow repository it is read from
+    tip: str = ""                                      # and the branch's tip there
+
+    @property
+    def source(self):
+        """Where git reads this view's commits: its worktree, or the shadow of a cloud branch."""
+        return self.git_dir or self.worktree
 
     def key(self):
         """What a refresh compares to tell whether anything changed."""
@@ -135,6 +146,7 @@ class LiveMap:
         self.pending = set()
         self._base_blobs = {}                          # (commit, path) -> blob id or None
         self._graphs = {}                              # session id -> (view key, CodeGraph)
+        self.cloud = {}                                # session id -> (shadow git dir, tip): cloud branches
 
     # sessions
     def track(self, session, repo_key, adopt_existing=False):
@@ -153,8 +165,31 @@ class LiveMap:
         self.pending.add(sid)
         self.indexes.get(repo_key, session["base_commit"], session["worktree"])
 
+    def track_cloud(self, session, repo_key, git_dir, tip):
+        """Start following a cloud agent's branch: its commits are read from the shadow
+        repository `git_dir`, from the session's base commit to `tip`."""
+        sid = session["id"]
+        self.sessions[sid] = session
+        self.cloud[sid] = (git_dir, tip)
+        self.views[sid] = SessionView(sid, repo_key, "", session["base_commit"], git_dir=git_dir)
+        self.pending.add(sid)
+        self.indexes.get(repo_key, session["base_commit"], git_dir)
+
+    def move_cloud(self, sid, tip):
+        """The branch moved: read it again."""
+        if sid in self.cloud:
+            self.cloud[sid] = (self.cloud[sid][0], tip)
+            self.pending.add(sid)
+
+    def reread_cloud(self, sid):
+        """Read a cloud branch again at its next refresh if the last read failed."""
+        v = self.views.get(sid)
+        if sid in self.cloud and v is not None and v.error:
+            v.tip = ""
+            self.pending.add(sid)
+
     def forget(self, sid):
-        for table in (self.sessions, self.views, self.edits, self.dirty_at_start, self._graphs):
+        for table in (self.sessions, self.views, self.edits, self.dirty_at_start, self._graphs, self.cloud):
             table.pop(sid, None)
         self.pending.discard(sid)
 
@@ -199,6 +234,8 @@ class LiveMap:
         return changed
 
     def refresh(self, sid):
+        if sid in self.cloud:
+            return self._refresh_cloud(sid)
         session, old = self.sessions[sid], self.views[sid]
         top, base = session["worktree"], session["base_commit"]
         try:
@@ -231,22 +268,31 @@ class LiveMap:
         self.views[sid] = new
         return new.key() != old.key()
 
-    def _parses(self, top, base, python):
+    def _refresh_cloud(self, sid):
+        """A cloud branch's view: the files and functions changed from its base commit to its
+        tip, read from the shadow repository. Nothing is read while neither moved."""
+        session, old = self.sessions[sid], self.views[sid]
+        git_dir, tip = self.cloud[sid]
+        base = session["base_commit"]
+        if old.tip == tip and old.base == base and not old.error:
+            return False
+        new = SessionView(sid, old.repo_key, "", base, git_dir=git_dir, tip=tip)
+        try:
+            new.files = git_changes.commit_diff(git_dir, base, tip)
+            python = {p: s for p, s in new.files.items() if p.endswith(PYTHON)}
+            base_pf, new.head, new.head_blobs = self._parses(git_dir, base, python, at=tip)
+            new.symbols = analyse(base_pf, new.head)
+        except (gitio.GitError, gitio.UntrustedRepositoryError, RuntimeError) as exc:
+            new.error = str(exc)[:300]
+            self.log.warning("cloud branch %s: not read: %s", session.get("branch", sid), exc)
+        self.views[sid] = new
+        return new.key() != old.key() or new.error != old.error
+
+    def _parses(self, top, base, python, at=None):
         """({path: base ParsedFile or None}, {path: head ParsedFile or None}, {path: head blob id})
-        for the changed .py files."""
-        head, head_blobs = {}, {}
-        for path, status in python.items():
-            head[path] = head_blobs[path] = None
-            if status == "D":
-                continue
-            try:
-                with open(os.path.join(top, *path.split("/")), "rb") as fh:
-                    data = fh.read(MAX_BLOB_BYTES + 1)
-            except OSError:
-                continue
-            if len(data) <= MAX_BLOB_BYTES:
-                head_blobs[path] = blob_id(data)
-                head[path] = self.cache.get(path, data, head_blobs[path])
+        for the changed .py files: the head as it is on disk in `top`, or (with `at`) as it is
+        at that commit of the repository `top`."""
+        head, head_blobs = self._heads_at(top, at, python) if at is not None else self._heads_on_disk(top, python)
         wanted = [p for p, s in python.items() if s != "A" and (base, p) not in self._base_blobs]
         if wanted:
             found = git_changes.blob_ids(top, base, wanted)
@@ -266,6 +312,34 @@ class LiveMap:
                 base_pf[path] = self.cache.get(path, b"", blob)        # a cached parse: the key is all it needs
         return base_pf, head, head_blobs
 
+    def _heads_on_disk(self, top, python):
+        head, head_blobs = {}, {}
+        for path, status in python.items():
+            head[path] = head_blobs[path] = None
+            if status == "D":
+                continue
+            try:
+                with open(os.path.join(top, *path.split("/")), "rb") as fh:
+                    data = fh.read(MAX_BLOB_BYTES + 1)
+            except OSError:
+                continue
+            if len(data) <= MAX_BLOB_BYTES:
+                head_blobs[path] = blob_id(data)
+                head[path] = self.cache.get(path, data, head_blobs[path])
+        return head, head_blobs
+
+    def _heads_at(self, top, commit, python):
+        head_blobs = {p: None for p in python}
+        head_blobs.update(git_changes.blob_ids(top, commit, [p for p, s in python.items() if s != "D"]))
+        missing = sorted({b for p, b in head_blobs.items() if b and not self.cache.known(p, b)})
+        data = read_blobs(top, missing) if missing else {}
+        head = {}
+        for path, blob in head_blobs.items():
+            if blob in data and len(data[blob]) > MAX_BLOB_BYTES:
+                blob = head_blobs[path] = None
+            head[path] = self.cache.get(path, data.get(blob, b""), blob) if blob else None
+        return head, head_blobs
+
     # code graphs
     def graph(self, sid):
         """The session's code graph (its changed .py files over the base commit's index), or
@@ -273,7 +347,7 @@ class LiveMap:
         v = self.views.get(sid)
         if v is None:
             return None
-        idx = self.indexes.get(v.repo_key, v.base, v.worktree)
+        idx = self.indexes.get(v.repo_key, v.base, v.source)
         if idx is None:
             return None
         key = tuple(sorted(v.head_blobs.items(), key=lambda kv: kv[0]))
@@ -289,7 +363,7 @@ class LiveMap:
         v = self.views.get(sid)
         if v is None:
             return None
-        idx = self.indexes.get(v.repo_key, v.base, v.worktree)
+        idx = self.indexes.get(v.repo_key, v.base, v.source)
         return idx.graph if idx is not None else None
 
     def index_state(self, sid):
@@ -302,4 +376,4 @@ class LiveMap:
         why = self.indexes.failed(v.repo_key, v.base)
         if why:
             return "failed: " + why
-        return "ready" if self.indexes.get(v.repo_key, v.base, v.worktree) is not None else "building"
+        return "ready" if self.indexes.get(v.repo_key, v.base, v.source) is not None else "building"

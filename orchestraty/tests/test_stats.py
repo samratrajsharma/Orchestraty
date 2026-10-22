@@ -65,7 +65,7 @@ def test_stats_of_a_two_session_scenario(state, repo, git, tmp_path, hook_script
     data = stats.collect(state)
     assert data["schema"] == 1 and data["days"] == 7 and data["acted_minutes"] == 30
     [week] = data["weeks"]
-    assert week["sessions"] == {"live": 2, "agents": 2, "plain_git": 0} and week["pairs"] == 1
+    assert week["sessions"] == {"live": 2, "agents": 2, "plain_git": 0, "cloud": 0} and week["pairs"] == 1
     assert week["findings"]["by_rule"]["O3"] >= 1 and week["findings"]["by_strength"]["strong"] >= 1
     notes = week["notes"]
     assert notes["by_kind"]["edit"] >= 1 and notes["delivered"] >= 1
@@ -208,7 +208,8 @@ def test_the_summary_holds_no_identifiers(state, capsys):
     strings = re.findall(r'"([^"]*)"', printed)
     allowed = (set(stats.RULES) | set(stats.STRENGTHS) | set(stats.KINDS) | set(stats.STATES) | {"real", "harmless", "false"}
                | {"schema", "kind", "orchestraty usage summary", "version", "days", "acted_minutes", "weeks", "week",
-                  "sessions", "live", "agents", "plain_git", "pairs", "findings", "total", "by_rule", "by_strength",
+                  "sessions", "live", "agents", "plain_git", "cloud", "pairs", "findings", "total", "by_rule",
+                  "by_strength",
                   "latent", "notes", "made", "by_kind", "by_state", "delivered", "awareness_ms", "measured", "median",
                   "p90", "acted_on", "findings_acted_on", "tokens_estimate", "labels", "by_verdict", "missed",
                   summary["version"]})
