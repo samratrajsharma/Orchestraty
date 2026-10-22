@@ -234,6 +234,7 @@ def test_unknown_methods_and_bad_arguments_get_json_rpc_errors(state, two):
                      request(7, "tools/call", ["who_is_changing"]),
                      request(8, "tools/call", {"arguments": {}}),
                      b"{not json",
+                     b'{"jsonrpc": "2.0", "id": NaN, "method": "ping"}',
                      json.dumps({"id": 9, "method": "ping"}).encode(),
                      json.dumps({"jsonrpc": "2.0", "id": None, "method": "ping"}).encode(),
                      {"jsonrpc": "2.0", "method": "notifications/whatever"},
@@ -246,7 +247,7 @@ def test_unknown_methods_and_bad_arguments_get_json_rpc_errors(state, two):
     assert codes == {1: -32601, 2: -32602, 3: -32602, 4: -32602, 5: -32602, 6: -32602, 7: -32602, 8: -32602,
                      9: -32600, 12: -32601, 13: -32602}
     # the line that is not JSON and the request with a null id are answered with a null id
-    assert sorted(a["error"]["code"] for a in answers[None]) == [-32700, -32600]
+    assert sorted(a["error"]["code"] for a in answers[None]) == [-32700, -32700, -32600]
     assert "unknown tool: nothing_like_it" in answers[5]["error"]["message"]
     assert "missing argument(s): path" in answers[2]["error"]["message"]
     assert result(answers, 11) == {}                       # a batch gets its answers, the notification none

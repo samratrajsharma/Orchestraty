@@ -47,6 +47,10 @@ def _valid_id(rid):
     return isinstance(rid, (str, int, float)) and not isinstance(rid, bool)
 
 
+def _not_json(constant):
+    raise ValueError(f"{constant} is not JSON")           # NaN and Infinity: Python reads them, JSON has none
+
+
 class Server:
     """Answers one parsed message at a time; knows nothing of stdin and stdout."""
 
@@ -149,7 +153,7 @@ def serve(server, stdin, stdout):
         if not line:
             continue
         try:
-            message = json.loads(line.decode("utf-8"))
+            message = json.loads(line.decode("utf-8"), parse_constant=_not_json)
         except (UnicodeDecodeError, ValueError, RecursionError):
             answer = _error(None, PARSE_ERROR, "parse error: each line must be one JSON message")
         else:
