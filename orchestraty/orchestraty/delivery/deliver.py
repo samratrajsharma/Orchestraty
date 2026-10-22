@@ -151,7 +151,7 @@ class Deliverer:
                     continue
                 # the slot may have held other notes too: they wait for the next write
                 self.record.unwrite_slot(note["slot"])
-            self.record.set_note_state(note["id"], "withdrawn")
+            self.record.set_note_state(note["id"], "withdrawn", self.now_ns())
 
     # 2. notes -> slots
     def _settle(self, slot_rel):
@@ -172,14 +172,14 @@ class Deliverer:
                                            states=("pending", "written")):
                 if other["state"] == "written" and slots.withdraw(_abs(self.state, other["slot"])):
                     self.record.unwrite_slot(other["slot"])
-                self.record.set_note_state(other["id"], "delivered")
+                self.record.set_note_state(other["id"], "delivered", ts)
 
     def forget_session(self, session_id):
         """A session ended: take back its waiting notes and remove its folder."""
         for note in self.record.notes(session_id=session_id, states=("pending", "written")):
             if note["state"] == "written":
                 slots.withdraw(_abs(self.state, note["slot"]))
-            self.record.set_note_state(note["id"], "withdrawn")
+            self.record.set_note_state(note["id"], "withdrawn", self.now_ns())
         shutil.rmtree(slots.folder(self.state, session_id), ignore_errors=True)
 
     def fill(self, steer=False):

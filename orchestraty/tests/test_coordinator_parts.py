@@ -154,9 +154,9 @@ def test_only_jsonl_files_in_agent_folders_are_read(tmp_path):
 def test_the_record_is_created_with_its_schema_and_reopens(tmp_path):
     path = str(tmp_path / "r" / "record.sqlite")
     rec = Record(path)
-    assert rec.meta_get("schema") == str(SCHEMA) == "2"
+    assert rec.meta_get("schema") == str(SCHEMA) == "3"
     assert rec.db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-    assert rec.has_table("labels") and rec.has_table("missed")
+    assert all(rec.has_table(t) for t in ("labels", "missed", "declarations", "changes"))
     rec.close()
     Record(path).close()
 
@@ -177,7 +177,7 @@ def test_a_record_from_before_labels_is_brought_up_to_date(tmp_path):
     assert reader.labels() == [] and reader.missed() == []
     reader.close()
     rec = Record(str(path))                               # the coordinator opens it: brought up to date
-    assert rec.meta_get("schema") == "2"
+    assert rec.meta_get("schema") == str(SCHEMA)
     assert [f["key"] for f in rec.findings()] == ["O6|a.py::charge|A"]
     assert [n["text"] for n in rec.notes()] == ["a note"]
     with rec.transaction():
@@ -188,8 +188,73 @@ def test_a_record_from_before_labels_is_brought_up_to_date(tmp_path):
     assert [(r["ts"], r["session_id"], r["text"]) for r in rec.missed()] == [(8, "B", "a note about refund")]
     rec.close()
     again = Record(str(path))                             # reopening changes nothing more
-    assert again.meta_get("schema") == "2" and len(again.labels()) == 1
+    assert again.meta_get("schema") == str(SCHEMA) and len(again.labels()) == 1
     again.close()
+
+
+def schema_2_record(path):
+    """A record as schema 2 left it: its tables, and a session, a finding and three notes."""
+    db = sqlite3.connect(str(path))
+    db.executescript(record_module._TABLES)
+    for sql in record_module._MIGRATIONS[2]:
+        db.execute(sql)
+    db.execute("INSERT INTO meta VALUES ('schema', '2')")
+    db.execute("INSERT INTO sessions (id, agent, repo_id, started, last_seen, state) VALUES ('A', 'claude', 1, 10, 60, 'ended')")
+    db.execute("INSERT INTO findings VALUES ('O6|a.py::charge|A', 1, 'O6', 'strong', 'A', '', '[\"A\"]', 'a.py::charge', "
+               "'a.py', '{}', 'resolved', 20, 45, 50)")
+    for kind, state, written, delivered in (("stop", "delivered", 30, 40), ("next", "withdrawn", 35, None),
+                                            ("edit", "pending", None, None)):
+        db.execute("INSERT INTO notes (finding_key, session_id, kind, slot, text, state, created, written, delivered) "
+                   "VALUES ('O6|a.py::charge|A', 'A', ?, 's', 't', ?, 25, ?, ?)", (kind, state, written, delivered))
+    db.commit()
+    db.close()
+
+
+def test_a_record_from_before_declarations_gets_its_history_logged(tmp_path):
+    path = tmp_path / "record.sqlite"
+    schema_2_record(path)
+    reader = Record(str(path), readonly=True)                       # before the coordinator: nothing to show
+    assert reader.change_log() == [] and reader.declarations() == []
+    reader.close()
+    rec = Record(str(path))
+    assert rec.meta_get("schema") == "3"
+    assert [(c["ts"], c["kind"]) for c in rec.change_log()] == [
+        (10, "session_started"), (20, "finding_opened"), (30, "note_written"), (35, "note_written"),
+        (40, "note_delivered"), (50, "finding_resolved"), (60, "session_ended")]      # a withdrawal has no time
+    with rec.transaction():
+        rec.add_declaration("A", ["c.py"], ["c.py::refund"], "add a refund", 100, 200)
+    [d] = rec.declarations(active_at=150)
+    assert (d["session_id"], d["paths"], d["symbols"], d["task"]) == ("A", ["c.py"], ["c.py::refund"], "add a refund")
+    assert rec.declarations(active_at=200) == [] and rec.declarations(active_at=99) == []
+    assert rec.change_log(after_id=7)[0]["kind"] == "declared"
+    rec.close()
+
+
+def test_the_write_methods_log_each_change_in_order(tmp_path):
+    from orchestraty.rules.overlap import Finding
+    rec = Record(str(tmp_path / "record.sqlite"))
+    session = {"id": "A", "agent": "claude", "repo_id": 1, "cwd": "/w", "worktree": "/w", "branch": "b",
+               "base_commit": "c", "base_guessed": 0, "started": 5, "last_seen": 5, "state": "live", "turn": "", "note": ""}
+    f = Finding("O6|a.py::charge|A", "O6", "strong", ("A",), changer="A", symbol="a.py::charge", file="a.py")
+    with rec.transaction():
+        rec.put_session(session)
+        rec.put_session(dict(session, last_seen=6, turn="working"))           # no change of state: nothing logged
+        assert rec.put_finding(1, f, 10) and not rec.put_finding(1, f, 11)
+        rec.add_note(f.key, "A", "stop", "notes/A/stop.json", "a note", 12)
+        rec.add_note(f.key, "A", "next", "notes/A/next.json", "a note", 12)
+        rec.mark_written([1, 2], 13)
+        rec.mark_written([1], 14)                                             # already written: nothing new
+        rec.mark_delivered("notes/A/stop.json", 15)
+        rec.set_note_state(2, "withdrawn", 16)
+        rec.resolve_finding(f.key, 17)
+        rec.resolve_finding(f.key, 18)                                        # already resolved
+        rec.put_session(dict(session, last_seen=19, state="ended"))
+    assert [(c["ts"], c["kind"], c["session_id"], c["finding_key"], c["ref"]) for c in rec.change_log()] == [
+        (5, "session_started", "A", "", None), (10, "finding_opened", "", f.key, None),
+        (13, "note_written", "A", f.key, 1), (13, "note_written", "A", f.key, 2), (15, "note_delivered", "A", f.key, 1),
+        (16, "note_withdrawn", "A", f.key, 2), (17, "finding_resolved", "", f.key, None), (19, "session_ended", "A", "", None)]
+    assert [c["kind"] for c in rec.change_log(since=16)] == ["note_withdrawn", "finding_resolved", "session_ended"]
+    rec.close()
 
 
 def test_a_newer_record_is_refused(tmp_path):

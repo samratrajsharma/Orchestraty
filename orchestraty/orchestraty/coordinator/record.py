@@ -5,7 +5,11 @@ Write-ahead logging, so ``orch status`` and other readers never wait for the wri
 the versioned event schema. ``sessions`` and ``repos`` are projections that can be rebuilt
 from the events and git. ``spool_files`` keeps where reading stopped in each spool file, saved
 in the same transaction as the events read, so a restart neither loses nor repeats a line.
-``labels`` and ``missed`` keep the user's word on the findings (``orch label``, ``orch missed``).
+``labels`` and ``missed`` keep the user's word on the findings (``orch label``, ``orch missed``),
+``declarations`` what agents say they are about to change (the MCP tool ``declare``). ``changes``
+is append-only too: the record's own write methods log each session started or ended, finding
+opened or resolved, note written, delivered or withdrawn and declaration made, in the order they
+happen (``orch events`` reads it).
 
 A record of an older schema is brought up to date when the coordinator opens it, one step at a
 time (``_MIGRATIONS``); readers never change it, so they cope with tables that are not there yet.
@@ -13,9 +17,10 @@ time (``_MIGRATIONS``); readers never change it, so they cope with tables that a
 import json
 import os
 import sqlite3
+import time
 from contextlib import contextmanager
 
-SCHEMA = 2
+SCHEMA = 3
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -112,6 +117,34 @@ _MIGRATIONS = {
                ts INTEGER NOT NULL,
                session_id TEXT NOT NULL DEFAULT '',
                text TEXT NOT NULL)"""),
+    3: ("""CREATE TABLE IF NOT EXISTS declarations (
+               id INTEGER PRIMARY KEY,
+               session_id TEXT NOT NULL,
+               paths TEXT NOT NULL,
+               symbols TEXT NOT NULL,
+               task TEXT NOT NULL DEFAULT '',
+               ts INTEGER NOT NULL,
+               expires INTEGER NOT NULL)""",
+        "CREATE INDEX IF NOT EXISTS declarations_by_session ON declarations (session_id, expires)",
+        """CREATE TABLE IF NOT EXISTS changes (
+               id INTEGER PRIMARY KEY,
+               ts INTEGER NOT NULL,
+               kind TEXT NOT NULL,
+               session_id TEXT NOT NULL DEFAULT '',
+               finding_key TEXT NOT NULL DEFAULT '',
+               ref INTEGER)""",
+        # What the record already holds, in time order (a withdrawal has no time of its own: none)
+        """INSERT INTO changes (ts, kind, session_id, finding_key, ref)
+           SELECT ts, kind, session_id, finding_key, ref FROM (
+               SELECT started AS ts, 'session_started' AS kind, id AS session_id, '' AS finding_key, NULL AS ref
+                 FROM sessions
+               UNION ALL SELECT last_seen, 'session_ended', id, '', NULL FROM sessions WHERE state = 'ended'
+               UNION ALL SELECT first_seen, 'finding_opened', '', key, NULL FROM findings
+               UNION ALL SELECT resolved, 'finding_resolved', '', key, NULL FROM findings WHERE resolved IS NOT NULL
+               UNION ALL SELECT written, 'note_written', session_id, finding_key, id FROM notes WHERE written IS NOT NULL
+               UNION ALL SELECT delivered, 'note_delivered', session_id, finding_key, id FROM notes
+                 WHERE delivered IS NOT NULL)
+           ORDER BY ts"""),
 }
 
 EVENT_COLUMNS = ("ts", "agent", "event", "session_id", "tool_name", "tool_use_id", "cwd", "file_path")
@@ -243,6 +276,12 @@ class Record:
         return dict(row) if row else None
 
     def put_session(self, s):
+        row = self.db.execute("SELECT state FROM sessions WHERE id = ?", (s["id"],)).fetchone()
+        before, after = (row["state"] if row else None), s.get("state")
+        if after == "live" and before != "live":
+            self._log(s["started"] if row is None else s["last_seen"], "session_started", session_id=s["id"])
+        elif before == "live" and after != "live":
+            self._log(s["last_seen"], "session_ended", session_id=s["id"])
         self.db.execute("INSERT OR REPLACE INTO sessions (%s) VALUES (%s)" % (
             ", ".join(SESSION_COLUMNS), ", ".join("?" * len(SESSION_COLUMNS))),
             [s.get(c, "" if c not in ("repo_id", "base_guessed", "started", "last_seen") else None)
@@ -285,14 +324,19 @@ class Record:
             self.db.execute("INSERT INTO findings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, NULL)",
                             (f.key, repo_id, f.rule, f.strength, f.changer, f.receiver, json.dumps(list(f.sessions)),
                              f.symbol, f.file, detail, now, now))
+            self._log(now, "finding_opened", finding_key=f.key)
             return True
         self.db.execute("UPDATE findings SET detail = ?, last_seen = ?, state = 'open', resolved = NULL WHERE key = ?",
                         (detail, now, f.key))
+        if row["state"] != "open":
+            self._log(now, "finding_opened", finding_key=f.key)
         return row["state"] != "open"
 
     def resolve_finding(self, key, now):
-        self.db.execute("UPDATE findings SET state = 'resolved', resolved = ? WHERE key = ? AND state = 'open'",
-                        (now, key))
+        cur = self.db.execute("UPDATE findings SET state = 'resolved', resolved = ? WHERE key = ? AND state = 'open'",
+                              (now, key))
+        if cur.rowcount:
+            self._log(now, "finding_resolved", finding_key=key)
 
     def findings(self, repo_id=None, states=("open",)):
         sql, args, where = "SELECT * FROM findings", [], []
@@ -346,16 +390,27 @@ class Record:
             "SELECT DISTINCT slot FROM notes WHERE state IN (%s) ORDER BY slot" % ", ".join("?" * len(states)),
             list(states))]
 
-    def set_note_state(self, note_id, state):
+    def set_note_state(self, note_id, state, ts=None):
+        """Delivered or withdrawn at `ts` (now if not given), as the change log records it."""
+        row = self.db.execute("SELECT state FROM notes WHERE id = ?", (note_id,)).fetchone()
         self.db.execute("UPDATE notes SET state = ? WHERE id = ?", (state, note_id))
+        if row is not None and row["state"] != state and state in ("delivered", "withdrawn"):
+            self._log_note(time.time_ns() if ts is None else ts, "note_" + state, note_id)
 
     def mark_written(self, note_ids, now):
-        self.db.executemany("UPDATE notes SET state = 'written', written = ? WHERE id = ? AND state = 'pending'",
-                            [(now, i) for i in note_ids])
+        for note_id in note_ids:
+            cur = self.db.execute("UPDATE notes SET state = 'written', written = ? WHERE id = ? AND state = 'pending'",
+                                  (now, note_id))
+            if cur.rowcount:
+                self._log_note(now, "note_written", note_id)
 
     def mark_delivered(self, slot, now):
+        taken = [r[0] for r in self.db.execute("SELECT id FROM notes WHERE slot = ? AND state = 'written' ORDER BY id",
+                                               (slot,))]
         self.db.execute("UPDATE notes SET state = 'delivered', delivered = ? WHERE slot = ? AND state = 'written'",
                         (now, slot))
+        for note_id in taken:
+            self._log_note(now, "note_delivered", note_id)
 
     def unwrite_slot(self, slot):
         """A withdrawn slot: its other written notes wait for the next write."""
@@ -384,6 +439,50 @@ class Record:
         if not self.has_table("missed"):
             return []
         return [dict(r) for r in self.db.execute("SELECT * FROM missed ORDER BY ts, id")]
+
+    # what agents say they are about to change (schema 3)
+    def add_declaration(self, session_id, paths, symbols, task, ts, expires):
+        cur = self.db.execute("INSERT INTO declarations (session_id, paths, symbols, task, ts, expires) "
+                              "VALUES (?, ?, ?, ?, ?, ?)",
+                              (session_id, json.dumps(list(paths)), json.dumps(list(symbols)), task, ts, expires))
+        self._log(ts, "declared", session_id=session_id, ref=cur.lastrowid)
+
+    def declarations(self, active_at=None):
+        """Declarations, oldest first; with active_at (ns), only those that hold then. None
+        before schema 3."""
+        if not self.has_table("declarations"):
+            return []
+        sql, args = "SELECT * FROM declarations", []
+        if active_at is not None:
+            sql, args = sql + " WHERE ts <= ? AND expires > ?", [active_at, active_at]
+        out = []
+        for r in self.db.execute(sql + " ORDER BY ts, id", args):
+            d = dict(r)
+            d["paths"], d["symbols"] = json.loads(d["paths"]), json.loads(d["symbols"])
+            out.append(d)
+        return out
+
+    # the change log (schema 3)
+    def _log(self, ts, kind, session_id="", finding_key="", ref=None):
+        self.db.execute("INSERT INTO changes (ts, kind, session_id, finding_key, ref) VALUES (?, ?, ?, ?, ?)",
+                        (ts, kind, session_id or "", finding_key or "", ref))
+
+    def _log_note(self, ts, kind, note_id):
+        row = self.db.execute("SELECT session_id, finding_key FROM notes WHERE id = ?", (note_id,)).fetchone()
+        self._log(ts, kind, session_id=row["session_id"], finding_key=row["finding_key"], ref=note_id)
+
+    def change_log(self, after_id=0, since=None, limit=None):
+        """The change log after the change `after_id`, from `since` (ns) on, in the order the
+        changes happened. None before schema 3."""
+        if not self.has_table("changes"):
+            return []
+        sql, args = "SELECT * FROM changes WHERE id > ?", [after_id]
+        if since is not None:
+            sql, args = sql + " AND ts >= ?", args + [since]
+        sql += " ORDER BY id"
+        if limit is not None:
+            sql, args = sql + " LIMIT ?", args + [limit]
+        return [dict(r) for r in self.db.execute(sql, args)]
 
     def sessions(self, states=None, repo_id=None):
         sql, args = "SELECT * FROM sessions", []
