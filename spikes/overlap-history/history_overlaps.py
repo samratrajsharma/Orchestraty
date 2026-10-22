@@ -50,7 +50,9 @@ class Indexes:
 
 def _view(change):
     w = change.work
-    v = SessionView(w.session.id, w.repo, w.top, change.start or "")
+    # The rules tell two sessions in one working tree by their views' folder: a pull request
+    # read from a shared clone names its own place there, as same_worktree() tells them apart.
+    v = SessionView(w.session.id, w.repo, getattr(w, "place", w.top), change.start or "")
     v.files = {p: "M" for p in w.files}
     v.symbols = dict(change.symbols)
     return v
