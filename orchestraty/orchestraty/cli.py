@@ -242,6 +242,34 @@ def cmd_missed(args):
     return 0
 
 
+def cmd_stats(args):
+    from orchestraty import stats
+    if args.out and not args.summary:
+        return _refuse("stats", "--out saves the summary: add --summary")
+    data = stats.collect(State(), days=args.days)
+    if not args.summary:
+        if args.json:
+            print(json.dumps(data, indent=2))
+        else:
+            sys.stdout.write(stats.render(data))
+        return 0
+    text = json.dumps(stats.summary(data), indent=2) + "\n"
+    sys.stdout.write(text)                              # first, so it is read before it is saved
+    if not args.out:
+        return 0
+    path = os.path.abspath(args.out)
+    if not confirm(f"Save this summary to {path}?", args.yes):
+        print("Not saved.")
+        return 1
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+    except OSError as exc:
+        return _refuse("stats", exc)
+    print(f"Saved to {path}. Orchestraty sends it nowhere; sharing it is up to you.")
+    return 0
+
+
 def _days(text):
     try:
         value = int(text)
@@ -382,6 +410,17 @@ def build_parser():
     missed.add_argument("--session", metavar="ID", help="the session that should have heard (its id, or its "
                                                          "first characters)")
     missed.set_defaults(handler=cmd_missed)
+
+    stats = commands.add_parser("stats", help="how Orchestraty was used, week by week",
+                                description="Usage, week by week, from the record: sessions, findings, notes and "
+                                            "their time to awareness, notes acted on (a proxy), labels and missed "
+                                            "notes. Reads the record without changing it; sends nothing anywhere.")
+    stats.add_argument("--days", type=_days, default=7, metavar="N", help="the last N days (default 7)")
+    stats.add_argument("--json", action="store_true", help="print JSON (schema in the 'schema' field)")
+    stats.add_argument("--summary", action="store_true", help="an anonymous summary, counts only, shown first")
+    stats.add_argument("--out", metavar="FILE", help="with --summary: save it to FILE once you have seen it")
+    stats.add_argument("--yes", action="store_true", help="save without asking")
+    stats.set_defaults(handler=cmd_stats)
 
     cfg = commands.add_parser("config", help="show or switch steer and wake",
                               description="steer: a strong note stops the edit it rides on, so the agent re-plans "

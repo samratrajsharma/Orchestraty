@@ -14,12 +14,14 @@ changes. A missing or unreadable file means the defaults.
 * ``wake``: a strong note for a session that is waiting for its user wakes it. Off by default;
   needs the wake hook, which ``orch config wake on`` installs.
 * ``settings``: the Claude Code settings file ``orch init`` installed the hooks in.
+* ``acted_minutes``: how long after its delivery a note can count as acted on in ``orch stats``
+  (a proxy: the session edited a file the note cites, or its finding stopped holding).
 """
 import json
 import os
 
 DEFAULTS = {"repos": [], "idle_seconds": 600, "session_timeout": 1800, "level0_seconds": 5,
-            "steer": False, "wake": False, "settings": ""}
+            "steer": False, "wake": False, "settings": "", "acted_minutes": 30}
 
 
 def _same(a, b):
