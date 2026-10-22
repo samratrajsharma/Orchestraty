@@ -203,7 +203,8 @@ def test_declare_reaches_the_record_through_the_coordinator_and_expires(state, t
     [stored] = c.record.declarations()
     assert (stored["session_id"], stored["paths"], stored["task"]) == ("A", ["a.py", "b.py"], "drop the currency")
     # orch status shows it, with A's own words, to the user
-    assert 'until' in status.render(status.collect(state)) and '"drop the currency"' in status.render(status.collect(state))
+    shown = status.render(status.collect(state))
+    assert "declared: a.py, b.py (charge, pay) until " in shown and '"drop the currency"' in shown
     # another session asking sees the paths and functions, never the task line
     answers, _ = mcp(state, wb, initialize(), call(1, "who_is_changing", path="b.py"), call(2, "status"))
     [row] = result(answers, 1)["structuredContent"]["sessions"]
@@ -212,7 +213,8 @@ def test_declare_reaches_the_record_through_the_coordinator_and_expires(state, t
     st = result(answers, 2)
     assert "drop the currency" not in json.dumps(st)
     answers, _ = mcp(state, wa, initialize(), call(1, "status"))
-    assert result(answers, 1)["structuredContent"]["repository"]["sessions"][0]["declared"][0]["task"] == "drop the currency"
+    [own] = result(answers, 1)["structuredContent"]["repository"]["sessions"][0]["declared"]
+    assert own["task"] == "drop the currency"
     # two hours later it no longer holds
     later = time.time() + 121 * 60
     data, _ = tools.call(state, str(wb), "who_is_changing", {"path": "b.py"}, now=later)
@@ -261,12 +263,14 @@ def test_a_folder_two_sessions_share_needs_the_session_argument(state, two):
                      call(3, "check_before_edit", path="a.py", session="A"), call(4, "who_is_changing", path="a.py"),
                      call(5, "my_overlaps", session="Z"))
     refused = result(answers, 1)
-    assert refused["isError"] is True and "2 live sessions work in" in text_of(refused) and "pass `session`" in text_of(refused)
+    assert refused["isError"] is True and "2 live sessions work in" in text_of(refused)
+    assert "pass `session`" in text_of(refused)
     assert "A, C" in text_of(refused)
     w1 = [o for o in result(answers, 2)["structuredContent"]["overlaps"] if o["rule"] == "W1"]
     assert len(w1) == 1 and "is working in this same folder" in w1[0]["note"]
     same = result(answers, 3)["structuredContent"]["same_folder"]
-    assert len(same) == 1 and "another Claude Code session (branch feat-a) is working in this same folder" in same[0]["note"]
+    assert len(same) == 1
+    assert "another Claude Code session (branch feat-a) is working in this same folder" in same[0]["note"]
     assert not result(answers, 4).get("isError")           # who is changing it needs no caller
     assert "No live session has the id Z" in text_of(result(answers, 5))
 

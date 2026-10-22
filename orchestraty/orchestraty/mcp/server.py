@@ -107,8 +107,8 @@ class Server:
             raise InvalidParams("protocolVersion must be a string")
         self.version = asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0]
         client = params.get("clientInfo") if isinstance(params.get("clientInfo"), dict) else {}
-        self.log(f"initialize: {templates.clean(client.get('name', '?'), 60)} {templates.clean(client.get('version', ''), 30)}"
-                 f", protocol {templates.clean(asked, 30)} -> {self.version}")
+        who = f"{templates.clean(client.get('name', '?'), 60)} {templates.clean(client.get('version', ''), 30)}"
+        self.log(f"initialize: {who}, protocol {templates.clean(asked, 30)} -> {self.version}")
         return {"protocolVersion": self.version, "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "orchestraty", "title": "Orchestraty", "version": __version__},
                 "instructions": INSTRUCTIONS}
