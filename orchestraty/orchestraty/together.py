@@ -245,7 +245,8 @@ def save_result(state, result):
 
 
 def clean_scratch(state, now=None):
-    """Remove what interrupted checks left: scratch folders older than an hour."""
+    """Remove what interrupted checks left: scratch folders older than an hour. The coordinator
+    calls it only while no check runs, since one check may take longer than that."""
     now = time.time() if now is None else now
     try:
         names = os.listdir(folder(state))

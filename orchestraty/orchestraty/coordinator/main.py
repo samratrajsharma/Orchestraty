@@ -163,7 +163,8 @@ class Coordinator:
             self._last_housekeeping = now
             self.expire(now)
             self.clean_spool(now)
-            together.clean_scratch(self.state)
+            if not self.together.busy():            # a check that runs for hours keeps its folder
+                together.clean_scratch(self.state)
         self.update_map()
         self.update_findings()
         self.check_together()

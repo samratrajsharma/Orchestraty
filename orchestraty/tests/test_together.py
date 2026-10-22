@@ -159,6 +159,25 @@ def test_housekeeping_deletes_what_an_interrupted_check_left(state, windows_unli
     assert sorted(os.listdir(together.folder(state))) == ["check-new", "results.json"] and windows_unlink
 
 
+def test_housekeeping_waits_while_a_check_runs(state, monkeypatch):
+    left = os.path.join(together.folder(state), "check-long")
+    os.makedirs(left)
+    two_hours_ago = time.time() - 7200
+    os.utime(left, (two_hours_ago, two_hours_ago))
+    c = cmain.Coordinator(state)
+    try:
+        monkeypatch.setattr(c.together, "busy", lambda: True)                # a check longer than an hour
+        c._last_housekeeping = 0
+        c.step()
+        assert os.path.isdir(left)
+        monkeypatch.setattr(c.together, "busy", lambda: False)
+        c._last_housekeeping = 0
+        c.step()
+        assert not os.path.exists(left)
+    finally:
+        c.close()
+
+
 def test_already_failing_alone_is_told_apart(state, project):
     repo, wa, wb, base = project
     (wa / "pay.py").write_text(PAY_A, encoding="utf-8")                  # A broke its own caller
