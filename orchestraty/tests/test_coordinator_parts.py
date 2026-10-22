@@ -1,6 +1,7 @@
 """The coordinator's parts: the lock, the heartbeat, the spool reader and the record."""
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -10,7 +11,8 @@ import pytest
 
 from orchestraty.coordinator import spool as spool_mod
 from orchestraty.coordinator.lock import Heartbeat, Lock, is_fresh, touch
-from orchestraty.coordinator.record import Record, SchemaError, repo_key, repo_name
+from orchestraty.coordinator import record as record_module
+from orchestraty.coordinator.record import SCHEMA, Record, SchemaError, repo_key, repo_name
 from orchestraty.coordinator.spool import SpoolReader
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -152,10 +154,42 @@ def test_only_jsonl_files_in_agent_folders_are_read(tmp_path):
 def test_the_record_is_created_with_its_schema_and_reopens(tmp_path):
     path = str(tmp_path / "r" / "record.sqlite")
     rec = Record(path)
-    assert rec.meta_get("schema") == "1"
+    assert rec.meta_get("schema") == str(SCHEMA) == "2"
     assert rec.db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    assert rec.has_table("labels") and rec.has_table("missed")
     rec.close()
     Record(path).close()
+
+
+def test_a_record_from_before_labels_is_brought_up_to_date(tmp_path):
+    # A schema-1 record, as Orchestraty wrote it before labels: its tables, a finding, a note.
+    path = tmp_path / "record.sqlite"
+    db = sqlite3.connect(str(path))
+    db.executescript(record_module._TABLES)
+    db.execute("INSERT INTO meta VALUES ('schema', '1')")
+    db.execute("INSERT INTO findings VALUES ('O6|a.py::charge|A', 1, 'O6', 'strong', 'A', '', '[\"A\"]', "
+               "'a.py::charge', 'a.py', '{}', 'open', 5, 6, NULL)")
+    db.execute("INSERT INTO notes (finding_key, session_id, kind, slot, text, state, created) "
+               "VALUES ('O6|a.py::charge|A', 'A', 'stop', 'notes/A/stop.json', 'a note', 'pending', 5)")
+    db.commit()
+    db.close()
+    reader = Record(str(path), readonly=True)            # a reader copes with the tables not there yet
+    assert reader.labels() == [] and reader.missed() == []
+    reader.close()
+    rec = Record(str(path))                               # the coordinator opens it: brought up to date
+    assert rec.meta_get("schema") == "2"
+    assert [f["key"] for f in rec.findings()] == ["O6|a.py::charge|A"]
+    assert [n["text"] for n in rec.notes()] == ["a note"]
+    with rec.transaction():
+        rec.add_label("O6|a.py::charge|A", "real", "it was", 7)
+        rec.add_missed(8, "B", "a note about refund")
+    assert [(r["finding_key"], r["verdict"], r["why"], r["ts"]) for r in rec.labels()] == [
+        ("O6|a.py::charge|A", "real", "it was", 7)]
+    assert [(r["ts"], r["session_id"], r["text"]) for r in rec.missed()] == [(8, "B", "a note about refund")]
+    rec.close()
+    again = Record(str(path))                             # reopening changes nothing more
+    assert again.meta_get("schema") == "2" and len(again.labels()) == 1
+    again.close()
 
 
 def test_a_newer_record_is_refused(tmp_path):

@@ -5,13 +5,17 @@ Write-ahead logging, so ``orch status`` and other readers never wait for the wri
 the versioned event schema. ``sessions`` and ``repos`` are projections that can be rebuilt
 from the events and git. ``spool_files`` keeps where reading stopped in each spool file, saved
 in the same transaction as the events read, so a restart neither loses nor repeats a line.
+``labels`` and ``missed`` keep the user's word on the findings (``orch label``, ``orch missed``).
+
+A record of an older schema is brought up to date when the coordinator opens it, one step at a
+time (``_MIGRATIONS``); readers never change it, so they cope with tables that are not there yet.
 """
 import json
 import os
 import sqlite3
 from contextlib import contextmanager
 
-SCHEMA = 1
+SCHEMA = 2
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -94,6 +98,22 @@ CREATE TABLE IF NOT EXISTS session_symbols (
     PRIMARY KEY (session_id, symbol));
 """
 
+# What each schema adds to the one before it. _TABLES is schema 1; a new record gets every step.
+_MIGRATIONS = {
+    2: ("""CREATE TABLE IF NOT EXISTS labels (
+               id INTEGER PRIMARY KEY,
+               finding_key TEXT NOT NULL,
+               verdict TEXT NOT NULL,
+               why TEXT NOT NULL DEFAULT '',
+               ts INTEGER NOT NULL)""",
+        "CREATE INDEX IF NOT EXISTS labels_by_finding ON labels (finding_key, ts)",
+        """CREATE TABLE IF NOT EXISTS missed (
+               id INTEGER PRIMARY KEY,
+               ts INTEGER NOT NULL,
+               session_id TEXT NOT NULL DEFAULT '',
+               text TEXT NOT NULL)"""),
+}
+
 EVENT_COLUMNS = ("ts", "agent", "event", "session_id", "tool_name", "tool_use_id", "cwd", "file_path")
 SESSION_COLUMNS = ("id", "agent", "repo_id", "cwd", "worktree", "branch", "base_commit", "base_guessed",
                    "started", "last_seen", "state", "turn", "note")
@@ -116,6 +136,13 @@ def repo_name(common_dir):
     return base[:-4] if base.lower().endswith(".git") else base
 
 
+def _finding_row(row):
+    d = dict(row)
+    d["sessions"] = json.loads(d["sessions"])
+    d["detail"] = json.loads(d["detail"])
+    return d
+
+
 class Record:
     def __init__(self, path, readonly=False):
         self.path = path
@@ -133,10 +160,16 @@ class Record:
         self.db.executescript(_TABLES)
         found = self.meta_get("schema")
         if found is None:
-            self.meta_set("schema", str(SCHEMA))
-        elif int(found) > SCHEMA:
+            self.meta_set("schema", 1)                  # _TABLES is schema 1; the steps below follow
+        version = int(found or 1)
+        if version > SCHEMA:
             self.db.close()
             raise SchemaError(f"the record at {path} has schema {found}; this version reads {SCHEMA}")
+        for step in range(version + 1, SCHEMA + 1):
+            with self.transaction():
+                for sql in _MIGRATIONS[step]:
+                    self.db.execute(sql)
+                self.meta_set("schema", step)
 
     def close(self):
         self.db.close()
@@ -184,6 +217,12 @@ class Record:
         else:
             rows = self.db.execute("SELECT * FROM events WHERE session_id = ? ORDER BY id", (session_id,))
         return [dict(r) for r in rows]
+
+    def edits(self, since=0):
+        """The files the agents edited from `since` (ns) on: every PostToolUse that names a file."""
+        return [dict(r) for r in self.db.execute(
+            "SELECT ts, session_id, cwd, file_path FROM events WHERE event = 'PostToolUse' AND file_path IS NOT NULL "
+            "AND ts >= ? ORDER BY id", (since,))]
 
     # repositories
     def repo_id(self, common_dir):
@@ -265,13 +304,11 @@ class Record:
             args.extend(states)
         if where:
             sql += " WHERE " + " AND ".join(where)
-        out = []
-        for r in self.db.execute(sql + " ORDER BY key", args):
-            d = dict(r)
-            d["sessions"] = json.loads(d["sessions"])
-            d["detail"] = json.loads(d["detail"])
-            out.append(d)
-        return out
+        return [_finding_row(r) for r in self.db.execute(sql + " ORDER BY key", args)]
+
+    def finding(self, key):
+        row = self.db.execute("SELECT * FROM findings WHERE key = ?", (key,)).fetchone()
+        return _finding_row(row) if row else None
 
     # notes: pending (made), written (in a slot), delivered (taken by a hook) or withdrawn
     def add_note(self, finding_key, session_id, kind, slot, text, now, cause_ts=None):
@@ -324,6 +361,29 @@ class Record:
         """A withdrawn slot: its other written notes wait for the next write."""
         self.db.execute("UPDATE notes SET state = 'pending', written = NULL WHERE slot = ? AND state = 'written'",
                         (slot,))
+
+    # the user's word on the findings (schema 2): kept here only, never put into a note
+    def has_table(self, name):
+        return self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone() is not None
+
+    def add_label(self, finding_key, verdict, why, ts):
+        self.db.execute("INSERT INTO labels (finding_key, verdict, why, ts) VALUES (?, ?, ?, ?)",
+                        (finding_key, verdict, why, ts))
+
+    def labels(self):
+        """Every label, oldest first; a finding's label is its latest. None before schema 2."""
+        if not self.has_table("labels"):
+            return []
+        return [dict(r) for r in self.db.execute("SELECT * FROM labels ORDER BY ts, id")]
+
+    def add_missed(self, ts, session_id, text):
+        self.db.execute("INSERT INTO missed (ts, session_id, text) VALUES (?, ?, ?)", (ts, session_id, text))
+
+    def missed(self):
+        """Every report of a note that should have come, oldest first. None before schema 2."""
+        if not self.has_table("missed"):
+            return []
+        return [dict(r) for r in self.db.execute("SELECT * FROM missed ORDER BY ts, id")]
 
     def sessions(self, states=None, repo_id=None):
         sql, args = "SELECT * FROM sessions", []
