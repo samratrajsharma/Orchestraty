@@ -64,7 +64,7 @@ def test_a_homemade_agent_hears_before_it_edits_a_caller(state, hook_script, git
         assert caught_up(state), "the coordinator did not read the whole run"
     finally:
         assert stopped(state), "the coordinator did not stop"
-    out = proc.stdout.decode("utf-8")
+    out = proc.stdout.decode("utf-8").replace("\r\n", "\n")                   # print's line ends on Windows
     assert proc.returncode == 0, out + proc.stderr.decode("utf-8", "replace")
     told_b = out.split("B, before writing b.py, hears:\n", 1)[1].split("\n", 1)[0]
     assert ("another helper-homemade session (worktree wt-a, branch feat-a) changed the contract of charge in a.py: "
