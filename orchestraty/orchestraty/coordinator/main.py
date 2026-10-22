@@ -528,16 +528,25 @@ class Coordinator:
         elif self.record.session(item["session_id"]) is None:
             self.log.info("a declaration for a session the record does not have was dropped")
         else:
+            ts = self._made(ts)
             self.record.add_declaration(item["session_id"], item["paths"], item["symbols"], item["task"], ts,
                                         ts + self.cfg["declare_minutes"] * 60 * NS)
             self._status_dirty = True
             if item["session_id"] in self.sessions:                 # O7 compares it with the others'
                 self._dirty_repos.add(self.sessions[item["session_id"]]["repo_id"])
 
+    def _made(self, ts):
+        """When a declaration or a claim counts as made: its line's time, or now when that is
+        later. Where the clock is coarse (Windows before Python 3.13), a writer's time in
+        seconds, made nanoseconds, can land just past this clock's reading of the same tick;
+        the rules, which run in this same pass, must see it hold."""
+        return min(ts, self.now_ns())
+
     def handle_claim(self, line, ts):
         """A line orch claim, orch release or their MCP tools appended. A claim is stored for a
         live session of a watched repository, and holds until it expires or ends; a release
-        ends the claims it names that hold (only its session's, when it names one)."""
+        ends the claims it names that have neither ended nor expired by its time (only its
+        session's, when it names one): those read before it, whatever their lines' times."""
         item = claims.parse_line(line)
         if item is None:
             self.bad_lines += 1
@@ -551,13 +560,16 @@ class Coordinator:
             if s is None or s["state"] != "live" or s["repo_id"] != repo_id or s["agent"] == CLOUD_AGENT:
                 self.log.info("a claim for a session not live in that repository was dropped")
                 return
+            ts = self._made(ts)
             self.record.add_claim(repo_id, s["id"], item["kind"], item["target"], item["file"], item["hard"], ts,
                                   ts + item["minutes"] * 60 * NS)
         else:
-            for c in self.record.claims(active_at=ts, repo_id=repo_id):
+            for c in self.record.claims(repo_id=repo_id):
+                if c["ended"] is not None or c["expires"] <= ts:
+                    continue
                 named = c["id"] == item["id"] if "id" in item else c["target"] == item["target"]
                 if named and (not item["session_id"] or c["session_id"] == item["session_id"]):
-                    self.record.end_claim(c["id"], ts, "released")
+                    self.record.end_claim(c["id"], max(ts, c["ts"]), "released")
         self._dirty_repos.add(repo_id)
         self._status_dirty = True
 

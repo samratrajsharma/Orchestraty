@@ -135,6 +135,26 @@ def test_claims_count_and_o7_ends_with_what_it_compared(state, repo, git, tmp_pa
         c.close()
 
 
+def test_what_a_line_dated_a_little_ahead_of_the_coordinators_clock_says_holds_at_once(state, repo, git, tmp_path):
+    # Where the clock is coarse (Windows before Python 3.13), a writer's time in seconds, made
+    # nanoseconds, can land just past the coordinator's reading of the same tick: magnified here.
+    c, tops = start(state, repo, git, tmp_path)
+    try:
+        ahead = time.time() + 5
+        declarations.append(state, "A", ["a.py"], [], now=ahead)
+        declarations.append(state, "B", ["a.py"], [], now=ahead)
+        claims.append_claim(state, "A", str(repo / ".git"), "file", "b.py", "", False, 60, now=ahead)
+        c.step()
+        assert [f["key"] for f in c.record.findings() if f["rule"] == "O7"] == ["O7|a.py|A|B"]
+        assert slots.waiting(slots.edit_slot(state, "B", str(tops["B"] / "b.py")))     # the claim's note
+        [held] = c.record.claims(active_at=time.time_ns())
+        claims.append_release(state, str(repo / ".git"), target="b.py", now=ahead - 10)    # dated before it
+        c.step()
+        assert c.record.claim(held["id"])["why"] == "released" and c.record.claims(active_at=time.time_ns()) == []
+    finally:
+        c.close()
+
+
 def test_antigravity_hears_o7_with_its_next_step(state, repo, git, tmp_path, hook_script):
     c, tops = start(state, repo, git, tmp_path, agents=(("A", "claude"), ("B", "antigravity")))
     try:
