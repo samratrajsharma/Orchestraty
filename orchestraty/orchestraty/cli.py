@@ -200,6 +200,58 @@ def cmd_status(args):
     return 0
 
 
+def _recorded_when(state):
+    from orchestraty import feedback
+    if feedback.coordinator_running(state):
+        return "The coordinator records it now."
+    return "The coordinator records it when it next runs (a hook starts it with the next event)."
+
+
+def cmd_findings(args):
+    from orchestraty import feedback
+    data = feedback.collect(State(), include_all=args.all, days=args.days)
+    if args.json:
+        print(json.dumps(data, indent=2))
+    else:
+        sys.stdout.write(feedback.render(data))
+    return 0
+
+
+def cmd_label(args):
+    from orchestraty import feedback
+    state = State()
+    try:
+        finding = feedback.target(state, args.finding)
+        feedback.label(state, finding["key"], args.verdict, args.why)
+    except feedback.Refused as exc:
+        return _refuse("label", exc)
+    print(f"{finding['rule']} {feedback.what(finding)}: labelled {args.verdict}. {_recorded_when(state)}")
+    return 0
+
+
+def cmd_missed(args):
+    from orchestraty import feedback
+    state = State()
+    try:
+        sid = feedback.session_ref(state, args.session) if args.session is not None else ""
+        feedback.missed(state, args.text, sid)
+    except feedback.Refused as exc:
+        return _refuse("missed", exc)
+    print("Reported" + (f" for session {sid[:8]}" if sid else "") + ". Your words stay in the record on this "
+          f"machine; no note is made from them. {_recorded_when(state)}")
+    return 0
+
+
+def _days(text):
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise argparse.ArgumentTypeError("a whole number of days, 1 or more")
+    return value
+
+
 def cmd_coordinator(args):
     from orchestraty.coordinator import main as coordinator
     from orchestraty.coordinator.lock import Lock, touch
@@ -304,6 +356,32 @@ def build_parser():
     status.add_argument("--json", action="store_true", help="print JSON (schema in the 'schema' field)")
     status.add_argument("--all", action="store_true", help="include ended sessions")
     status.set_defaults(handler=cmd_status)
+
+    findings = commands.add_parser("findings", help="the findings, numbered for orch label",
+                                   description="List the findings seen in the last days, the latest first, each "
+                                               "with a number orch label takes for 24 hours. Reads the record "
+                                               "without changing it.")
+    findings.add_argument("--all", action="store_true", help="include resolved and latent findings")
+    findings.add_argument("--days", type=_days, default=7, metavar="N", help="findings seen in the last N days "
+                                                                             "(default 7)")
+    findings.add_argument("--json", action="store_true", help="print JSON (schema in the 'schema' field)")
+    findings.set_defaults(handler=cmd_findings)
+
+    label = commands.add_parser("label", help="your verdict on a finding",
+                                description="Label a finding real, harmless or false. Kept in the record on "
+                                            "this machine, with your reason; never put into a note.")
+    label.add_argument("finding", help="its number from orch findings (24 hours), or its key")
+    label.add_argument("verdict", choices=["real", "harmless", "false"])
+    label.add_argument("--why", default="", help="your reason, in your words (up to 500 characters)")
+    label.set_defaults(handler=cmd_label)
+
+    missed = commands.add_parser("missed", help="report a note that should have come",
+                                 description="Report a note Orchestraty should have given. Kept in the record "
+                                             "on this machine; never put into a note.")
+    missed.add_argument("text", help="what should have been noted, in your words (up to 2000 characters)")
+    missed.add_argument("--session", metavar="ID", help="the session that should have heard (its id, or its "
+                                                         "first characters)")
+    missed.set_defaults(handler=cmd_missed)
 
     cfg = commands.add_parser("config", help="show or switch steer and wake",
                               description="steer: a strong note stops the edit it rides on, so the agent re-plans "

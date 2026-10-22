@@ -2,7 +2,9 @@
 
 It holds the single-writer lock, touches the heartbeat, reads the spools every
 ``SCAN_SECONDS``, records the events of watched repositories, keeps each session's
-lifecycle, and exits after ``idle_seconds`` with no live session and no new event.
+lifecycle, and exits after ``idle_seconds`` with no live session and no new event. Lines in
+``<spool>/orch/`` are the user's own (``orch label``, ``orch missed``): stored as they are, in
+the record only.
 
 A session is created from its first event: its worktree, repository, branch and base commit
 (HEAD then) come from git in the event's folder. The base counts as guessed unless that first
@@ -26,7 +28,7 @@ import os
 import sys
 import time
 
-from orchestraty import __version__, config, gitio
+from orchestraty import __version__, config, feedback, gitio
 from orchestraty.coordinator.lock import Heartbeat, Lock
 from orchestraty.coordinator.record import Record, SchemaError, repo_key
 from orchestraty.coordinator.spool import SpoolReader
@@ -315,6 +317,9 @@ class Coordinator:
         ts = line.get("ts")
         if not isinstance(ts, int) or isinstance(ts, bool):
             ts = self.now_ns()
+        if agent == feedback.SPOOL_AGENT:
+            self.handle_feedback(line, ts)
+            return
         if "shim_error" in line:
             self.record.add_event({"ts": ts, "agent": agent, "event": "shim_error"},
                                   {"error": str(line["shim_error"])[:64]})
@@ -344,6 +349,19 @@ class Coordinator:
         if sid not in self.livemap.sessions:
             self._track(session)
         self.livemap.note_event(session, event, line)
+
+    def handle_feedback(self, line, ts):
+        """A line orch label or orch missed appended: the user's verdict on a finding, or a note
+        that should have come. Kept in the record only; no note is ever made from it."""
+        item = feedback.parse_line(line)
+        if item is None:
+            self.bad_lines += 1
+        elif item["event"] == "missed":
+            self.record.add_missed(ts, item["session_id"], item["text"])
+        elif self.record.finding(item["finding"]) is not None:
+            self.record.add_label(item["finding"], item["verdict"], item["why"], ts)
+        else:
+            self.log.info("a label for a finding the record does not have was dropped")
 
     def session_for(self, sid, agent, line, event, ts):
         if sid in self.ignored:
@@ -414,11 +432,19 @@ class Coordinator:
 
     def clean_spool(self, now):
         """Delete spool files read to the end whose session is ignored, or ended more than a
-        day ago."""
+        day ago, and orch's own day files read to the end and a day old."""
         gone = []
         for path, (_fid, offset) in list(self.reader.positions.items()):
             sid = os.path.splitext(os.path.basename(path))[0]
-            if sid in self.ignored:
+            if os.path.basename(os.path.dirname(path)) == feedback.SPOOL_AGENT:
+                try:
+                    if now - os.stat(path).st_mtime_ns < KEEP_ENDED_SPOOL_SECONDS * NS:
+                        continue
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    continue
+            elif sid in self.ignored:
                 pass
             else:
                 session = self.sessions.get(sid) or self.record.session(sid)

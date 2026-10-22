@@ -100,6 +100,11 @@ class State:
         return self._in("status.json")
 
     @property
+    def numbers(self):
+        """The short numbers orch findings gave in the last 24 hours, for orch label."""
+        return self._in("finding-numbers.json")
+
+    @property
     def backups(self):
         return self._in("backups")
 
