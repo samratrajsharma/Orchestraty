@@ -6,10 +6,11 @@ the versioned event schema. ``sessions`` and ``repos`` are projections that can 
 from the events and git. ``spool_files`` keeps where reading stopped in each spool file, saved
 in the same transaction as the events read, so a restart neither loses nor repeats a line.
 ``labels`` and ``missed`` keep the user's word on the findings (``orch label``, ``orch missed``),
-``declarations`` what agents say they are about to change (the MCP tool ``declare``). ``changes``
-is append-only too: the record's own write methods log each session started or ended, finding
-opened or resolved, note written, delivered or withdrawn and declaration made, in the order they
-happen (``orch events`` reads it).
+``declarations`` what agents say they are about to change (the MCP tool ``declare``), ``claims``
+what a session has reserved (``orch claim``, the MCP tool ``claim``). ``changes`` is append-only
+too: the record's own write methods log each session started or ended, finding opened or
+resolved, note written, delivered or withdrawn, declaration made and claim made or ended, in the
+order they happen (``orch events`` reads it).
 
 A record of an older schema is brought up to date when the coordinator opens it, one step at a
 time (``_MIGRATIONS``); readers never change it, so they cope with tables that are not there yet.
@@ -20,7 +21,7 @@ import sqlite3
 import time
 from contextlib import contextmanager
 
-SCHEMA = 3
+SCHEMA = 4
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -145,6 +146,19 @@ _MIGRATIONS = {
                UNION ALL SELECT delivered, 'note_delivered', session_id, finding_key, id FROM notes
                  WHERE delivered IS NOT NULL)
            ORDER BY ts"""),
+    4: ("""CREATE TABLE IF NOT EXISTS claims (
+               id INTEGER PRIMARY KEY,
+               repo_id INTEGER NOT NULL,
+               session_id TEXT NOT NULL,
+               kind TEXT NOT NULL,
+               target TEXT NOT NULL,
+               file TEXT NOT NULL DEFAULT '',
+               hard INTEGER NOT NULL DEFAULT 0,
+               ts INTEGER NOT NULL,
+               expires INTEGER NOT NULL,
+               ended INTEGER,
+               why TEXT NOT NULL DEFAULT '')""",
+        "CREATE INDEX IF NOT EXISTS claims_by_repo ON claims (repo_id, expires)"),
 }
 
 EVENT_COLUMNS = ("ts", "agent", "event", "session_id", "tool_name", "tool_use_id", "cwd", "file_path")
@@ -461,6 +475,47 @@ class Record:
             d["paths"], d["symbols"] = json.loads(d["paths"]), json.loads(d["symbols"])
             out.append(d)
         return out
+
+    # what sessions have reserved (schema 4)
+    def add_claim(self, repo_id, session_id, kind, target, file, hard, ts, expires):
+        """Store a claim; returns its id."""
+        cur = self.db.execute("INSERT INTO claims (repo_id, session_id, kind, target, file, hard, ts, expires) "
+                              "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                              (repo_id, session_id, kind, target, file, int(bool(hard)), ts, expires))
+        self._log(ts, "claimed", session_id=session_id, ref=cur.lastrowid)
+        return cur.lastrowid
+
+    def end_claim(self, claim_id, ts, why):
+        """End a claim that holds (released, or its session ended). True when it did hold."""
+        row = self.db.execute("SELECT session_id FROM claims WHERE id = ? AND ended IS NULL AND expires > ?",
+                              (claim_id, ts)).fetchone()
+        if row is None:
+            return False
+        self.db.execute("UPDATE claims SET ended = ?, why = ? WHERE id = ?", (ts, why, claim_id))
+        self._log(ts, "claim_ended", session_id=row["session_id"], ref=claim_id)
+        return True
+
+    def claim(self, claim_id):
+        if not self.has_table("claims"):
+            return None
+        row = self.db.execute("SELECT * FROM claims WHERE id = ?", (claim_id,)).fetchone()
+        return dict(row) if row else None
+
+    def claims(self, active_at=None, repo_id=None):
+        """Claims, oldest first; with active_at (ns), only those that hold then: made by then,
+        not ended, not expired. None before schema 4."""
+        if not self.has_table("claims"):
+            return []
+        sql, args, where = "SELECT * FROM claims", [], []
+        if active_at is not None:
+            where.append("ts <= ? AND expires > ? AND (ended IS NULL OR ended > ?)")
+            args += [active_at, active_at, active_at]
+        if repo_id is not None:
+            where.append("repo_id = ?")
+            args.append(repo_id)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        return [dict(r) for r in self.db.execute(sql + " ORDER BY ts, id", args)]
 
     # the change log (schema 3)
     def _log(self, ts, kind, session_id="", finding_key="", ref=None):

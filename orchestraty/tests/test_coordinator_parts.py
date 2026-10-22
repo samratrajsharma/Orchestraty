@@ -154,9 +154,9 @@ def test_only_jsonl_files_in_agent_folders_are_read(tmp_path):
 def test_the_record_is_created_with_its_schema_and_reopens(tmp_path):
     path = str(tmp_path / "r" / "record.sqlite")
     rec = Record(path)
-    assert rec.meta_get("schema") == str(SCHEMA) == "3"
+    assert rec.meta_get("schema") == str(SCHEMA) == "4"
     assert rec.db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-    assert all(rec.has_table(t) for t in ("labels", "missed", "declarations", "changes"))
+    assert all(rec.has_table(t) for t in ("labels", "missed", "declarations", "changes", "claims"))
     rec.close()
     Record(path).close()
 
@@ -217,7 +217,7 @@ def test_a_record_from_before_declarations_gets_its_history_logged(tmp_path):
     assert reader.change_log() == [] and reader.declarations() == []
     reader.close()
     rec = Record(str(path))
-    assert rec.meta_get("schema") == "3"
+    assert rec.meta_get("schema") == str(SCHEMA)
     assert [(c["ts"], c["kind"]) for c in rec.change_log()] == [
         (10, "session_started"), (20, "finding_opened"), (30, "note_written"), (35, "note_written"),
         (40, "note_delivered"), (50, "finding_resolved"), (60, "session_ended")]      # a withdrawal has no time
@@ -227,6 +227,36 @@ def test_a_record_from_before_declarations_gets_its_history_logged(tmp_path):
     assert (d["session_id"], d["paths"], d["symbols"], d["task"]) == ("A", ["c.py"], ["c.py::refund"], "add a refund")
     assert rec.declarations(active_at=200) == [] and rec.declarations(active_at=99) == []
     assert rec.change_log(after_id=7)[0]["kind"] == "declared"
+    rec.close()
+
+
+def test_a_record_from_before_claims_keeps_what_it_has_and_takes_claims(tmp_path):
+    path = tmp_path / "record.sqlite"
+    schema_2_record(path)
+    rec = Record(str(path))
+    with rec.transaction():
+        rec.add_declaration("A", ["c.py"], [], "", 100, 200)
+    rec.db.execute("DROP TABLE claims")                         # as schema 3 left it
+    rec.meta_set("schema", 3)
+    rec.close()
+    reader = Record(str(path), readonly=True)
+    assert reader.claims() == [] and reader.claim(1) is None    # a reader copes with no claims table
+    reader.close()
+    rec = Record(str(path))
+    assert rec.meta_get("schema") == "4" and len(rec.declarations()) == 1 and len(rec.change_log()) == 8
+    with rec.transaction():
+        first = rec.add_claim(1, "A", "symbol", "a.py::charge", "a.py", True, 300, 400)
+        second = rec.add_claim(1, "B", "area", "billing", "", False, 310, 900)
+    assert [c["id"] for c in rec.claims(active_at=350)] == [first, second]
+    assert [c["id"] for c in rec.claims(active_at=500)] == [second]              # the first expired at 400
+    assert rec.claims(active_at=299) == [] and rec.claims(repo_id=2) == []
+    with rec.transaction():
+        assert rec.end_claim(second, 600, "released") and not rec.end_claim(second, 610, "released")
+        assert not rec.end_claim(first, 620, "released")                         # expired: nothing to end
+    assert rec.claims(active_at=650) == [] and rec.claim(second)["why"] == "released"
+    assert rec.claim(first)["hard"] == 1 and rec.claim(first)["file"] == "a.py"
+    assert [(c["kind"], c["session_id"], c["ref"]) for c in rec.change_log(after_id=8)] == [
+        ("claimed", "A", first), ("claimed", "B", second), ("claim_ended", "B", second)]
     rec.close()
 
 
