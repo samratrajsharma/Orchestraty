@@ -1,7 +1,10 @@
 """Cloud agents' branches: the settings, the shadow repository's fetch (never a credential
 prompt; a failure is kept, and the wait doubles), and orch remote."""
+import errno
 import http.server
 import json
+import os
+import stat
 import threading
 import time
 
@@ -90,6 +93,28 @@ def test_no_credential_prompt_and_an_unreachable_remote_is_a_recorded_failure(st
     assert not shadow.due(time.time())                                   # no retry before then
     git(repo, "remote", "set-url", "origin", "https://user:secret-token@example.invalid/repo.git")
     assert "secret-token" not in json.dumps(fetch(state, repo))
+
+
+def test_a_shadow_whose_files_git_left_read_only_is_made_afresh(state, repo, origin, agent, monkeypatch):
+    agent("claude/a", {"a.py": "x = 1\n"})
+    turn_on(state, repo)
+    assert fetch(state, repo)["ok"]
+    shadow = remote.Shadow(state, str(repo / ".git"))
+    files = [os.path.join(top, name) for top, _, names in os.walk(shadow.path) for name in names]
+    assert any(not os.stat(f).st_mode & stat.S_IWRITE for f in files)            # git's objects
+    real_unlink = os.unlink
+
+    def unlink_as_windows_does(path, *, dir_fd=None):                            # a read-only file stays
+        if not os.stat(path, dir_fd=dir_fd, follow_symlinks=False).st_mode & stat.S_IWRITE:
+            raise PermissionError(errno.EACCES, "Access is denied", path)
+        real_unlink(path, dir_fd=dir_fd)
+    monkeypatch.setattr(os, "unlink", unlink_as_windows_does)
+    leftover = os.path.join(shadow.path, "leftover")
+    open(leftover, "w").close()
+    shadow.mark_broken()
+    again = fetch(state, repo)
+    assert again["ok"] and again["branches"] == 1, again["error"]
+    assert not shadow.broken() and not os.path.exists(leftover)
 
 
 def test_orch_remote_on_off_patterns_and_fetch(state, repo, origin, agent, capsys):
