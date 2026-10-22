@@ -1,17 +1,12 @@
-"""Installs the hook script and Claude Code's hook entries, and takes them out again.
+"""Installs the hook script, and an agent's hook entries into its config file, and takes them
+out again.
 
-``install`` copies the hook script into the state folder's ``hooks`` folder and merges one
-entry per captured event into a Claude Code settings file. By default that is the user's own
-settings (``~/.claude/settings.json``, or the folder ``CLAUDE_CONFIG_DIR`` names), so the
-hooks run in every worktree, including ones made after installing; a project's
-``.claude/settings.local.json`` covers only that folder. Each entry is in exec form (no shell):
-``command`` is an absolute Python and ``args`` is ``["-S", "-I", <hook script>, "claude",
-<event>]``.
-
-Install rules: other settings and other hooks are kept; our entries (those that run our hook
-script) are replaced, so installing twice changes nothing; the file is copied to the state
-folder's ``backups`` before every change; a settings file that is not valid JSON, or that is
-a link, is refused and left alone.
+Which entries go where is the agent's adapter's business (``orchestraty/adapters``); this module
+does the file work for every agent: the hook script copied into the state folder's ``hooks``
+folder, the file copied to the state folder's ``backups`` before every change, written whole
+(never edited in place), and a config file that is not valid JSON, or that is a link, refused and
+left alone. Claude Code's entries (``adapters/claude``) are installed by ``install``; its names
+are kept here too, where the rest of Orchestraty finds them.
 """
 import json
 import os
@@ -19,18 +14,12 @@ import shutil
 import sys
 import time
 
+from orchestraty.adapters.claude import (AGENT, EDIT_MATCHER, EVENTS, MATCHERS, MOD_SOURCE, PLUGIN_DIRS,  # noqa: F401
+                                         TIMEOUT_SECONDS, WAKE_TIMEOUT_SECONDS, hook_block, hook_entry,
+                                         install_mod, merged_settings, mod_in, settings_path, wake_entry,
+                                         with_mod, without_mod, without_ours)
+
 HOOK_SOURCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook.py")
-MOD_SOURCE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mod")
-PLUGIN_DIRS = "CLAUDE_CODE_PLUGIN_DIRS"       # plugin folders Claude Code loads, as --plugin-dir does
-EDIT_MATCHER = "Edit|Write|MultiEdit|NotebookEdit"
-# The Claude Code events captured. PreToolUse runs for the edit tools only; PostToolUse for
-# every tool, since a shell command can change files too.
-EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse",
-          "PostToolUseFailure", "Stop", "SubagentStop", "StopFailure")
-MATCHERS = {"PreToolUse": EDIT_MATCHER, "PostToolUse": "*", "PostToolUseFailure": "*"}
-TIMEOUT_SECONDS = 10
-WAKE_TIMEOUT_SECONDS = 3600     # the wake waiter leaves on its own a little before this
-AGENT = "claude"
 BACKUP_NAME = "settings.json"
 BACKUP_SOURCE = "source.txt"
 
@@ -47,16 +36,6 @@ def hook_python():
     if os.name == "nt" and base and os.path.isfile(base):
         return base
     return sys.executable
-
-
-def settings_path(claude_config=None, project=None, environ=None):
-    """The Claude Code settings file to change: a project folder's settings.local.json, the
-    settings.json in a given Claude Code config folder, or the user's own settings."""
-    if project:
-        return os.path.join(os.path.abspath(project), ".claude", "settings.local.json")
-    environ = os.environ if environ is None else environ
-    folder = claude_config or environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
-    return os.path.join(os.path.abspath(folder), "settings.json")
 
 
 def _same(a, b):
@@ -97,125 +76,6 @@ def load_settings(path):
     if not isinstance(data, dict):
         raise Refused(f"{path} does not hold a JSON object")
     return data
-
-
-def hook_entry(python, script, event):
-    hook = {"type": "command", "command": python, "args": ["-S", "-I", script, AGENT, event],
-            "timeout": TIMEOUT_SECONDS}
-    entry = {"hooks": [hook]}
-    if event in MATCHERS:
-        entry["matcher"] = MATCHERS[event]
-    return entry
-
-
-def wake_entry(python, script):
-    """The opt-in Stop entry that waits in the background for a note to wake the session with."""
-    return {"hooks": [{"type": "command", "command": python, "args": ["-S", "-I", script, AGENT, "Wake"],
-                       "asyncRewake": True, "timeout": WAKE_TIMEOUT_SECONDS}]}
-
-
-def hook_block(python, script, wake=False):
-    """The ``hooks`` object with only our entries, for people who add it by hand."""
-    block = {event: [hook_entry(python, script, event)] for event in EVENTS}
-    if wake:
-        block["Stop"].append(wake_entry(python, script))
-    return block
-
-
-def _ours(entry, script):
-    hooks = entry.get("hooks") if isinstance(entry, dict) else None
-    if not isinstance(hooks, list):
-        return False
-    for hook in hooks:
-        args = hook.get("args") if isinstance(hook, dict) else None
-        if isinstance(args, list) and any(isinstance(a, str) and _same(a, script) for a in args):
-            return True
-    return False
-
-
-def without_ours(settings, script):
-    """The settings with every entry that runs our hook script removed (other entries kept;
-    an event left with no entries, and an empty hooks object, are dropped)."""
-    settings = dict(settings)
-    hooks = settings.get("hooks")
-    if not isinstance(hooks, dict):
-        return settings
-    kept = {}
-    for event, entries in hooks.items():
-        if not isinstance(entries, list):
-            kept[event] = entries
-            continue
-        rest = [e for e in entries if not _ours(e, script)]
-        if rest or not entries:
-            kept[event] = rest
-    if kept:
-        settings["hooks"] = kept
-    else:
-        del settings["hooks"]
-    return settings
-
-
-def _plugin_dirs(env):
-    sep = ";" if os.name == "nt" else ":"
-    return sep, [p for p in str(env.get(PLUGIN_DIRS, "")).split(sep) if p]
-
-
-def with_mod(settings, mod_dir):
-    """The settings with our mod's folder in env.CLAUDE_CODE_PLUGIN_DIRS (others kept)."""
-    settings = dict(settings)
-    env = dict(settings.get("env") or {})
-    sep, dirs = _plugin_dirs(env)
-    if not any(_same(d, mod_dir) for d in dirs):
-        dirs.append(mod_dir)
-    env[PLUGIN_DIRS] = sep.join(dirs)
-    settings["env"] = env
-    return settings
-
-
-def without_mod(settings, mod_dir):
-    """The settings with our mod's folder taken out of env.CLAUDE_CODE_PLUGIN_DIRS."""
-    if not isinstance(settings.get("env"), dict) or PLUGIN_DIRS not in settings["env"]:
-        return settings
-    settings = dict(settings)
-    env = dict(settings["env"])
-    sep, dirs = _plugin_dirs(env)
-    kept = [d for d in dirs if not _same(d, mod_dir)]
-    if kept:
-        env[PLUGIN_DIRS] = sep.join(kept)
-    else:
-        del env[PLUGIN_DIRS]
-    if env:
-        settings["env"] = env
-    else:
-        del settings["env"]
-    return settings
-
-
-def mod_in(settings, mod_dir):
-    env = settings.get("env") if isinstance(settings.get("env"), dict) else {}
-    return any(_same(d, mod_dir) for d in _plugin_dirs(env)[1])
-
-
-def install_mod(state):
-    """Copy the mod into the state folder (replacing an older copy); returns its folder."""
-    target = state.mod
-    if os.path.isdir(target):
-        shutil.rmtree(target)
-    shutil.copytree(MOD_SOURCE, target, ignore=shutil.ignore_patterns("__pycache__", "*.test.ts"))
-    return target
-
-
-def merged_settings(settings, python, script, wake=False):
-    """The settings with our entries added after any others (earlier ones of ours replaced)."""
-    settings = without_ours(settings, script)
-    hooks = dict(settings.get("hooks") or {})
-    for event in EVENTS:
-        entries = hooks.get(event)
-        hooks[event] = (list(entries) if isinstance(entries, list) else []) + [hook_entry(python, script, event)]
-    if wake:
-        hooks["Stop"].append(wake_entry(python, script))
-    settings["hooks"] = hooks
-    return settings
 
 
 def _write_atomic(path, data):

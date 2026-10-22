@@ -7,9 +7,11 @@ Nothing another session wrote (a prompt, a message, a comment, a default value's
 reaches a note, so one session cannot steer another through it. Each note says what its
 analysis covers and is cut to ``MAX_NOTE`` characters.
 """
-import json
 import os
 import re
+
+# Claude Code's hook outputs, under the names they had here. Each agent's own are in its adapter.
+from orchestraty.adapters.claude import post_tool_output, pre_tool_output, stop_output  # noqa: F401
 
 MAX_NOTE = 1200
 MAX_VALUE = 120
@@ -180,20 +182,3 @@ def push_line(findings):
     more = f" and {len(findings) - 1} more change(s)" if len(findings) > 1 else ""
     return (f"orchestraty: {len(left)} caller(s) of {_name(first['symbol'])} still use its old form "
             f"({_list(left, lambda c: _name(c['symbol']))}){more}. Run: orch status")[:400]
-
-
-# The output each hook prints, as bytes ready to write into a slot.
-def pre_tool_output(text, steer=False):
-    if steer:
-        out = {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": text}
-    else:
-        out = {"hookEventName": "PreToolUse", "additionalContext": text}
-    return json.dumps({"hookSpecificOutput": out}).encode("utf-8")
-
-
-def post_tool_output(text):
-    return json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}).encode("utf-8")
-
-
-def stop_output(text):
-    return json.dumps({"hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": text}}).encode("utf-8")
