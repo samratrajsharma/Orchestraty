@@ -526,6 +526,82 @@ def cmd_release(args):
     return 0
 
 
+def cmd_handoff(args):
+    from orchestraty import handoff
+    state = State()
+    try:
+        session = handoff.pick_session(state, args.session, os.getcwd())
+        if args.tests:
+            print(f"Running {args.tests} in {session['worktree']} (up to {args.timeout} s)...")
+        packet = handoff.build(state, session, task=args.task, tests=args.tests, timeout=args.timeout)
+    except handoff.Refused as exc:
+        return _refuse("handoff", exc)
+    out = os.path.abspath(args.out) if args.out else None
+    if out and os.path.exists(out):
+        return _refuse("handoff", f"{out} exists already: name a file that does not")
+    packet_id, md = handoff.save(state, packet)
+    if out:
+        with open(md, "r", encoding="utf-8") as src, open(out, "w", encoding="utf-8", newline="\n") as dst:
+            dst.write(src.read())
+    s = packet["session"]
+    print(f"Handoff {packet_id}: session {s['id'][:8]} ({s['agent']}, {s['branch'] or 'detached HEAD'}), "
+          f"head {packet['head'][:12] or '(none)'}.")
+    print(f"Packet: {md} (and {packet_id}.json beside it)" + (f"; a copy in {out}" if out else "") + ".")
+    if packet["uncommitted"]:
+        print(f"{len(packet['uncommitted'])} file(s) were not committed: they are not in the head, and stay in "
+              f"{s['worktree']}.")
+    if packet["tests"]:
+        t = packet["tests"]
+        print("Tests: " + (f"did not finish within {t['timeout']} s." if t["timed_out"]
+                           else f"exited {t['exit_code']}."))
+    print(f"Resume it: orch resume {packet_id} --agent claude|codex|antigravity|\"<command>\"")
+    return 0
+
+
+def cmd_resume(args):
+    from orchestraty import handoff, resume
+    state = State()
+    try:
+        packet, md = handoff.load(state, args.id)
+        with open(md, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        p = resume.plan(packet, md, text, args.agent, args.worktree)
+    except (handoff.Refused, resume.Refused) as exc:
+        return _refuse("resume", exc)
+    except OSError as exc:
+        return _refuse("resume", f"the packet could not be read: {exc}")
+    print(f"orch resume {packet['id']} makes a worktree on a new branch, {p['branch']}, from {p['head'][:12]}, and "
+          "starts the agent there:")
+    for line in resume.describe(p, md, len(text)):
+        print(line)
+    if args.dry_run:
+        return 0
+    if p["missing"]:
+        return _refuse("resume", f"{p['missing']} is not on PATH: install it, or pass the command to run as --agent")
+    if not confirm("Go ahead?", args.yes):
+        print("Nothing done.")
+        return 1
+    try:
+        resume.make_worktree(p)
+    except resume.Refused as exc:
+        return _refuse("resume", exc)
+    print(f"Made {p['worktree']} on {p['branch']}. Starting the agent; Orchestraty is done once it starts.")
+    try:
+        return resume.start(p, text)
+    except OSError as exc:
+        return _refuse("resume", f"the agent could not start: {exc}")
+
+
+def _seconds(text):
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise argparse.ArgumentTypeError("a whole number of seconds, 1 or more")
+    return value
+
+
 def cmd_stats(args):
     from orchestraty import stats
     if args.out and not args.summary:
@@ -881,6 +957,34 @@ def build_parser():
                                               "what it claims, which ends every claim on it in this repository.")
     release.add_argument("target", help="the claim's number, or the file, folder or function it claims")
     release.set_defaults(handler=cmd_release)
+
+    hand = commands.add_parser("handoff", help="package a session's work for another agent",
+                               description="Package a session's work from the record and git: its task line, "
+                                           "branch, base commit and head, the files it changed, its contract "
+                                           "changes, the open findings that involve it and the callers it left "
+                                           "behind. Stored as Markdown and JSON in the state folder; no prompt or "
+                                           "transcript is ever read.")
+    hand.add_argument("--session", metavar="ID", help="the session (its id, or its first characters; default: the "
+                                                      "one working in this worktree)")
+    hand.add_argument("--task", help="the task line (default: the one the agent declared, else the branch)")
+    hand.add_argument("--tests", metavar="COMMAND", help="a command that runs the tests, run in the session's "
+                                                         "worktree; its exit code and last lines go in the packet")
+    hand.add_argument("--timeout", type=_seconds, default=600, metavar="SECONDS",
+                      help="the time --tests may take (default 600)")
+    hand.add_argument("--out", metavar="FILE", help="also write the Markdown to FILE")
+    hand.set_defaults(handler=cmd_handoff)
+    res = commands.add_parser("resume", help="start an agent on a handoff, in a new worktree",
+                              description="Make a worktree on a new branch from a handoff's head, and start an "
+                                          "agent's own command-line tool there, in this terminal, with the packet "
+                                          "as its first message. Says what will run and asks first. The agent keeps "
+                                          "its own permissions and model settings.")
+    res.add_argument("id", help="the handoff's id (orch handoff printed it), or its first characters")
+    res.add_argument("--agent", required=True, metavar="AGENT",
+                     help="claude, codex or antigravity, or a command of your own, which gets the packet on stdin")
+    res.add_argument("--worktree", metavar="PATH", help="where to make the worktree (default: beside the session's)")
+    res.add_argument("--dry-run", action="store_true", help="only say what would run")
+    res.add_argument("--yes", action="store_true", help="do not ask first")
+    res.set_defaults(handler=cmd_resume)
 
     stats = commands.add_parser("stats", help="how Orchestraty was used, week by week",
                                 description="Usage, week by week, from the record: sessions, findings, notes and "
