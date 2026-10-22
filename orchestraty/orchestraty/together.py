@@ -30,7 +30,6 @@ coordinator's housekeeping. The results are kept in ``<state>/together/results.j
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -206,7 +205,7 @@ def run_check(state, job, done=None):
         out.update(result="error", error=str(exc))
         return out
     finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+        _discard(scratch)
 
 
 FAILING = (("error:", "exception:", "assert"),                           # TypeError: ..., x.py:5: error: ...
@@ -256,9 +255,19 @@ def clean_scratch(state, now=None):
         path = os.path.join(folder(state), name)
         try:
             if name.startswith("check-") and now - os.stat(path).st_mtime > STALE_SECONDS:
-                shutil.rmtree(path, ignore_errors=True)
+                _discard(path)
         except OSError:
             continue
+
+
+def _discard(path):
+    """Delete a check's folder, whose object files git left read-only (gitio.remove_tree). What
+    cannot be deleted yet, such as a file that a command of the check still holds open on
+    Windows, is left to the housekeeping."""
+    try:
+        gitio.remove_tree(path)
+    except OSError:
+        pass
 
 
 class Worker:

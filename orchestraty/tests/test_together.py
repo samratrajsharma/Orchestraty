@@ -1,8 +1,10 @@
 """The together check: snapshots that leave the repository as it was, a merge of two sessions'
 working copies, the user's command run on each alone and on both together, and, when they pass
 alone and fail together, a note to both sessions. Off by default."""
+import errno
 import json
 import os
+import stat
 import sys
 import time
 from pathlib import Path
@@ -64,6 +66,20 @@ def sessions_apart(wa, wb):
     (wb / "check.py").write_text(CHECK_B, encoding="utf-8")
 
 
+@pytest.fixture
+def windows_unlink(monkeypatch):
+    """os.unlink as on Windows, where a read-only file cannot be deleted; the files it refused."""
+    refused, real_unlink = [], os.unlink
+
+    def unlink(path, *, dir_fd=None):
+        if not os.stat(path, dir_fd=dir_fd, follow_symlinks=False).st_mode & stat.S_IWRITE:
+            refused.append(path)
+            raise PermissionError(errno.EACCES, "Access is denied", path)
+        real_unlink(path, dir_fd=dir_fd)
+    monkeypatch.setattr(os, "unlink", unlink)
+    return refused
+
+
 def repository_bytes(repo, git):
     """What a snapshot must leave as it was: the index, the refs and the objects folder."""
     dot = repo / ".git"
@@ -119,6 +135,28 @@ def test_the_line_quoted_is_the_one_that_gives_the_error():
     assert together.first_failing_line(mypy) == mypy[0]
     assert together.first_failing_line(["ok 1", "FAIL: totals", "done"]) == "FAIL: totals"
     assert together.first_failing_line(["checking", "exit 4"]) == "exit 4" and together.first_failing_line([]) == ""
+
+
+def test_a_checks_folder_is_deleted_though_git_left_its_objects_read_only(state, project, windows_unlink):
+    repo, wa, wb, base = project
+    sessions_apart(wa, wb)
+    assert together.run_check(state, job(repo, wa, wb, base))["result"] == "fails together"
+    assert windows_unlink and os.listdir(together.folder(state)) == []      # read-only objects, deleted all the same
+
+
+def test_housekeeping_deletes_what_an_interrupted_check_left(state, windows_unlink):
+    os.makedirs(together.folder(state))
+    for name in ("check-old", "check-new"):
+        objects = os.path.join(together.folder(state), name, "objects", "ab")
+        os.makedirs(objects)
+        with open(os.path.join(objects, "cdef"), "wb") as fh:
+            fh.write(b"x")
+        os.chmod(os.path.join(objects, "cdef"), stat.S_IREAD)                # as git leaves its objects
+    two_hours_ago = time.time() - 7200
+    os.utime(os.path.join(together.folder(state), "check-old"), (two_hours_ago, two_hours_ago))
+    together.save_result(state, {"state": "s", "result": "passes together"})
+    together.clean_scratch(state)
+    assert sorted(os.listdir(together.folder(state))) == ["check-new", "results.json"] and windows_unlink
 
 
 def test_already_failing_alone_is_told_apart(state, project):
