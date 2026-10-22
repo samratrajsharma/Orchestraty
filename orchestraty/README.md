@@ -38,6 +38,7 @@ The main package: the `orch` command, the hook shims, the coordinator, the live 
 | `orch remote on\|off [--remote NAME]` | Cloud agents' branches for the repository here: fetched read-only and compared with your sessions (see [Cloud agents' branches](#cloud-agents-branches-level-0)). Off by default; `on` says what it will do and asks first (`--yes` skips the question). `--repo DIR` names another repository. |
 | `orch remote patterns [add\|remove GLOB]` | The branches followed: by default `claude/*`, `codex/*` and `copilot/*`. |
 | `orch remote fetch` | Fetches now, and says how it went. `orch remote` alone shows the settings and the last fetch. |
+| `orch together [on\|off]`, `orch together set "<command>" [--timeout 120]` | The together check, for the repository here (`--repo DIR` names another): off by default. See [The together check](#the-together-check-opt-in). `orch together` alone shows the settings. |
 | `orch config [steer\|wake] [on\|off]` | Off by default. **steer**: a note before an edit stops that edit with the reason, so the agent re-plans (otherwise the note only informs, and the agent's usual permission prompts apply). **wake**: a note for a session that waits for its user wakes it (adds a background hook). |
 | `orch coordinator run`, `orch coordinator stop` | For debugging: hooks start the coordinator when it is needed, and it exits after ten minutes with nothing to do. |
 
@@ -117,6 +118,19 @@ Tested end to end with the real hook script for each agent's payloads; not yet w
 **`orch resume <id> --agent ...`** is the one place Orchestraty starts an agent, and only when you run it. It makes a worktree on a new branch, `<branch>-<id>`, from the packet's head (beside the session's worktree, or at `--worktree`), then runs the agent's own command-line tool there, in the foreground, in your terminal, with the packet as its first message: `claude "<packet>"`, `codex "<packet>"` or `agy --prompt-interactive "<packet>"`; a command of your own gets the packet on its standard input. It prints exactly what will run and asks first (`--yes` skips the question, `--dry-run` only prints). Nothing else is passed: each agent keeps its own permissions and model settings, since one agent's permissions translated into another's would be unsafe, and nothing runs in the background. On Windows a tool installed as a `.cmd` or `.bat` file is run through cmd.exe, which cannot take a line break in an argument, so its first message is one line naming the packet's file. Tested with a stand-in agent that records what it is given; **not yet tested with the real agents**, and Antigravity's `--prompt-interactive` is taken from its changelog.
 
 **Merge order.** From the open findings, the same way every time: when a session is changing a file that uses what another session changed in a way that breaks it, or removed (O3, O4, not latent), the other merges first: "merge refunds first: annual uses charge in billing.py, which refunds changed." When each uses what the other broke: "refunds and annual depend on each other (...): merge them together, or coordinate." Otherwise nothing is said. Sessions are named by their branch.
+
+## The together check (opt-in)
+
+Static rules are precise only where the engine understands the language well, so the together check confirms an overlap by running code. It is off by default, for each repository: `orch together set "<command>"` names the check to run, such as a type check or the tests that use the changed function, and `orch together on` turns it on. The settings are kept in Orchestraty's `config.json`, never in the repository.
+
+When the rules flag a medium or strong overlap between two live sessions in worktrees of their own (O2, O3, O4, not latent), the coordinator queues a check of the pair: once per content state of the two working copies, at most once a minute for a pair, one check at a time, on a thread of its own, never in a hook, and never holding up the coordinator. A check:
+
+- **snapshots** each session's working copy, its tracked files and the untracked files git does not ignore, as a commit whose parent is the session's base commit, written into a scratch object store in the state folder. git runs with `GIT_OBJECT_DIRECTORY` set to the scratch store, `GIT_ALTERNATE_OBJECT_DIRECTORIES` to the repository's objects and `GIT_INDEX_FILE` to a temporary index, so your index, refs and objects stay as they were: a test checks them byte for byte;
+- **merges** the two snapshots with `git merge-tree --write-tree` (git 2.38 or later); a text conflict is reported as one, and nothing runs;
+- **runs** your command, with its time limit (`--timeout`, 120 seconds by default) and no `GIT_` variable, on the merged tree and on each snapshot alone, each checked out into a folder of its own outside every repository, so "fails together" is told apart from "already fails alone";
+- **records** the exit codes and the last lines of output, in `<state>/together/results.json`, which `orch status` shows.
+
+When each passes alone and they fail together, both sessions get one note with their next step: "each passes alone, your working copy and that of another Claude Code session (...); together `<command>` fails. Its output ends: "..."". The output line is the command's own, cleaned (no control characters, cut short) and quoted as its output. The scratch store and the folders are removed when a check ends; what an interrupted check left is removed by the coordinator's housekeeping.
 
 ## The stable JSON interface
 
