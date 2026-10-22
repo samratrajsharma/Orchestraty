@@ -7,8 +7,8 @@ PostToolUse and Stop are the common ones; PreInvocation is one of its own, kept 
 the session is working. There is no SessionEnd: a session ends when no event has come for the
 session timeout. Captured: SessionStart, PreInvocation, PostToolUse (every tool, since a shell
 command can change files too) and Stop. Not PreToolUse: it can take no note (below), and
-Antigravity takes a PreToolUse hook that fails to answer as a refusal of the tool. Not
-PostInvocation: nothing needs it.
+Antigravity waits for that hook's answer before the tool runs. Not PostInvocation: nothing
+needs it.
 
 What the hook script reads, all camelCase: ``conversationId`` is the session, the first of
 ``workspacePaths`` its folder, ``transcriptPath`` its transcript (never read: Antigravity

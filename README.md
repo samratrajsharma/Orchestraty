@@ -75,7 +75,7 @@ Each agent connects at the deepest level it supports. No agent has to change, an
 | 2. Hooks | A hook before and after a tool call, and at the end of a turn | Notes arrive automatically, before edits and at the end of a turn |
 | 3. Rich interface | A Claude Code mod, or an editor extension | A pane of every session, a band for strong overlaps, holding an edit to ask you |
 
-Many agents document hooks today: Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI, OpenCode, Cline and OpenClaw. An agent is called supported only after its own capture test passes.
+Many agents document hooks today: Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI, OpenCode, Cline and OpenClaw. An agent is called supported only after its own capture test passes. The main package's [Agents](orchestraty/README.md#agents) table says where each one Orchestraty connects to stands.
 
 ### How strong an overlap is
 
