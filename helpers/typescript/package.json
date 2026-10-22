@@ -1,0 +1,26 @@
+{
+  "name": "orchestraty-helper",
+  "version": "0.0.1-dev.0",
+  "private": true,
+  "description": "The two-call helper for homemade agents: Orchestraty's hook events from an agent's own loop.",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test dist/test/helper.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "18.19.130",
+    "typescript": "5.9.3"
+  }
+}
