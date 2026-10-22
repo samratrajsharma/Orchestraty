@@ -75,6 +75,26 @@ Each answer is structured JSON and a short text that says what it covers and wha
 
 For other tools, `orch status --json` ([docs/status-json.md](docs/status-json.md)) and `orch events --json` ([docs/events-json.md](docs/events-json.md)) each carry a `schema` number. Within one schema number, fields are only added: none is removed, renamed or changes its type or meaning.
 
+## For builders
+
+An agent you build yourself gets what an agent with hooks gets (level 2) from calls in its own loop: one before it writes a file, one after, and one at the end of a turn. Two helpers make the calls, one for Python and one for TypeScript or JavaScript. Both go through the hook script `orch init` installs, so the spool lines, the notes and the coordinator are the ones every agent gets. Run `orch init` once, in the repository the agent works on: it installs that script and watches the repository.
+
+| Python, `orchestraty.helper` | TypeScript, `helpers/typescript` (async) | Hook event | Returns |
+| --- | --- | --- | --- |
+| `Orchestraty(agent="mybot", cwd=worktree)` | `new Orchestraty({ agent: "mybot", cwd: worktree })` | | One session; a new id unless `session_id` (`sessionId`) is given. |
+| `start()` | `start()` | SessionStart | Nothing. |
+| `before_write(path)` | `beforeWrite(path)` | PreToolUse | The note waiting for this file: a function another session broke or removed that this file uses. Else None (null). |
+| `after_write(path)` | `afterWrite(path)` | PostToolUse | Records the edit. The note waiting for the next step: another session is changing the same function, uses what this one changed, or works in this same folder. Else None (null). |
+| `end_turn()` | `endTurn()` | Stop | The callers this session's changes left behind. Else None (null). |
+| `end()` | `end()` | SessionEnd | Nothing; the session's waiting notes are taken back. |
+
+A note comes back as its text. The agent shows in `orch status` as `helper-<name>` (letters, digits, `-` and `_` of the name are kept). A call never raises: on any error it returns None (resolves to null), the way the hook fails open.
+
+- **Python.** By default the hook's code runs in the agent's process: the helper loads the installed script and calls its functions, as the script's own main() does, so a call starts no interpreter (about 0.1 ms on Linux). `in_process=False` runs the script as a process instead, the way an agent runs a hook (about 20 ms on Linux). A test checks that both write the same bytes for every event and take slots the same way.
+- **TypeScript.** Node 18 or later, no runtime dependencies, not published: `npm ci && npm run build` in `helpers/typescript`, then import it from there. Each call runs the script as a process, with the interpreter `orch init` recorded in `<state>/hooks/launch.txt` (about 20 ms on Linux). It finds the state folder as `orch` does, and a test checks that it writes the same lines as the Python helper. See its [README](../helpers/typescript/README.md).
+
+[`examples/homemade-agent`](../examples/homemade-agent/) is an agent with no model that uses the Python helper for two sessions in two worktrees: the session about to edit a caller hears of the other session's breaking change from `before_write` before it writes. A test runs it with the installed hook script and a coordinator the hook starts.
+
 ## The Claude Code mod
 
 `orch init` also loads Orchestraty's [mod](https://code.claude.com/docs/en/plugins/mods/overview) (Claude Code 2.1.287 or later): it copies it into the state folder and adds that folder to `CLAUDE_CODE_PLUGIN_DIRS` in the same settings file. The mod shows; it detects nothing. Every few seconds it reads the status the coordinator keeps (`status.json`, the same as `orch status --json`) and draws:
