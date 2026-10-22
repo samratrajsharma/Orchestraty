@@ -42,6 +42,7 @@ Times are UTC, as `YYYY-MM-DDTHH:MM:SSZ`. Paths of files in a repository are rel
 | `common_dir` | string (folder) | Its git common directory, as watched: what makes worktrees one repository. |
 | `sessions` | array | Its live sessions, oldest first; with `--all`, also the ended ones. See [session](#session). |
 | `overlaps` | array | The open findings between its sessions, strongest first. Latent findings only with `--all`. See [overlap](#overlap). |
+| `cloud` | object | Its cloud agents' branches (`orch remote`): the settings, the last fetch, and the branches followed. See [cloud](#cloud). |
 
 ### Session
 
@@ -49,20 +50,22 @@ A session is an agent session with hooks, or a plain-git one: a worktree with ch
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `id` | string | The agent's session id; for plain git, `git-` and twelve hex digits from the worktree's path. |
-| `agent` | string | `claude` for Claude Code, `git` for plain git; other agents by their own short name. |
+| `id` | string | The agent's session id; for plain git, `git-` and twelve hex digits from the worktree's path; for a cloud branch, `cloud-` and twelve hex digits from the repository, remote and branch. |
+| `agent` | string | `claude` for Claude Code, `git` for plain git, `cloud` for a cloud agent's branch; other agents by their own short name. |
 | `worktree` | string (folder) | The top of the worktree it works in. |
 | `branch` | string | The branch checked out there; `""` for a detached HEAD. |
 | `base_commit` | string | The commit its changes are measured from (40 hex digits); `""` before the first commit. |
 | `base_guessed` | boolean | It was first seen after it started, so `base_commit` is the commit at that time. |
 | `state` | string | `live` or `ended`. |
 | `turn` | string | For a live session with hooks: `working` (from a prompt to the end of the turn) or `idle`. Otherwise `""`. |
-| `note` | string | Why it is in its state: `""`, `plain git`, `ended`, `ended: <the agent's reason>`, `timed out`, `clean` (a plain-git worktree with nothing changed any more) or `a hooked session works here`. |
+| `note` | string | Why it is in its state: `""`, `plain git`, `ended`, `ended: <the agent's reason>`, `timed out`, `clean` (a plain-git worktree with nothing changed any more) or `a hooked session works here`; for a cloud branch, `merged into the default branch`, `the branch is gone`, `remote branches off` or `not watched`. |
 | `started` | string (time) | When it was first seen. |
 | `last_event` | string (time) | Its last event; for plain git, the last time its changes were read. |
 | `seconds_since_last_event` | integer | From `last_event` to the moment of the call. |
 | `changes` | object | What it has changed since `base_commit`. See [changes](#changes). |
 | `declared` | array | What it says it is about to change (the MCP tool `declare`): the declarations that still hold, for live sessions; `[]` otherwise. See [declared](#declared). |
+
+A cloud branch, in [`cloud`](#cloud), has the same fields, read this way: `worktree` is `""` (it has none here), `branch` is `<remote>/<branch>`, `base_commit` is its merge base with the remote's default branch, `last_event` and `seconds_since_last_event` are its last commit's time, `turn` is `""`, and `declared` is `[]`.
 
 ### `changes`
 
@@ -121,6 +124,29 @@ A session is an agent session with hooks, or a plain-git one: a worktree with ch
 | `W1` two sessions with hooks in one worktree | medium | `worktree`: its top |
 
 A latent finding is left out of `overlaps` unless `--all` is given.
+
+### `cloud`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `on` | boolean | Whether the repository's cloud branches are fetched and followed (`orch remote on`). |
+| `remote` | string | The remote they are fetched from. |
+| `patterns` | array of strings | The branches followed: refspec globs, such as `claude/*`. |
+| `agents_told` | boolean | Always `false`: the agents on these branches work elsewhere (level 0), so no note reaches them. |
+| `fetch` | object or null | The last fetch, or null before the first. See [fetch](#fetch). |
+| `branches` | array | One [session](#session) per branch followed, by name; with `--all`, also the ended ones. |
+
+### `fetch`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `at` | string (time) | When it ran. |
+| `ok` | boolean | Whether it worked. |
+| `error` | string | Why not, in git's words without any user name or token; `""` when it worked. |
+| `failures` | integer | Failed fetches in a row; each doubles the wait before the next automatic one, up to an hour. |
+| `next` | string (time) or null | When the coordinator fetches next. |
+| `last_ok` | string (time) or null | The last fetch that worked. |
+| `branches` | integer | How many branches matched the patterns at the last fetch that worked. |
 
 ## The MCP tool `status`
 

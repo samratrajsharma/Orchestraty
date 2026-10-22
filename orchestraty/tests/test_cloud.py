@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from helpers import spool_event
-from orchestraty import cli, config, remote
+from orchestraty import cli, config, remote, status
 from orchestraty.coordinator import main as cmain
 from orchestraty.coordinator.cloud import session_id as cloud_id
 from orchestraty.delivery import slots
@@ -237,3 +237,26 @@ def test_a_shadow_that_lost_an_object_to_the_users_gc_is_fetched_afresh(state, r
     finally:
         c.cloud.wait(120)
         c.close()
+
+
+def test_orch_status_shows_cloud_branches_and_the_last_fetch(state, repo, scene, git, origin):
+    c, wb, tip = scene
+    assert fetch(state, repo)["ok"]
+    settle(c)
+    [r] = status.collect(state)["repositories"]
+    assert [s["id"] for s in r["sessions"]] == ["B"]                    # the local sessions, apart
+    assert (r["cloud"]["on"], r["cloud"]["remote"], r["cloud"]["agents_told"]) == (True, "origin", False)
+    assert r["cloud"]["fetch"]["ok"] is True and r["cloud"]["fetch"]["branches"] == 1
+    [branch] = r["cloud"]["branches"]
+    assert branch["branch"] == "origin/claude/drop-currency" and branch["changes"]["files"] == {"a.py": "M"}
+    text = status.render(status.collect(state))
+    assert "cloud branches from origin (claude/*, codex/*, copilot/*): level 0, their agents are not told" in text
+    assert "origin/claude/drop-currency  last commit" in text and "charge [breaking: parameter currency removed]" in text
+    assert "breaking change in origin/claude/drop-currency, used in c.py by B" in text
+    # a failed fetch: kept, shown, and the wait before the next one doubled
+    git(repo, "remote", "set-url", "origin", str(origin.parent / "no-such-remote.git"))
+    for _ in range(2):
+        assert fetch(state, repo)["ok"] is False
+    [r] = status.collect(state)["repositories"]
+    assert (r["cloud"]["fetch"]["ok"], r["cloud"]["fetch"]["failures"], r["cloud"]["fetch"]["branches"]) == (False, 2, 1)
+    assert "failed (2 in a row)" in status.render(status.collect(state))

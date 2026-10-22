@@ -2,14 +2,16 @@
 
 ``collect`` reads the record without writing to it, so it works while the coordinator runs
 and when it does not; ``render`` turns the result into text. The JSON form (``--json``) is
-``collect``'s result as it is, with a schema number for other tools to check.
+``collect``'s result as it is, with a schema number for other tools to check. Cloud agents'
+branches (``orch remote``) are a group of their own in each repository, with the last fetch's
+result, which the shadow repository keeps beside it.
 """
 import calendar
 import json
 import os
 import time
 
-from orchestraty import config
+from orchestraty import config, remote
 from orchestraty.coordinator.lock import is_fresh
 from orchestraty.coordinator.record import Record, repo_key, repo_name
 
@@ -70,13 +72,33 @@ def collect(state, include_ended=False, now=None):
     for common_dir in cfg["repos"]:
         row = repo_rows.get(repo_key(common_dir))
         sessions = sessions_by_repo.get(row["id"], []) if row else []
+        local = [s for s in sessions if s["agent"] != remote.CLOUD_AGENT]
+        cloud = [s for s in sessions if s["agent"] == remote.CLOUD_AGENT]
         data["repositories"].append({
             "name": repo_name(common_dir), "common_dir": common_dir,
             "sessions": [_session(s, now, changes.get(s["id"], ({}, [], [])),
                                   declared.get(s["id"], ()) if s["state"] == "live" else ())
-                         for s in sorted(sessions, key=lambda s: (s["started"], s["id"]))],
-            "overlaps": [_finding(f) for f in sorted(findings.get(row["id"], []) if row else [], key=_finding_order)]})
+                         for s in sorted(local, key=lambda s: (s["started"], s["id"]))],
+            "overlaps": [_finding(f) for f in sorted(findings.get(row["id"], []) if row else [], key=_finding_order)],
+            "cloud": _cloud(state, cfg, common_dir, now, cloud, changes)})
     return data
+
+
+def _cloud(state, cfg, common_dir, now, sessions, changes):
+    """The repository's cloud branches: the settings, the last fetch, and one session each."""
+    chosen = remote.settings(cfg, common_dir)
+    kept = remote.Shadow(state, common_dir).status()
+    fetch = None
+    if isinstance(kept.get("at"), (int, float)):
+        fetch = {"at": _iso(kept["at"]), "ok": bool(kept.get("ok")), "error": str(kept.get("error") or ""),
+                 "failures": int(kept.get("failures") or 0),
+                 "next": _iso(kept["next"]) if isinstance(kept.get("next"), (int, float)) else None,
+                 "last_ok": _iso(kept["last_ok"]) if isinstance(kept.get("last_ok"), (int, float)) else None,
+                 "branches": int(kept.get("branches") or 0)}
+    return {"on": chosen["on"], "remote": chosen["remote"], "patterns": chosen["patterns"], "agents_told": False,
+            "fetch": fetch,
+            "branches": [_session(s, now, changes.get(s["id"], ({}, [], [])))
+                         for s in sorted(sessions, key=lambda s: (s["branch"], s["id"]))]}
 
 
 _STRENGTH = {"strong": 0, "medium": 1, "weak": 2}
@@ -92,12 +114,12 @@ def _finding(f):
             "detail": f["detail"]}
 
 
-def _short(sid):
-    return sid[:8]
+def _overlap_line(f, names=None):
+    """One line for one finding, from its structured fields only. `names`: how to call some
+    sessions (a cloud branch by its name) instead of by the start of their id."""
+    def _short(sid):
+        return (names or {}).get(sid) or sid[:8]
 
-
-def _overlap_line(f):
-    """One line for one finding, from its structured fields only."""
     name = f["symbol"].split("::")[-1] if f["symbol"] else f["file"]
     d = f["detail"]
     if f["rule"] == "O1":
@@ -165,27 +187,65 @@ def render(data):
         return "\n".join(lines) + "\n"
     for repo in data["repositories"]:
         lines += ["", f"{repo['name']}  ({repo['common_dir']})"]
-        if not repo["sessions"]:
+        cloud = repo.get("cloud") or {}
+        names = {s["id"]: s["branch"] for s in cloud.get("branches", [])}
+        if repo["sessions"]:
+            lines += _session_lines(repo["sessions"])
+        else:
             lines.append("  no live sessions")
-            continue
-        rows = [("session", "agent", "worktree", "branch", "base", "last event", "state")]
-        for s in repo["sessions"]:
-            state = s["turn"] if s["state"] == "live" else (s["note"] or s["state"])
-            base = (s["base_commit"][:9] or "-") + ("?" if s["base_guessed"] else "")
-            rows.append((s["id"][:8], s["agent"], os.path.basename(s["worktree"]) or s["worktree"],
-                         s["branch"] or "(detached)", base, _ago(s["seconds_since_last_event"]), state or "-"))
-        widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
-        lines.append("  " + "  ".join(v.ljust(w) for v, w in zip(rows[0], widths)).rstrip())
-        for row, s in zip(rows[1:], repo["sessions"]):
-            lines.append("  " + "  ".join(v.ljust(w) for v, w in zip(row, widths)).rstrip())
-            summary = _summary(s["changes"])
-            if summary:
-                lines.append("    " + summary)
-            for d in s["declared"]:
-                lines.append("    " + _declared_line(d))
+        if cloud.get("on") or cloud.get("branches"):
+            lines += _cloud_lines(cloud)
         if repo["overlaps"]:
             lines.append("  overlaps:")
-            lines += ["    " + _overlap_line(f) for f in repo["overlaps"]]
+            lines += ["    " + _overlap_line(f, names) for f in repo["overlaps"]]
     if any(s["base_guessed"] for r in data["repositories"] for s in r["sessions"]):
         lines += ["", "base?: the session was first seen after it started, so its base is the commit at that time."]
     return "\n".join(lines) + "\n"
+
+
+def _local(iso, form="%H:%M"):
+    return time.strftime(form, time.localtime(calendar.timegm(time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ"))))
+
+
+def _cloud_lines(cloud):
+    """The cloud branches: from where, the last fetch, and each branch with what it changed."""
+    lines = [f"  cloud branches from {cloud['remote']} ({', '.join(cloud['patterns']) or 'no patterns'}): "
+             "level 0, their agents are not told"]
+    f = cloud.get("fetch")
+    if not f:
+        lines.append("    not fetched yet" + ("" if cloud.get("on") else " (off)"))
+    else:
+        when = _local(f["at"], "%Y-%m-%d %H:%M")
+        nxt = f" next at {_local(f['next'])}" if f.get("next") and cloud.get("on") else ""
+        if f["ok"]:
+            lines.append(f"    last fetch {when}: ok, {f['branches']} branch(es) match;{nxt}".rstrip(";"))
+        else:
+            lines.append(f"    last fetch {when}: failed ({f['failures']} in a row): {f['error']};"
+                         + (nxt.replace("next at", "next try at") if nxt else "").rstrip(";"))
+    for s in cloud.get("branches", []):
+        state = "" if s["state"] == "live" else f"  ({s['note'] or s['state']})"
+        lines.append(f"    {s['branch']}  last commit {_ago(s['seconds_since_last_event'])}{state}")
+        summary = _summary(s["changes"])
+        if summary:
+            lines.append("      " + summary)
+    return lines
+
+
+def _session_lines(sessions):
+    """The table of a repository's sessions, each with what it changed and declared."""
+    rows = [("session", "agent", "worktree", "branch", "base", "last event", "state")]
+    for s in sessions:
+        state = s["turn"] if s["state"] == "live" else (s["note"] or s["state"])
+        base = (s["base_commit"][:9] or "-") + ("?" if s["base_guessed"] else "")
+        rows.append((s["id"][:8], s["agent"], os.path.basename(s["worktree"]) or s["worktree"],
+                     s["branch"] or "(detached)", base, _ago(s["seconds_since_last_event"]), state or "-"))
+    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
+    lines = ["  " + "  ".join(v.ljust(w) for v, w in zip(rows[0], widths)).rstrip()]
+    for row, s in zip(rows[1:], sessions):
+        lines.append("  " + "  ".join(v.ljust(w) for v, w in zip(row, widths)).rstrip())
+        summary = _summary(s["changes"])
+        if summary:
+            lines.append("    " + summary)
+        for d in s["declared"]:
+            lines.append("    " + _declared_line(d))
+    return lines
