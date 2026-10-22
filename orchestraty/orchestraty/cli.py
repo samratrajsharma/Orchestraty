@@ -280,6 +280,99 @@ def _days(text):
     return value
 
 
+def _remote_repo(state, args):
+    """(git common folder, name) of the watched repository holding --repo (default: here)."""
+    from orchestraty import config, gitio
+    path = os.path.abspath(getattr(args, "repo", None) or os.getcwd())
+    try:
+        info = gitio.worktree_info(path)
+    except gitio.UntrustedRepositoryError as exc:
+        raise ValueError(str(exc)) from None
+    if info is None:
+        raise ValueError(f"{path} is not inside a git worktree")
+    name = os.path.basename(info["top"])
+    if not config.is_watched(config.load(state), info["common_dir"]):
+        raise ValueError(f"{name} is not watched: run orch watch in it first")
+    return info["common_dir"], name
+
+
+def _fetch_line(result):
+    when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(result["at"]))
+    if result["ok"]:
+        return f"last fetch {when}: ok, {result['branches']} branch(es) match"
+    return f"last fetch {when}: failed ({result['failures']} in a row): {result['error']}"
+
+
+def cmd_remote(args):
+    from orchestraty import config, remote
+    state = State()
+    try:
+        common_dir, name = _remote_repo(state, args)
+    except ValueError as exc:
+        return _refuse("remote", exc)
+    cfg = config.load(state)
+    chosen = remote.settings(cfg, common_dir)
+    shadow = remote.Shadow(state, common_dir)
+    minutes = cfg["remote_fetch_minutes"]
+    if args.action is None:
+        print(f"Cloud branches of {name}: {'on' if chosen['on'] else 'off'}. Remote: {chosen['remote']}. "
+              f"Patterns: {', '.join(chosen['patterns'])}.")
+        if shadow.status():
+            print(_fetch_line(shadow.status()))
+        return 0
+    if args.action == "on":
+        chosen["remote"] = args.remote or chosen["remote"]
+        try:
+            url = remote.remote_url(common_dir, chosen["remote"])
+        except remote.RemoteError as exc:
+            return _refuse("remote", exc)
+        print("orch remote on will, while the coordinator runs, every " + f"{minutes} minutes:")
+        print(f"  - fetch from {chosen['remote']} ({remote.safe_url(url)}) its default branch and the branches "
+              f"matching {', '.join(chosen['patterns'])};")
+        print(f"  - into a repository of Orchestraty's own, {shadow.path}, which reads your repository's objects "
+              "and writes none.")
+        print("Your .git is not changed. This is the one thing Orchestraty does on the network, and git never "
+              "asks for credentials: without them, a fetch fails and the failure is shown in orch status.")
+        if not confirm("Turn it on?", args.yes):
+            print("Nothing changed.")
+            return 1
+        remote.save_settings(state, common_dir, on=True, remote=chosen["remote"])
+        print(f"Cloud branches on for {name}. orch remote fetch fetches now.")
+        return 0
+    if args.action == "off":
+        remote.save_settings(state, common_dir, on=False, **({"remote": args.remote} if args.remote else {}))
+        print(f"Cloud branches off for {name}: nothing more is fetched, and their sessions end. "
+              f"The shadow repository stays in {shadow.path}; delete it to free its space.")
+        return 0
+    if args.action == "patterns":
+        patterns = list(chosen["patterns"])
+        if args.op is None:
+            print("\n".join(patterns))
+            return 0
+        if not args.glob:
+            return _refuse("remote", f"orch remote patterns {args.op} takes a pattern, such as agent/*")
+        if args.op == "add":
+            if not remote.valid_pattern(args.glob):
+                return _refuse("remote", f"{args.glob} is not a branch pattern git can fetch (one '*' at most)")
+            if args.glob not in patterns:
+                patterns.append(args.glob)
+        elif args.glob in patterns:
+            patterns.remove(args.glob)
+        else:
+            return _refuse("remote", f"{args.glob} is not one of the patterns: {', '.join(patterns)}")
+        remote.save_settings(state, common_dir, patterns=patterns)
+        print("Patterns: " + (", ".join(patterns) or "none (no branch is followed)") + ".")
+        return 0
+    if not chosen["on"]:                                    # fetch
+        return _refuse("remote", f"cloud branches are off for {name}: orch remote on first")
+    result = remote.fetch_now(state, common_dir, chosen, minutes * 60, wait=remote.FETCH_TIMEOUT + 10)
+    if result is None:
+        print("Another fetch is running; try again in a moment.", file=sys.stderr)
+        return 1
+    print(_fetch_line(result) + ".")
+    return 0 if result["ok"] else 1
+
+
 def cmd_mcp(args):
     if args.config:
         from orchestraty.mcp import register
@@ -468,6 +561,30 @@ def build_parser():
     events.add_argument("--since", metavar="TS", help="from this time on: ISO 8601 (Z for UTC, else local), seconds "
                                                       "since the epoch, or a time ago such as 10m, 2h or 1d")
     events.set_defaults(handler=cmd_events)
+
+    rem = commands.add_parser("remote", help="cloud agents' branches, fetched read-only and compared",
+                              description="Branches agents push from elsewhere (a cloud agent, a personal agent "
+                                          "running coding tasks), fetched into a repository of Orchestraty's own "
+                                          "and compared with the sessions here as level-0 sessions. Off by "
+                                          "default, for each watched repository.")
+    where = argparse.ArgumentParser(add_help=False)
+    where.add_argument("--repo", metavar="DIR", default=argparse.SUPPRESS,
+                       help="a folder inside the repository (default: here)")
+    actions = rem.add_subparsers(dest="action", metavar="<action>")
+    on = actions.add_parser("on", parents=[where], help="turn it on (asks first)",
+                            description="Fetch the default branch and the matching branches every few minutes.")
+    on.add_argument("--remote", metavar="NAME", help="the remote to fetch from (default: origin)")
+    on.add_argument("--yes", action="store_true", help="do not ask first")
+    off = actions.add_parser("off", parents=[where], help="turn it off", description="Fetch nothing more.")
+    off.add_argument("--remote", metavar="NAME", help="the remote to keep in the settings")
+    actions.add_parser("fetch", parents=[where], help="fetch now", description="Fetch now, and say how it went.")
+    pat = actions.add_parser("patterns", parents=[where], help="show, add or remove branch patterns",
+                             description="The branches followed: refspec globs under refs/heads/ (one '*' at "
+                                         "most). By default claude/*, codex/* and copilot/*.")
+    pat.add_argument("op", nargs="?", choices=["add", "remove"])
+    pat.add_argument("glob", nargs="?", help="a branch pattern, such as agent/*")
+    rem.add_argument("--repo", metavar="DIR", help="a folder inside the repository (default: here)")
+    rem.set_defaults(handler=cmd_remote)
 
     cfg = commands.add_parser("config", help="show or switch steer and wake",
                               description="steer: a strong note stops the edit it rides on, so the agent re-plans "

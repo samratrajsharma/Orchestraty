@@ -18,13 +18,18 @@ changes. A missing or unreadable file means the defaults.
   (a proxy: the session edited a file the note cites, or its finding stopped holding).
 * ``declare_minutes``: how long what an agent declares it is about to change (the MCP tool
   ``declare``) holds.
+* ``remote``: cloud agents' branches, per repository (keyed by its git common folder, as the
+  record keys it): ``{"on": false, "remote": "origin", "patterns": [...]}``; see ``remote``.
+  ``orch remote`` changes it.
+* ``remote_fetch_minutes``: how often the coordinator fetches the cloud branches of a
+  repository that has them on (a failure doubles the wait, up to an hour).
 """
 import json
 import os
 
 DEFAULTS = {"repos": [], "idle_seconds": 600, "session_timeout": 1800, "level0_seconds": 5,
             "steer": False, "wake": False, "settings": "", "acted_minutes": 30,
-            "declare_minutes": 120}
+            "declare_minutes": 120, "remote": {}, "remote_fetch_minutes": 5}
 
 
 def _same(a, b):
