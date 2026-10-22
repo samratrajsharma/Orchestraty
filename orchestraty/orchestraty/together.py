@@ -209,13 +209,19 @@ def run_check(state, job, done=None):
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+FAILING = (("error:", "exception:", "assert"),                           # TypeError: ..., x.py:5: error: ...
+           ("error", "fail", "exception", "missing", "not found"))      # 1 failed in 0.05s, FAIL ...
+
+
 def first_failing_line(lines):
-    """The line of a failing run's output that says the most: the last one naming an error or a
-    failure, else the last line."""
-    for line in reversed(lines):
-        low = line.lower()
-        if any(w in low for w in ("error", "fail", "exception", "assert", "missing", "not found")):
-            return line
+    """The line of a failing run's output that says the most: the last one that gives an error
+    or an assertion (``TypeError: ...``, ``x.py:5: error: ...``, ``assert 2 == 3``), else the last
+    one naming an error or a failure, else the last line. A test runner's closing count ("1
+    failed in 0.05s") comes after the error it counts, so the error is looked for first."""
+    for words in FAILING:
+        for line in reversed(lines):
+            if any(w in line.lower() for w in words):
+                return line
     return lines[-1] if lines else ""
 
 

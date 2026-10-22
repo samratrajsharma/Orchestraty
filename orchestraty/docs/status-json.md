@@ -178,7 +178,7 @@ Opt-in, for each repository. When the rules flag a medium or strong overlap betw
 | `conflicts` | array of paths | For a conflict, the files in conflict. |
 | `alone` | object | `{session id: {"exit_code", "timed_out"}}`, the command on each session's working copy alone; `exit_code` is null for a run that timed out. `{}` for a conflict. |
 | `together` | object or null | `{"exit_code", "timed_out"}` on both merged; null for a conflict. |
-| `first_failing_line` | string | When they fail together, the line of output that says the most (the last naming an error or a failure, else the last): the command's own words, cleaned. |
+| `first_failing_line` | string | When they fail together, the line of output that says the most (the last giving an error or an assertion, such as `TypeError: ...`; else the last naming an error or a failure; else the last): the command's own words, cleaned. |
 | `error` | string | For an error, what git could not do. |
 
 ### `cloud`

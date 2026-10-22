@@ -237,7 +237,7 @@ def together_fails(result, other):
     cleaned (no control characters, cut short) and given as its output, in quotes."""
     command = usercommand.clean_line(result["command"], 120)
     line = usercommand.clean_line(result.get("first_failing_line") or "", 200)
-    said = f' Its output ends: "{line}".' if line else ""
+    said = f' Its output says: "{line}".' if line else ""
     return _cap(f"each passes alone, your working copy and that of {_who(other)}; together `{command}` fails.{said} "
                 "Orchestraty's together check merged the two working copies in a folder of its own and ran it there; "
                 "agree with that session on which change gives way.")

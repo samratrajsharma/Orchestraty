@@ -107,6 +107,20 @@ def test_each_passes_alone_and_they_fail_together(state, project):
     assert together.run_check(state, job(repo, wa, wb, base), done={r["state"]})["result"] == "unchanged"
 
 
+def test_the_line_quoted_is_the_one_that_gives_the_error():
+    pytest_q = ["E       TypeError: charge() missing 1 required positional argument: 'key'", "annual.py:5: TypeError",
+                "=========================== short test summary info ============================",
+                "FAILED tests/test_annual.py::test_annual - TypeError: charge() missing 1 requ...", "1 failed in 0.05s"]
+    assert together.first_failing_line(pytest_q) == pytest_q[3]
+    assert together.first_failing_line(pytest_q[:3] + ["FAILED tests/deep/test_annual.py::TestAnnual::test_a - Ty...",
+                                                       "1 failed in 0.05s"]) == pytest_q[0]
+    mypy = ['annual.py:5: error: Missing positional argument "key" in call to "charge"  [call-arg]',
+            "Found 1 error in 1 file (checked 4 source files)"]
+    assert together.first_failing_line(mypy) == mypy[0]
+    assert together.first_failing_line(["ok 1", "FAIL: totals", "done"]) == "FAIL: totals"
+    assert together.first_failing_line(["checking", "exit 4"]) == "exit 4" and together.first_failing_line([]) == ""
+
+
 def test_already_failing_alone_is_told_apart(state, project):
     repo, wa, wb, base = project
     (wa / "pay.py").write_text(PAY_A, encoding="utf-8")                  # A broke its own caller
@@ -195,7 +209,7 @@ def test_the_coordinator_runs_the_check_and_both_sessions_hear(state, project, c
             text = note["text"]
             assert text.startswith("Orchestraty: each passes alone, your working copy and that of another Claude "
                                    f"Code session (worktree {other}"), text
-            assert f'together `"{sys.executable}" check.py` fails. Its output ends: "TypeError: charge() takes 1 ' \
+            assert f'together `"{sys.executable}" check.py` fails. Its output says: "TypeError: charge() takes 1 ' \
                    'positional argument but 2 were given".' in text
             # the hook hands it over with a next step: the slot's earlier notes first, then this one
             for _ in range(3):

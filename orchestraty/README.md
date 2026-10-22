@@ -130,7 +130,7 @@ When the rules flag a medium or strong overlap between two live sessions in work
 - **runs** your command, with its time limit (`--timeout`, 120 seconds by default) and no `GIT_` variable, on the merged tree and on each snapshot alone, each checked out into a folder of its own outside every repository, so "fails together" is told apart from "already fails alone";
 - **records** the exit codes and the last lines of output, in `<state>/together/results.json`, which `orch status` shows.
 
-When each passes alone and they fail together, both sessions get one note with their next step: "each passes alone, your working copy and that of another Claude Code session (...); together `<command>` fails. Its output ends: "..."". The output line is the command's own, cleaned (no control characters, cut short) and quoted as its output. The scratch store and the folders are removed when a check ends; what an interrupted check left is removed by the coordinator's housekeeping.
+When each passes alone and they fail together, both sessions get one note with their next step: "each passes alone, your working copy and that of another Claude Code session (...); together `<command>` fails. Its output says: "..."". The output line is the command's own, cleaned (no control characters, cut short) and quoted as its output. The scratch store and the folders are removed when a check ends; what an interrupted check left is removed by the coordinator's housekeeping.
 
 ## The stable JSON interface
 
