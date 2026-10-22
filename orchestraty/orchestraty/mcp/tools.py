@@ -470,6 +470,8 @@ def declare(ws, args):
 
 def claim(ws, args):
     me = ws.caller()
+    if not me["worktree"]:
+        raise ToolError("That session has no worktree here (a cloud agent's branch): it cannot claim.")
     common_dir = ws.common_dir(me)
     if not common_dir or not config.is_watched(config.load(ws.state), common_dir):
         raise ToolError("This repository is not watched: run orch watch (or orch init) in it.")

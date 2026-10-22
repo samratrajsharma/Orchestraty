@@ -257,6 +257,13 @@ def test_the_claim_tools_reach_the_record_through_the_coordinator(state, two):
                                        "Agree with that session on who changes it before either of you goes on; nothing "
                                        "is held back."]
 
+    # a session with no worktree here (a cloud agent's branch) cannot claim
+    c.record.put_session({"id": "cloud-0123456789ab", "agent": "cloud", "repo_id": c.sessions["A"]["repo_id"], "cwd": "",
+                          "worktree": "", "branch": "origin/claude/x", "base_commit": "", "base_guessed": 0, "started": 1,
+                          "last_seen": time.time_ns(), "state": "live", "turn": "", "note": ""})
+    with pytest.raises(tools.ToolError, match="cannot claim"):
+        tools.call(state, str(wa), "claim", {"target": "a.py", "session": "cloud-0123456789ab"})
+
     # A releases it, by its number
     answers, _ = mcp(state, wa, initialize(), call(1, "release", target=f"#{held['id']}"),
                      call(2, "release", target="a.py::charge"))
