@@ -281,6 +281,10 @@ def _days(text):
 
 
 def cmd_mcp(args):
+    if args.config:
+        from orchestraty.mcp import register
+        sys.stdout.write(register.text(args.config))
+        return 0
     from orchestraty.mcp import server
     return server.main(args.folder)
 
@@ -429,8 +433,10 @@ def build_parser():
 
     mcp = commands.add_parser("mcp", help="the MCP server agents ask before they edit",
                               description="Run Orchestraty's MCP server over stdio (an agent starts it in its "
-                                          "workspace folder). The server reads the record without changing it; "
-                                          "declarations go to orch's spool.")
+                                          "workspace folder), or print how to register it with an agent. The server "
+                                          "reads the record without changing it; declarations go to orch's spool.")
+    mcp.add_argument("--config", choices=["claude", "codex", "antigravity"], metavar="AGENT",
+                     help="print how to register the server with claude, codex or antigravity; writes nothing")
     mcp.add_argument("--folder", metavar="DIR", help="the caller's workspace folder (default: CLAUDE_PROJECT_DIR, "
                                                      "else here)")
     mcp.set_defaults(handler=cmd_mcp)
