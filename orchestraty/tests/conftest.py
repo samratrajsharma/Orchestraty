@@ -28,11 +28,15 @@ def the_repository_the_tests_live_in_is_never_touched():
 
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
-    """Every test gets its own state folder, Claude Code config folder and working folder, so
-    nothing can reach the real ones: a command run "here" (orch init, orch watch) acts on an
-    empty temporary folder, never on the repository the tests live in."""
+    """Every test gets its own state folder, agent config folders, home folder and working
+    folder, so nothing can reach the real ones: a command run "here" (orch init, orch watch)
+    acts on an empty temporary folder, never on the repository the tests live in, and the
+    agents' user files (~/.codex, ~/.gemini) are under the temporary home."""
     monkeypatch.setenv("ORCH_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.setenv("ORCH_NO_COORDINATOR", "1")       # hooks start no coordinator unless a test asks
     work = tmp_path / "cwd"
     work.mkdir()

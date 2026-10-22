@@ -196,6 +196,39 @@ def uninstall(state, path):
     return True, saved
 
 
+def install_agent(state, adapter, path, python):
+    """Install the hook script and merge an agent's entries (its adapter's ``merged``) into its
+    config file at `path`. Returns (changed, backup folder or None)."""
+    check_python(python)
+    check_settings_file(path)
+    current = load_settings(path)
+    try:
+        wanted = adapter.merged(current, python, state.hook_script)
+    except ValueError as exc:
+        raise Refused(f"{path}: {exc}; fix it first") from exc
+    install_script(state)
+    write_launch(state)
+    if os.path.exists(path) and wanted == current:
+        return False, None
+    saved = backup(state, path, "install")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    _write_atomic(path, _dump(wanted))
+    return True, saved
+
+
+def uninstall_agent(state, adapter, path):
+    """Take an agent's entries out of its config file (its adapter's ``without_ours``). Returns
+    (changed, backup folder or None)."""
+    check_settings_file(path)
+    current = load_settings(path)
+    wanted = adapter.without_ours(current, state.hook_script)
+    if not os.path.exists(path) or wanted == current:
+        return False, None
+    saved = backup(state, path, "uninstall")
+    _write_atomic(path, _dump(wanted))
+    return True, saved
+
+
 def restore_backup(state, path):
     """Put back the file as it was before the last install (the current file is backed up
     first). Returns the backup folder used, or None when there is none."""

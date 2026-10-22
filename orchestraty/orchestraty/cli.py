@@ -46,6 +46,11 @@ def _refuse(command, exc):
 
 def cmd_init(args):
     from orchestraty import config
+    wrong = _wrong_target(args)
+    if wrong:
+        return _refuse("init", wrong)
+    if args.agent != "claude":
+        return _init_agent(args)
     state = State()
     path = _settings_target(args)
     python = args.python or hooks.hook_python()
@@ -89,6 +94,125 @@ def cmd_init(args):
     if code == 0 and not args.no_git_hooks:
         _git_chain_here(state, python, args.yes)
     return code
+
+
+_ONLY_FOR = {"claude_config": "claude", "codex_home": "codex", "antigravity_config": "antigravity"}
+
+
+def _wrong_target(args):
+    """Why an option does not go with the agent chosen, or None."""
+    for option, agent in _ONLY_FOR.items():
+        if getattr(args, option, None) and args.agent != agent:
+            return f"--{option.replace('_', '-')} goes with --agent {agent}"
+    if args.project and args.agent == "codex":
+        return "Codex reads hooks.json from its home folder only; --project goes with claude or antigravity"
+    return None
+
+
+def _agent_target(args):
+    from orchestraty.adapters import antigravity, codex
+    if args.agent == "codex":
+        return codex.config_path(codex_home=args.codex_home)
+    return antigravity.config_path(folder=args.antigravity_config, project=os.getcwd() if args.project else None)
+
+
+def _agent_scope(args, adapter):
+    if args.agent == "codex":
+        return "They run in every Codex session that uses this home folder."
+    if args.project:
+        return f"They run in Antigravity conversations in this workspace, {os.getcwd()}."
+    return "They run in every Antigravity conversation of this user, in every workspace."
+
+
+def _init_agent(args):
+    """orch init --agent codex|antigravity: show the entries, ask, back the file up, write it."""
+    from orchestraty import adapters
+    state = State()
+    adapter = adapters.get(args.agent)
+    path = _agent_target(args)
+    python = args.python or hooks.hook_python()
+    block = adapter.hook_block(python, state.hook_script)
+    if args.print:
+        print(json.dumps(block, indent=2))
+        return 0
+    try:
+        hooks.check_python(python)
+        hooks.check_settings_file(path)
+        hooks.load_settings(path)
+    except hooks.Refused as exc:
+        return _refuse("init", exc)
+    print("orch init will:")
+    print(f"  - copy the hook script to {state.hook_script}")
+    print(f"  - add hooks for {len(adapter.CAPTURED)} {adapter.TITLE} events to {path}:")
+    print("\n".join("      " + line for line in json.dumps(block, indent=2).splitlines()))
+    if os.path.exists(path):
+        print(f"    (other hooks there are kept; the current file is copied to {state.backups} first)")
+    print(_agent_scope(args, adapter) + " " + PRIVACY)
+    if args.project:
+        print("That file is inside your workspace: orch init writes it, and never commits it.")
+    if args.agent == "codex":
+        print("Codex runs a hook only once you trust it with /hooks; orch init does not trust it for you.")
+    if not confirm("Go ahead?", args.yes):
+        print("Nothing changed.")
+        return 1
+    try:
+        changed, saved = hooks.install_agent(state, adapter, path, python)
+    except hooks.Refused as exc:
+        return _refuse("init", exc)
+    if not changed:
+        print(f"Already installed in {path}; nothing changed.")
+    else:
+        print(f"Installed in {path}." + (f" Backup: {saved}" if saved else ""))
+    if args.agent == "codex":
+        print("Now open Codex and run /hooks: review Orchestraty's hooks and trust them. Codex runs none until you do.")
+    else:
+        print("Conversations started from now on are seen.")
+    if args.project:
+        _offer_exclude(state, path, args.yes)
+    code = _watch_here(state, os.getcwd(), quiet_outside=True)
+    if code == 0 and not args.no_git_hooks:
+        _git_chain_here(state, python, args.yes)
+    return code
+
+
+def _offer_exclude(state, path, assume_yes):
+    """Offer to keep a workspace's hooks file out of git, through .git/info/exclude."""
+    from orchestraty import gitio
+    try:
+        info = gitio.worktree_info(os.path.dirname(os.path.dirname(path)))
+    except (gitio.GitError, gitio.UntrustedRepositoryError):
+        return
+    if info is None:
+        return
+    rel = os.path.relpath(path, info["top"]).replace(os.sep, "/")
+    try:
+        if gitio.run(["ls-files", "--", rel], info["top"]).strip():
+            print(f"git tracks {rel}: this change shows in git status. orch init never commits it.")
+            return
+        try:
+            gitio.run(["check-ignore", "-q", "--", rel], info["top"])
+            return                                   # git ignores it already
+        except gitio.GitError:
+            pass
+        exclude = gitio.run(["rev-parse", "--git-path", "info/exclude"], info["top"]).strip()
+    except gitio.GitError:
+        return
+    exclude = os.path.normpath(os.path.join(info["top"], exclude))
+    print(f"To keep {rel} out of git, orch init can add it to {exclude}: this repository's own")
+    print("ignore list, which is never committed or shared.")
+    if not confirm("Add it?", assume_yes):
+        print(f"Not added; {rel} shows in git status until you ignore it.")
+        return
+    hooks.backup(state, exclude, "install")
+    os.makedirs(os.path.dirname(exclude), exist_ok=True)
+    try:
+        with open(exclude, "rb") as fh:
+            before = fh.read()
+    except FileNotFoundError:
+        before = b""
+    with open(exclude, "ab") as fh:
+        fh.write((b"" if not before or before.endswith(b"\n") else b"\n") + ("/" + rel + "\n").encode("utf-8"))
+    print(f"Added /{rel} to {exclude}.")
 
 
 def _git_chain_here(state, python, assume_yes):
@@ -423,6 +547,11 @@ def cmd_coordinator(args):
 
 
 def cmd_restore(args):
+    wrong = _wrong_target(args)
+    if wrong:
+        return _refuse("restore", wrong)
+    if args.agent != "claude":
+        return _restore_agent(args)
     state = State()
     path = _settings_target(args)
     if args.from_backup:
@@ -455,12 +584,54 @@ def cmd_restore(args):
     return 0
 
 
+def _restore_agent(args):
+    """orch restore --agent codex|antigravity: take our hooks out (others kept), or put a backup back."""
+    from orchestraty import adapters
+    state = State()
+    adapter = adapters.get(args.agent)
+    path = _agent_target(args)
+    if args.from_backup:
+        question = f"Put back {path} as it was before the last orch init?"
+    else:
+        question = f"Remove Orchestraty's hooks from {path}?"
+    try:
+        hooks.check_settings_file(path)
+        hooks.load_settings(path)
+    except hooks.Refused as exc:
+        return _refuse("restore", exc)
+    if not confirm(question, args.yes):
+        print("Nothing changed.")
+        return 1
+    try:
+        if args.from_backup:
+            folder = hooks.restore_backup(state, path)
+            if folder is None:
+                print(f"No backup of {path} from before an install; run orch restore without --from-backup.")
+                return 1
+            print(f"Put back {path} from {folder}.")
+            return 0
+        changed, saved = hooks.uninstall_agent(state, adapter, path)
+    except hooks.Refused as exc:
+        return _refuse("restore", exc)
+    if changed:
+        print(f"Removed Orchestraty's hooks from {path}; other hooks there are kept. Backup: {saved}")
+    else:
+        print(f"No Orchestraty hooks in {path}; nothing changed.")
+    return 0
+
+
 def _add_target_options(parser):
+    parser.add_argument("--agent", choices=["claude", "codex", "antigravity"], default="claude",
+                        help="the agent: claude (Claude Code, the default), codex or antigravity")
     where = parser.add_mutually_exclusive_group()
     where.add_argument("--claude-config", metavar="DIR",
                        help="a Claude Code config folder (default: CLAUDE_CONFIG_DIR, else ~/.claude)")
+    where.add_argument("--codex-home", metavar="DIR", help="Codex's home folder (default: CODEX_HOME, else ~/.codex)")
+    where.add_argument("--antigravity-config", metavar="DIR",
+                       help="the folder of Antigravity's user hooks.json (default: ~/.gemini/config)")
     where.add_argument("--project", action="store_true",
-                       help="this folder's .claude/settings.local.json instead of the user's settings")
+                       help="this folder's own file instead of the user's: .claude/settings.local.json for "
+                            "Claude Code, .agents/hooks.json for Antigravity")
     parser.add_argument("--yes", action="store_true", help="do not ask before changing anything")
 
 
@@ -472,8 +643,8 @@ def build_parser():
     parser.add_argument("--version", action="version", version=f"orch {__version__}")
     commands = parser.add_subparsers(dest="command", metavar="<command>")
 
-    init = commands.add_parser("init", help="install the hooks into Claude Code",
-                               description="Install the hook script and Claude Code's hook entries.")
+    init = commands.add_parser("init", help="install the hooks into an agent (Claude Code unless --agent)",
+                               description="Install the hook script and an agent's hook entries.")
     _add_target_options(init)
     init.add_argument("--python", metavar="PATH", help="the interpreter the hooks run (default: this one's base)")
     init.add_argument("--print", action="store_true", help="only print the hook entries to add by hand")
@@ -481,11 +652,11 @@ def build_parser():
     init.add_argument("--no-mod", action="store_true", help="do not load Orchestraty's Claude Code mod")
     init.set_defaults(handler=cmd_init)
 
-    restore = commands.add_parser("restore", help="remove the hooks from Claude Code",
+    restore = commands.add_parser("restore", help="remove the hooks from an agent (Claude Code unless --agent)",
                                   description="Remove Orchestraty's hook entries, or put a backup back.")
     _add_target_options(restore)
     restore.add_argument("--from-backup", action="store_true",
-                         help="put back the settings file as it was before the last orch init")
+                         help="put back the agent's file as it was before the last orch init")
     restore.set_defaults(handler=cmd_restore)
 
     watch = commands.add_parser("watch", help="compare the sessions of this repository",
