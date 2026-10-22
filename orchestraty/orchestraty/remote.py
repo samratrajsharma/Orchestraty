@@ -26,10 +26,7 @@ import hashlib
 import json
 import os
 import re
-import shutil
-import stat
 import subprocess
-import sys
 import time
 
 from orch_engine.ingest import git_command
@@ -184,7 +181,7 @@ class Shadow:
         objects/info/alternates. Our own settings keep it quiet (no reflogs, no automatic gc)."""
         os.makedirs(self.folder, exist_ok=True)
         if os.path.exists(self.path):
-            _remove_tree(self.path)
+            gitio.remove_tree(self.path)
         gitio.run(["init", "--bare", "--quiet", "--template=", self.path], self.folder)
         alternates = os.path.join(self.path, "objects", "info", "alternates")
         os.makedirs(os.path.dirname(alternates), exist_ok=True)
@@ -356,17 +353,3 @@ def _ssh_configured(common_dir):
         return bool(gitio.run(["config", "--get", "core.sshCommand"], common_dir).strip())
     except gitio.GitError:
         return False
-
-
-def _remove_tree(path):
-    """Delete a folder git wrote. Git leaves its object files read-only, and on Windows a
-    read-only file cannot be deleted: such a file is made writable first."""
-    def writable(func, name, exc):
-        if func not in (os.unlink, os.remove, os.rmdir):
-            raise exc
-        os.chmod(name, stat.S_IWRITE)
-        func(name)
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=writable)
-    else:
-        shutil.rmtree(path, onerror=lambda func, name, info: writable(func, name, info[1]))

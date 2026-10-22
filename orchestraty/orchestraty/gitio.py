@@ -6,9 +6,14 @@ config could start, and git's ownership check kept (a refusal raises the engine'
 ``UntrustedRepositoryError``). On top, the variables an outer git sets for its hooks
 (``GIT_DIR``, ``GIT_INDEX_FILE`` and the rest) are removed, so a coordinator started from a
 hook still reads the folder each command names.
+
+``remove_tree`` deletes a folder git wrote, whose object files git leaves read-only.
 """
 import os
+import shutil
+import stat
 import subprocess
+import sys
 
 from orch_engine.ingest import UntrustedRepositoryError, check_ownership, git_command
 
@@ -16,7 +21,7 @@ INHERITED = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY
              "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_PREFIX")
 TIMEOUT = 30
 
-__all__ = ["GitError", "UntrustedRepositoryError", "run", "worktree_info"]
+__all__ = ["GitError", "UntrustedRepositoryError", "remove_tree", "run", "worktree_info"]
 
 
 class GitError(Exception):
@@ -68,3 +73,17 @@ def worktree_info(cwd):
         head = ""
     return {"top": os.path.normpath(lines[0]), "common_dir": os.path.normpath(lines[1]),
             "branch": branch, "head": head}
+
+
+def remove_tree(path):
+    """Delete a folder git wrote. Git leaves its object files read-only, and on Windows a
+    read-only file cannot be deleted: such a file is made writable first."""
+    def writable(func, name, exc):
+        if func not in (os.unlink, os.remove, os.rmdir):
+            raise exc
+        os.chmod(name, stat.S_IWRITE)
+        func(name)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=writable)
+    else:
+        shutil.rmtree(path, onerror=lambda func, name, info: writable(func, name, info[1]))
