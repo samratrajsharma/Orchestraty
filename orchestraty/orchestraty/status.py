@@ -98,6 +98,9 @@ def _overlap_line(f):
         what = f"{f['file']} changed in both " + " and ".join(_short(s) for s in f["sessions"])
     elif f["rule"] == "O2":
         what = f"{f['symbol']} changed in both " + " and ".join(_short(s) for s in f["sessions"])
+    elif f["rule"] == "W1":
+        folder = os.path.basename(d.get("worktree", "")) or "?"
+        what = f"{' and '.join(_short(s) for s in f['sessions'])} work in the same folder, {folder}"
     elif f["rule"] in ("O3", "O4"):
         how = "removed" if f["rule"] == "O4" else "breaking change"
         what = (f"{name} ({f['symbol'].split('::')[0]}): {how} in {_short(f['changer'])}, "

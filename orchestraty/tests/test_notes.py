@@ -186,3 +186,15 @@ def test_a_slot_being_taken_cannot_be_withdrawn(state):
     else:
         from orchestraty.capture.hook import take_slot
         assert take_slot(path) == b"x" and not slots.withdraw(path)
+
+
+def test_the_same_folder_note():
+    assert notes.same_folder(B) == (
+        "Orchestraty: another Claude Code session (branch feat-annual) is working in this same folder. Its edits, "
+        "branch switches and commits change this folder for you too, so either session can overwrite or switch the "
+        "other's uncommitted work. To keep your work apart, use a separate worktree "
+        "(`git worktree add <folder> -b <branch>`), or ask your user.")
+    assert "(detached HEAD)" in notes.same_folder(dict(B, branch=""))
+    hostile = notes.same_folder(dict(B, agent="evil; agent", branch="x; rm -rf ~ `id`" + "y" * 300))
+    assert "another evil??agent session (branch x??rm?-rf????id?yyy" in hostile
+    assert "yyyy~)" in hostile and len(hostile) <= notes.MAX_NOTE

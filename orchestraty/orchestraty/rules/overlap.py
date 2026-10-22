@@ -8,6 +8,12 @@
 | O4   | one removed (or renamed) X, and a file the other is changing still uses X | strong   |
 | O6   | one made a breaking change to X, and callers of X that no session has   | strong   |
 |      | updated are left behind                                                 |          |
+| W1   | two sessions with hooks work in the same worktree (the same working     | medium   |
+|      | folder, whichever subfolder each started in)                            |          |
+
+Two sessions in one worktree share its files, so what each of them did to a function cannot be
+told apart: between them O1 runs on the files each edited, and O2, O3 and O4 do not. W1 says
+they share the folder; a plain-git session (no hooks) neither gets nor causes one.
 
 Uses come from the code graphs the engine builds: a call resolved with evidence (an import,
 the same file, a typed receiver, ...) or an inheritance, never a match by name alone. A use
@@ -25,6 +31,7 @@ outside any function, are not seen.
 Every finding has a stable key, so the coordinator can tell a new finding from one it already
 knows, and one that stopped holding.
 """
+import os
 from dataclasses import dataclass, field
 
 from orchestraty.livemap.contracts import breaking_reasons
@@ -103,6 +110,18 @@ def same_file(a, b, views):
         yield Finding(f"O1|{path}|{a}|{b}", "O1", WEAK, (a, b), symbol="", file=path, detail={"file": path})
 
 
+def one_folder(a, b, views):
+    """Whether two sessions work in the same worktree."""
+    wa, wb = views[a].worktree, views[b].worktree
+    return bool(wa) and os.path.normcase(os.path.normpath(wa)) == os.path.normcase(os.path.normpath(wb))
+
+
+def same_folder(a, b, views):
+    """W1: two sessions with hooks in one worktree. The key names the folder and both sessions."""
+    folder = views[a].worktree
+    yield Finding(f"W1|{folder}|{a}|{b}", "W1", MEDIUM, (a, b), symbol="", file="", detail={"worktree": folder})
+
+
 def same_function(a, b, views):
     sa, sb = views[a].symbols, views[b].symbols
     for sym in sorted(set(sa) & set(sb)):
@@ -166,20 +185,27 @@ def left_behind(changer, views, base_graphs):
                                   "left": left})
 
 
-def evaluate(views, graphs, base_graphs):
+def evaluate(views, graphs, base_graphs, hooked=None):
     """Every finding among the sessions of one repository.
 
     views: {session id: SessionView}; graphs(sid) and base_graphs(sid) give that session's code
     graph and its base commit's graph, or None while they are not ready (then the rules that
-    need them wait, and the rest still run)."""
+    need them wait, and the rest still run). hooked: the sessions whose agent's hooks deliver
+    notes, the only ones W1 is about (None: W1 does not run)."""
     out = {}
     ids = sorted(views)
     for i, a in enumerate(ids):
         for b in ids[i + 1:]:
-            for f in list(same_file(a, b, views)) + list(same_function(a, b, views)):
+            shared = one_folder(a, b, views)
+            found = list(same_file(a, b, views))
+            if not shared:
+                found += same_function(a, b, views)
+            elif hooked is not None and a in hooked and b in hooked:
+                found += same_folder(a, b, views)
+            for f in found:
                 out[f.key] = f
         for b in ids:
-            if b != a:
+            if b != a and not one_folder(a, b, views):
                 for f in contract_uses(a, b, views, graphs):
                     out[f.key] = f
         for f in left_behind(a, views, base_graphs):

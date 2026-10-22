@@ -18,7 +18,9 @@ live session: one with changes and no hooked session becomes a plain-git session
 ``git``, level 0), based on its merge base with the main worktree's HEAD, so agents that run
 no hooks, editors and people are seen too. When a hooked session ends, its repository's
 worktrees are looked at at once: a worktree it left with changes is followed as plain git, so
-its changes stay on the map (and its push line stays) after the agent has gone.
+its changes stay on the map (and its push line stays) after the agent has gone. A hooked
+session whose edits land in another worktree of its repository moves there: its agent left the
+folder (for one, after a note said two sessions shared it).
 """
 import hashlib
 import json
@@ -33,7 +35,7 @@ from orchestraty.coordinator.lock import Heartbeat, Lock
 from orchestraty.coordinator.record import Record, SchemaError, repo_key
 from orchestraty.coordinator.spool import SpoolReader
 from orchestraty.delivery import slots
-from orchestraty.delivery.deliver import Deliverer
+from orchestraty.delivery.deliver import NO_NOTES, Deliverer
 from orchestraty.livemap import changes as git_changes
 from orchestraty.livemap.map import LiveMap
 from orchestraty.rules import overlap
@@ -72,6 +74,7 @@ class Coordinator:
         self._last_scan = None
         self._scan_now = set()             # repositories to look at now (a hooked session ended)
         self._repo_paths = {}              # repository id -> a worktree of it, to list the others
+        self._stayed = set()               # (session id, folder): an edit there that is no move
         self.changed = set()               # sessions whose live map changed in the last step
         self.new_findings = []             # findings first seen in the last step
         self._dirty_repos = set()          # repositories whose findings must be worked out again
@@ -97,6 +100,7 @@ class Coordinator:
     def _track(self, session):
         if session.get("repo_id") is not None and session.get("worktree"):
             self._repo_paths.setdefault(session["repo_id"], session["worktree"])
+        self._dirty_repos.add(session["repo_id"])          # a new session can overlap before it changes anything
         key = self._repo_keys.get(session["repo_id"])
         if key is None:
             self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
@@ -223,7 +227,8 @@ class Coordinator:
             views = {sid: self.livemap.views[sid] for sid in ids}
             graph_ready = {sid: self.livemap.graph(sid) is not None for sid in ids}
             base_ready = {sid: self.livemap.base_graph(sid) is not None for sid in ids}
-            found = overlap.evaluate(views, self.livemap.graph, self.livemap.base_graph)
+            hooked = {sid for sid in ids if self.sessions[sid]["agent"] not in NO_NOTES}
+            found = overlap.evaluate(views, self.livemap.graph, self.livemap.base_graph, hooked=hooked)
             now = self.now_ns()
             with self.record.transaction():
                 # Resolve first: a note withdrawn here must not count as already told when a
@@ -331,6 +336,8 @@ class Coordinator:
         session = self.session_for(sid, agent, line, event, ts)
         if session is None:
             return
+        if event == "PostToolUse" and session["state"] == "live":
+            self._follow(session, line)
         row = {c: line.get(c) if isinstance(line.get(c), str) else None
                for c in ("session_id", "tool_name", "tool_use_id", "cwd", "file_path")}
         row.update(ts=ts, agent=agent, event=event)
@@ -362,6 +369,40 @@ class Coordinator:
             self.record.add_label(item["finding"], item["verdict"], item["why"], ts)
         else:
             self.log.info("a label for a finding the record does not have was dropped")
+
+    def _follow(self, session, line):
+        """A hooked session's edit landed in another worktree of its repository: the agent
+        works there now, so the session moves with it (new worktree, branch and base: that
+        worktree's HEAD, counted as guessed) and no longer counts in the folder it left. Its
+        waiting notes are taken back, and the worktree it left is looked at at once (with
+        changes and no hooked session, it is followed as plain git). Returns True on a move."""
+        path = line.get("file_path")
+        if session["agent"] == LEVEL0_AGENT or not isinstance(path, str) or not path:
+            return False
+        cwd = line.get("cwd") if isinstance(line.get("cwd"), str) else ""
+        path = os.path.normpath(os.path.join(cwd or session["worktree"], path))
+        folder = os.path.dirname(path)
+        if _inside(path, session["worktree"]) and not _nested(folder, session["worktree"]):
+            return False
+        if (session["id"], folder) in self._stayed:
+            return False
+        try:
+            info = gitio.worktree_info(folder)
+        except (gitio.GitError, gitio.UntrustedRepositoryError):
+            info = None
+        if (info is None or repo_key(info["common_dir"]) != self._repo_keys.get(session["repo_id"])
+                or not info["top"] or _same(info["top"], session["worktree"])):
+            self._stayed.add((session["id"], folder))
+            return False
+        self.log.info("session %s moved from %s to %s", session["id"][:8], session["worktree"], info["top"])
+        self._ended_hooked(session)
+        self.livemap.forget(session["id"])
+        self.deliverer.forget_session(session["id"])
+        self._dirty_repos.add(session["repo_id"])
+        self._push_dirty = True
+        session.update(cwd=cwd or info["top"], worktree=info["top"], branch=info["branch"], base_commit=info["head"],
+                       base_guessed=1)
+        return True
 
     def session_for(self, sid, agent, line, event, ts):
         if sid in self.ignored:
@@ -469,6 +510,30 @@ class Coordinator:
         """Live sessions; with hooked_only, plain-git ones left out (they keep nothing awake)."""
         return sum(1 for s in self.sessions.values()
                    if s["state"] == "live" and not (hooked_only and s["agent"] == LEVEL0_AGENT))
+
+
+def _same(a, b):
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def _inside(path, top):
+    """Whether `path` is `top` or inside it."""
+    p, t = os.path.normcase(os.path.normpath(path)), os.path.normcase(os.path.normpath(top))
+    return p == t or p.startswith(t.rstrip(os.sep) + os.sep)
+
+
+def _nested(folder, top):
+    """Whether a folder inside `top` belongs to a worktree or repository nested in it (one made
+    under the repository's own folder): a .git between the two."""
+    folder = os.path.normpath(folder)
+    while not _same(folder, top):
+        if os.path.exists(os.path.join(folder, ".git")):
+            return True
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            return False
+        folder = parent
+    return False
 
 
 def _logger(state):

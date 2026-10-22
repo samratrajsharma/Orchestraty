@@ -211,3 +211,50 @@ def test_a_removed_function_and_an_inherited_class_break_every_use():
     broken = changed(base["m.py"], "class Base:\n    pass\n", path="m.py")
     [o6] = run({"A": view("A", ["m.py"], [broken])}, base=graph_of(base))
     assert o6.detail["left"][0]["symbol"] == "n.py::Child"
+
+
+# --------------------------------------------------------------------------------------- #
+# W1: two sessions in one folder
+# --------------------------------------------------------------------------------------- #
+def in_folder(sid, files=(), symbols=(), folder="/w/repo"):
+    v = view(sid, files, symbols)
+    v.worktree = folder
+    return v
+
+
+def keys_of(views, hooked, graphs=None, base=None):
+    graphs = graphs or {}
+    return {f.key for f in evaluate(views, lambda sid: graphs.get(sid), lambda sid: base, hooked=hooked)}
+
+
+def test_w1_two_sessions_with_hooks_in_one_folder():
+    views = {"A": in_folder("A"), "B": in_folder("B")}
+    [f] = evaluate(views, lambda sid: None, lambda sid: None, hooked={"A", "B"})
+    assert (f.key, f.rule, f.strength, f.sessions) == ("W1|/w/repo|A|B", "W1", "medium", ("A", "B"))
+    assert (f.symbol, f.file, f.detail) == ("", "", {"worktree": "/w/repo"})
+    views["C"] = in_folder("C")                                       # a third: each new pair its own
+    assert keys_of(views, {"A", "B", "C"}) == {"W1|/w/repo|A|B", "W1|/w/repo|A|C", "W1|/w/repo|B|C"}
+
+
+def test_no_w1_for_two_worktrees_a_plain_git_session_or_unknown_hooks():
+    assert keys_of({"A": view("A"), "B": view("B")}, {"A", "B"}) == set()
+    assert keys_of({"A": in_folder("A"), "git-1": in_folder("git-1")}, {"A"}) == set()
+    assert keys_of({"A": in_folder("A"), "B": in_folder("B")}, None) == set()
+
+
+def test_in_one_folder_o1_stays_and_the_function_rules_are_off():
+    b_copy = dict(BASE, **{"c.py": "from a import charge\n\n\ndef use():\n    return charge(2, 'USD')\n"})
+    body = change("a.py::charge", contract="none", reasons=())
+    views = {"A": in_folder("A", ["a.py", "x.py"], [change("a.py::charge")]),
+             "B": in_folder("B", ["a.py", "c.py", "x.py"], [body])}
+    graphs = {"A": graph_of(b_copy), "B": graph_of(b_copy)}
+    found = evaluate(views, lambda sid: graphs.get(sid), lambda sid: graph_of(BASE), hooked={"A", "B"})
+    rules = {f.rule for f in found}
+    assert {"O1", "W1", "O6"} <= rules                                # O6 is one session's own: it stays
+    assert not rules & {"O2", "O3", "O4"}
+    # A session in a worktree of its own still hears about the change.
+    views["C"] = view("C", ["c.py"])
+    graphs["C"] = graph_of(b_copy)
+    found = evaluate(views, lambda sid: graphs.get(sid), lambda sid: graph_of(BASE), hooked={"A", "B", "C"})
+    assert "O3|a.py::charge|A|C|c.py" in {f.key for f in found}
+    assert not [f for f in found if f.rule in ("O2", "O3", "O4") and set(f.sessions) == {"A", "B"}]

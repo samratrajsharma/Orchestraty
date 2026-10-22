@@ -15,6 +15,7 @@ Who hears what (Draft 4 §5.5):
 | O6     | callers you left behind                | the session that changed it      | stop      |
 | O3, O4 | the same note, when wake is on and the   | the session using it             | wake      |
 |        | session using it waits for its user      |                                  |           |
+| W1     | another session works in this same folder | each of the two (with hooks)    | next      |
 
 Plain-git sessions get no notes (they have no hooks). A session hears each finding once:
 when one of its notes for a finding is taken (the edit note, the next note or the wake note),
@@ -97,6 +98,11 @@ class Deliverer:
             changer = finding["changer"]
             if hooked(changer):
                 out.append((changer, "stop", slots.stop_slot(self.state, changer), templates.left_behind(finding)))
+        elif rule == "W1":
+            a, b = finding["sessions"]
+            if hooked(a) and hooked(b):                     # a plain-git session gets none and causes none
+                for me, other in ((a, b), (b, a)):
+                    out.append((me, "next", slots.next_slot(self.state, me), templates.same_folder(sessions[other])))
         return out
 
     def add(self, finding, sessions, trigger_ns, wake=False):

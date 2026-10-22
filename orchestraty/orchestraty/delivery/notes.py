@@ -130,6 +130,17 @@ def for_both(finding, other):
                 "Agree on one version before either of you merges.")
 
 
+def same_folder(other):
+    """W1, to each of two sessions with hooks working in one worktree, about the other one.
+    It only informs: in steer mode too, nothing is held back."""
+    agent = other.get("agent", "")
+    where = f"branch {clean(other['branch'], 60)}" if other.get("branch") else "detached HEAD"
+    return _cap(f"another {AGENTS.get(agent, clean(agent, 30))} session ({where}) is working in this same folder. "
+                "Its edits, branch switches and commits change this folder for you too, so either session can "
+                "overwrite or switch the other's uncommitted work. To keep your work apart, use a separate worktree "
+                "(`git worktree add <folder> -b <branch>`), or ask your user.")
+
+
 def left_behind(finding):
     """O6, to the session that broke a contract, at the end of its turn."""
     d = finding["detail"]
