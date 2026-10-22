@@ -367,6 +367,165 @@ def cmd_missed(args):
     return 0
 
 
+def _same_folder(a, b):
+    return bool(a) and bool(b) and os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def _pick_session(sessions, top):
+    """The session the person picks among several working in one worktree; asked in the terminal."""
+    ids = ", ".join(s["id"][:8] for s in sessions)
+    if not (sys.stdin and sys.stdin.isatty()):
+        raise ValueError(f"{len(sessions)} live sessions work in {top}: pass --session, one of {ids}")
+    print(f"{len(sessions)} live sessions work in {top}:")
+    for n, s in enumerate(sessions, 1):
+        last = time.strftime("%H:%M", time.localtime(s["last_seen"] / 1e9))
+        print(f"  {n}. {s['id'][:8]} ({s['agent']}), last event {last}")
+    try:
+        answer = input(f"Which one claims it? [1-{len(sessions)}] ").strip()
+    except EOFError:
+        answer = ""
+    if answer.isdigit() and 1 <= int(answer) <= len(sessions):
+        return sessions[int(answer) - 1]
+    raise ValueError("no session picked; nothing claimed")
+
+
+def _claim_session(state, ref):
+    """(session, git common folder, worktree top, folder that relative targets start from) for
+    orch claim: the live session `ref` names (its id or first characters), else the one working
+    in this worktree, a session with hooks before a plain-git one. Asks which when several work
+    here. Reads the record without changing it."""
+    from orchestraty import claims, config, gitio
+    from orchestraty.coordinator.record import Record
+    cwd = os.getcwd()
+    sessions, repos = [], {}
+    if os.path.exists(state.record):
+        record = Record(state.record, readonly=True)
+        try:
+            sessions = [s for s in record.sessions(states=("live",)) if s["agent"] != "cloud"]
+            repos = {r["id"]: r["common_dir"] for r in record.repos()}
+        finally:
+            record.close()
+    if ref:
+        found = [s for s in sessions if s["id"] == ref] or [s for s in sessions if s["id"].startswith(ref)]
+        if len(found) > 1:
+            raise ValueError(f"{ref} is the start of {len(found)} live sessions' ids: give more of it")
+        if not found:
+            raise ValueError(f"no live session has the id {ref} (orch status lists them)")
+        session = found[0]
+        top, common_dir = session["worktree"], repos.get(session["repo_id"], "")
+        base = cwd if claims.inside(cwd, top) else top
+    else:
+        try:
+            info = gitio.worktree_info(cwd)
+        except gitio.UntrustedRepositoryError as exc:
+            raise ValueError(str(exc)) from None
+        if info is None:
+            raise ValueError(f"{cwd} is not inside a git worktree: run it in the session's worktree, or pass --session")
+        here = [s for s in sessions if _same_folder(s["worktree"], info["top"])]
+        hooked = [s for s in here if s["agent"] != "git"] or here
+        if not hooked:
+            raise ValueError(f"no live session works in {info['top']}. A session with hooks shows from its first "
+                             "event, one without (plain git) once its worktree has changes; or pass --session")
+        session = hooked[0] if len(hooked) == 1 else _pick_session(hooked, info["top"])
+        top, common_dir, base = info["top"], info["common_dir"], cwd
+    if not common_dir or not config.is_watched(config.load(state), common_dir):
+        raise ValueError(f"{os.path.basename(top) or top} is not watched: run orch watch in it first")
+    return session, common_dir, top, base
+
+
+def cmd_claim(args):
+    from orchestraty import claims, config
+    state = State()
+    try:
+        minutes = claims.parse_minutes(args.duration) if args.duration else claims.default_minutes(config.load(state))
+        session, common_dir, top, base = _claim_session(state, args.session)
+        kind, target, file = claims.resolve(top, base, args.target)
+    except (ValueError, claims.Refused) as exc:
+        return _refuse("claim", exc)
+    claims.append_claim(state, session["id"], common_dir, kind, target, file, args.hard, minutes)
+    until = time.strftime("%H:%M", time.localtime(time.time() + minutes * 60))
+    what = claims.describe({"kind": kind, "target": target, "file": file})
+    print(f"Claimed {what} for session {session['id'][:8]} ({session['agent']}) until {until}"
+          + (", hard." if args.hard else "."))
+    if args.hard:
+        print("Another session's edit there waits for its user's answer where its agent can ask (Claude Code); "
+              "a session whose agent cannot ask (Codex, Antigravity) is told only.")
+    else:
+        print("Another session is told before it edits there (an Antigravity session once it has changed it).")
+    print(_recorded_when(state))
+    return 0
+
+
+def _claims_now(state):
+    """The watched repositories as orch status has them, and [(repository, session, claim)] for
+    the claims that hold, by number."""
+    from orchestraty import status
+    data = status.collect(state)
+    rows = [(r, s, c) for r in data["repositories"] for s in r["sessions"] for c in s["claims"]]
+    return data["repositories"], sorted(rows, key=lambda row: row[2]["id"])
+
+
+def _hhmm(iso):
+    import calendar
+    return time.strftime("%H:%M", time.localtime(calendar.timegm(time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ"))))
+
+
+def cmd_claims(args):
+    from orchestraty import claims
+    repos, rows = _claims_now(State())
+    if not rows:
+        print("No claim holds. orch claim <file, folder or function> makes one for the session in this worktree.")
+        return 0
+    for repo in repos:
+        table = [(f"#{c['id']}", s["id"][:8], s["agent"], claims.describe(c), "until " + _hhmm(c["until"]),
+                  "hard" if c["hard"] else "") for r, s, c in rows if r is repo]
+        if not table:
+            continue
+        print(f"{repo['name']}  ({repo['common_dir']})")
+        widths = [max(len(t[i]) for t in table) for i in range(len(table[0]))]
+        for t in table:
+            print("  " + "  ".join(v.ljust(w) for v, w in zip(t, widths)).rstrip())
+    print("Release one: orch release <its number, or what it claims>.")
+    return 0
+
+
+def cmd_release(args):
+    import re
+    from orchestraty import claims, gitio
+    state = State()
+    ref = args.target.strip()
+    rows = _claims_now(state)[1]
+    if re.fullmatch(r"#?\d+", ref):
+        chosen = [(r, s, c) for r, s, c in rows if c["id"] == int(ref.lstrip("#"))]
+        if not chosen:
+            return _refuse("release", f"no claim {ref} holds (orch claims lists those that do)")
+        repo = chosen[0][0]
+        claims.append_release(state, repo["common_dir"], claim_id=chosen[0][2]["id"])
+    else:
+        try:
+            info = gitio.worktree_info(os.getcwd())
+        except gitio.UntrustedRepositoryError as exc:
+            return _refuse("release", exc)
+        if info is None:
+            return _refuse("release", f"{os.getcwd()} is not inside a git worktree: release by number (orch claims)")
+        mine = [(r, s, c) for r, s, c in rows if _same_folder(r["common_dir"], info["common_dir"])]
+        target = ref if any(c["target"] == ref for _, _, c in mine) else None
+        if target is None:
+            try:
+                target = claims.resolve(info["top"], os.getcwd(), ref)[1]
+            except claims.Refused as exc:
+                return _refuse("release", exc)
+        chosen = [(r, s, c) for r, s, c in mine if c["target"] == target]
+        if not chosen:
+            return _refuse("release", f"no claim on {target} holds in this repository (orch claims lists those "
+                                      "that do)")
+        claims.append_release(state, chosen[0][0]["common_dir"], target=target)
+    for _, s, c in chosen:
+        print(f"Released #{c['id']}: {claims.describe(c)}, claimed by {s['id'][:8]} ({s['agent']}).")
+    print(_recorded_when(state))
+    return 0
+
+
 def cmd_stats(args):
     from orchestraty import stats
     if args.out and not args.summary:
@@ -699,6 +858,29 @@ def build_parser():
     missed.add_argument("--session", metavar="ID", help="the session that should have heard (its id, or its "
                                                          "first characters)")
     missed.set_defaults(handler=cmd_missed)
+
+    claim = commands.add_parser("claim", help="reserve a file, folder or function for a session",
+                                description="Reserve a file, a folder (every file in it) or a Python function or "
+                                            "class (path::name, or module.name) for a session: another session is "
+                                            "told before it edits there. A hard claim makes that edit wait for its "
+                                            "user's answer, where the agent can ask. Claims end when they expire, "
+                                            "are released, or their session ends.")
+    claim.add_argument("target", help="a file, a folder, path::name or module.name")
+    claim.add_argument("--hard", action="store_true", help="another session's edit there asks its user first")
+    claim.add_argument("--for", dest="duration", metavar="TIME",
+                       help="how long it holds: 30m, 2h or 1h30m, up to 24h (default: claim_minutes, 120)")
+    claim.add_argument("--session", metavar="ID", help="the session it is for (its id, or its first characters); "
+                                                        "default: the live session in this worktree")
+    claim.set_defaults(handler=cmd_claim)
+    claims_list = commands.add_parser("claims", help="the claims that hold",
+                                      description="List the claims that hold in each watched repository. Reads the "
+                                                  "record without changing it.")
+    claims_list.set_defaults(handler=cmd_claims)
+    release = commands.add_parser("release", help="end a claim",
+                                  description="End a claim before it expires: by its number (orch claims), or by "
+                                              "what it claims, which ends every claim on it in this repository.")
+    release.add_argument("target", help="the claim's number, or the file, folder or function it claims")
+    release.set_defaults(handler=cmd_release)
 
     stats = commands.add_parser("stats", help="how Orchestraty was used, week by week",
                                 description="Usage, week by week, from the record: sessions, findings, notes and "

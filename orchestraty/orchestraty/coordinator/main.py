@@ -3,8 +3,9 @@
 It holds the single-writer lock, touches the heartbeat, reads the spools every
 ``SCAN_SECONDS``, records the events of watched repositories, keeps each session's
 lifecycle, and exits after ``idle_seconds`` with no live session and no new event. Lines in
-``<spool>/orch/`` are the user's own (``orch label``, ``orch missed``) or an agent's declaration
-(the MCP tool ``declare``): stored as they are, in the record only.
+``<spool>/orch/`` are the user's own (``orch label``, ``orch missed``), an agent's declaration
+(the MCP tool ``declare``), or a claim made or released (``orch claim``, ``orch release`` and
+their MCP tools): stored in the record only.
 
 A session is created from its first event: its worktree, repository, branch and base commit
 (HEAD then) come from git in the event's folder. The base counts as guessed unless that first
@@ -36,7 +37,7 @@ import os
 import sys
 import time
 
-from orchestraty import __version__, config, declarations, feedback, gitio, remote
+from orchestraty import __version__, claims, config, declarations, feedback, gitio, remote
 from orchestraty.coordinator.cloud import CloudBranches, session_id as cloud_session_id
 from orchestraty.coordinator.lock import Heartbeat, Lock
 from orchestraty.coordinator.record import Record, SchemaError, repo_key
@@ -422,6 +423,8 @@ class Coordinator:
         if agent == feedback.SPOOL_AGENT:
             if line.get("event") == "declare":
                 self.handle_declaration(line, ts)
+            elif line.get("event") in ("claim", "release"):
+                self.handle_claim(line, ts)
             else:
                 self.handle_feedback(line, ts)
             return
@@ -482,6 +485,33 @@ class Coordinator:
             self.record.add_declaration(item["session_id"], item["paths"], item["symbols"], item["task"], ts,
                                         ts + self.cfg["declare_minutes"] * 60 * NS)
             self._status_dirty = True
+
+    def handle_claim(self, line, ts):
+        """A line orch claim, orch release or their MCP tools appended. A claim is stored for a
+        live session of a watched repository, and holds until it expires or ends; a release
+        ends the claims it names that hold (only its session's, when it names one)."""
+        item = claims.parse_line(line)
+        if item is None:
+            self.bad_lines += 1
+            return
+        if not config.is_watched(self.cfg, item["repo"]):
+            self.log.info("a %s for a repository that is not watched was dropped", item["event"])
+            return
+        repo_id = self.record.repo_id(item["repo"])
+        if item["event"] == "claim":
+            s = self.sessions.get(item["session_id"])
+            if s is None or s["state"] != "live" or s["repo_id"] != repo_id or s["agent"] == CLOUD_AGENT:
+                self.log.info("a claim for a session not live in that repository was dropped")
+                return
+            self.record.add_claim(repo_id, s["id"], item["kind"], item["target"], item["file"], item["hard"], ts,
+                                  ts + item["minutes"] * 60 * NS)
+        else:
+            for c in self.record.claims(active_at=ts, repo_id=repo_id):
+                named = c["id"] == item["id"] if "id" in item else c["target"] == item["target"]
+                if named and (not item["session_id"] or c["session_id"] == item["session_id"]):
+                    self.record.end_claim(c["id"], ts, "released")
+        self._dirty_repos.add(repo_id)
+        self._status_dirty = True
 
     def _follow(self, session, line):
         """A hooked session's edit landed in another worktree of its repository: the agent
@@ -567,7 +597,8 @@ class Coordinator:
 
     # housekeeping
     def expire(self, now):
-        """End live sessions with no event for longer than the session timeout."""
+        """End live sessions with no event for longer than the session timeout, and the claims
+        whose time ran out."""
         limit = now - self.cfg["session_timeout"] * NS
         stale = [s for s in self.sessions.values()        # a cloud branch lives as long as the branch does
                  if s["state"] == "live" and s["last_seen"] < limit and s["agent"] != CLOUD_AGENT]
@@ -584,6 +615,11 @@ class Coordinator:
             self._dirty_repos.add(s["repo_id"])
             self._push_dirty = True
             self._ended_hooked(s)
+        with self.record.transaction():
+            expired = self.record.expire_claims(now)
+        for c in expired:
+            self._dirty_repos.add(c["repo_id"])
+            self._status_dirty = True
 
     def clean_spool(self, now):
         """Delete spool files read to the end whose session is ignored, or ended more than a

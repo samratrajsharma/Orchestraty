@@ -2,10 +2,11 @@
 
 The record's own write methods log each change as it happens (the ``changes`` table, record
 schema 3): sessions started and ended, findings opened and resolved, notes written, delivered
-and withdrawn, and declarations made. ``orch events`` reads that log in order, with each change's
-session, finding or note as the record has them when it is read. ``--follow`` polls the record
-about once a second for new changes; there is no server and no socket. Without ``--follow`` (or
-with ``--once``) it prints the changes there are and ends.
+and withdrawn, declarations made, and claims made and ended (schema 4). ``orch events`` reads
+that log in order, with each change's session, finding, note or claim as the record has them
+when it is read. ``--follow`` polls the record about once a second for new changes; there is no
+server and no socket. Without ``--follow`` (or with ``--once``) it prints the changes there are
+and ends.
 
 ``--json`` prints one JSON object per line, with ``schema``: fields are only added within a
 schema number. The text of a note and a declaration's task line are never part of an event.
@@ -16,12 +17,13 @@ import os
 import re
 import time
 
+from orchestraty.claims import describe
 from orchestraty.coordinator.record import Record
 
 EVENTS_SCHEMA = 1
 NS = 1_000_000_000
 KINDS = ("session_started", "session_ended", "finding_opened", "finding_resolved", "note_written",
-         "note_delivered", "note_withdrawn", "declared")
+         "note_delivered", "note_withdrawn", "declared", "claimed", "claim_ended")
 _DURATION = re.compile(r"^(\d+)([smhd])$")
 _UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
@@ -84,6 +86,14 @@ def event(record, change, declared=None):
         d = (declared if declared is not None else {d["id"]: d for d in record.declarations()}).get(change["ref"])
         if d:
             out.update(paths=d["paths"], symbols=d["symbols"], until=_iso(d["expires"]))
+    elif kind in ("claimed", "claim_ended"):
+        c = record.claim(change["ref"]) if change["ref"] is not None else None
+        out["claim"] = change["ref"]
+        if c:
+            out.update(claim_kind=c["kind"], target=c["target"], file=c["file"], hard=bool(c["hard"]),
+                       until=_iso(c["expires"]))
+            if kind == "claim_ended" and c["ended"] is not None:
+                out["ended"] = c["why"]                  # released, expired or session ended
     return out
 
 
@@ -92,6 +102,11 @@ def read(record, after_id=0, since=None):
     changes = record.change_log(after_id=after_id, since=None if since is None else int(since * NS))
     declared = {d["id"]: d for d in record.declarations()} if any(c["kind"] == "declared" for c in changes) else {}
     return [event(record, c, declared) for c in changes]
+
+
+def _claimed(e):
+    """What a claim event reserves, in a few words."""
+    return describe({"kind": e["claim_kind"], "target": e["target"], "file": e["file"]})
 
 
 def _local(iso, form):
@@ -115,6 +130,11 @@ def render(e):
             what = f"{e['strength']} {e['rule']} {name}{where} ({who})"
     elif e["event"].startswith("note_"):
         what = f"#{e['note']} {e.get('note_kind', '?')} note to {sid} on {e['finding']}"
+    elif e["event"] in ("claimed", "claim_ended"):
+        what = f"{sid}: #{e['claim']}"
+        if "target" in e:
+            what += f" {_claimed(e)}" + (", hard" if e["hard"] else "")
+            what += f" ({e['ended']})" if e.get("ended") else f" until {_local(e['until'], '%H:%M')}"
     else:
         names = f" ({', '.join(x.split('::')[-1] for x in e['symbols'])})" if e.get("symbols") else ""
         until = f" until {_local(e['until'], '%H:%M')}" if e.get("until") else ""

@@ -296,6 +296,7 @@ class Record:
             self._log(s["started"] if row is None else s["last_seen"], "session_started", session_id=s["id"])
         elif before == "live" and after != "live":
             self._log(s["last_seen"], "session_ended", session_id=s["id"])
+            self._end_claims_of(s["id"], s["last_seen"])                # a session's claims end with it
         self.db.execute("INSERT OR REPLACE INTO sessions (%s) VALUES (%s)" % (
             ", ".join(SESSION_COLUMNS), ", ".join("?" * len(SESSION_COLUMNS))),
             [s.get(c, "" if c not in ("repo_id", "base_guessed", "started", "last_seen") else None)
@@ -486,7 +487,7 @@ class Record:
         return cur.lastrowid
 
     def end_claim(self, claim_id, ts, why):
-        """End a claim that holds (released, or its session ended). True when it did hold."""
+        """End a claim that still holds at `ts` (a release). True when it did hold."""
         row = self.db.execute("SELECT session_id FROM claims WHERE id = ? AND ended IS NULL AND expires > ?",
                               (claim_id, ts)).fetchone()
         if row is None:
@@ -494,6 +495,30 @@ class Record:
         self.db.execute("UPDATE claims SET ended = ?, why = ? WHERE id = ?", (ts, why, claim_id))
         self._log(ts, "claim_ended", session_id=row["session_id"], ref=claim_id)
         return True
+
+    def _end_claims_of(self, session_id, ts):
+        """End the claims of a session that ended at `ts`: those that had not expired by then,
+        each at `ts` or, for one made after the session's last event, when it was made."""
+        if not self.has_table("claims"):
+            return
+        rows = self.db.execute("SELECT id, ts FROM claims WHERE session_id = ? AND ended IS NULL AND expires > ? "
+                               "ORDER BY id", (session_id, ts)).fetchall()
+        for row in rows:
+            when = max(ts, row["ts"])
+            self.db.execute("UPDATE claims SET ended = ?, why = 'session ended' WHERE id = ?", (when, row["id"]))
+            self._log(when, "claim_ended", session_id=session_id, ref=row["id"])
+
+    def expire_claims(self, ts):
+        """End the claims whose time ran out by `ts`, each at the time it ran out. Returns them."""
+        if not self.has_table("claims"):
+            return []
+        rows = [dict(r) for r in self.db.execute("SELECT * FROM claims WHERE ended IS NULL AND expires <= ? "
+                                                 "ORDER BY expires, id", (ts,))]
+        for c in rows:
+            c["ended"], c["why"] = c["expires"], "expired"
+            self.db.execute("UPDATE claims SET ended = ?, why = ? WHERE id = ?", (c["ended"], c["why"], c["id"]))
+            self._log(c["ended"], "claim_ended", session_id=c["session_id"], ref=c["id"])
+        return rows
 
     def claim(self, claim_id):
         if not self.has_table("claims"):

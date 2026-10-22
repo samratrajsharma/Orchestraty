@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from helpers import spool_event
-from orchestraty import config, declarations, events, status
+from orchestraty import claims, config, declarations, events, status
 from orchestraty.capture.hook import take_slot
 from orchestraty.coordinator import main as cmain
 from orchestraty.delivery import slots
@@ -66,6 +66,7 @@ def test_the_json_docs_name_every_field(state, repo, git, tmp_path):
         edit(state, c, "A", wa, "a.py", BROKEN)
         edit(state, c, "B", wb, "c.py", USES)
         declarations.append(state, "A", ["a.py"], ["a.py::charge"], "a line")
+        claims.append_claim(state, "A", str(repo / ".git"), "symbol", "a.py::charge", "a.py", True, 30)
         c.step()
 
         # orch status --json, with the coordinator running
@@ -80,6 +81,7 @@ def test_the_json_docs_name_every_field(state, repo, git, tmp_path):
         a = repository["sessions"][0]
         assert set(a) == set(doc["Session"]) and set(a["changes"]) == set(doc["`changes`"])
         assert set(a["changes"]["symbols"][0]) == set(doc["Symbol"]) and set(a["declared"][0]) == set(doc["`declared`"])
+        assert set(a["claims"][0]) == set(doc["`claims`"])
         assert repository["overlaps"] and all(set(f) == set(doc["Overlap"]) for f in repository["overlaps"])
         text = (DOCS / "status-json.md").read_text(encoding="utf-8")
         for f in repository["overlaps"]:
@@ -89,6 +91,7 @@ def test_the_json_docs_name_every_field(state, repo, git, tmp_path):
         assert take_slot(slots.next_slot(state, "B"))
         c.step()
         edit(state, c, "A", wa, "a.py", ORIGINAL)
+        claims.append_release(state, str(repo / ".git"), target="a.py::charge")
         spool_event(state.root, "B", "SessionEnd", wb, reason="other")
         c.step()
     finally:

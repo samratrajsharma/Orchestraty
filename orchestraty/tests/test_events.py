@@ -91,7 +91,7 @@ def test_orch_events_once_lists_the_scenarios_events_in_order(state, scenario, c
         return {"note_delivered": 3, "declared": 4, "finding_resolved": 5, "note_withdrawn": 5, "session_ended": 6}[kind]
     steps = [step(e) for e in got]
     assert steps == sorted(steps) and set(steps) == set(range(8)), [(e["event"], e.get("finding")) for e in got]
-    assert {e["event"] for e in got} == set(events.KINDS)
+    assert {e["event"] for e in got} == set(events.KINDS) - {"claimed", "claim_ended"}     # claims: test_claims.py
     assert sorted(e["session"] for e in got if e["event"] == "session_started")[:2] == ["A", "B"]
     assert (got[-1]["event"], got[-1]["agent"]) == ("session_started", "git") and got[-1]["worktree"].endswith("wt-b")
     assert {e["rule"] for e in got if e["event"] == "finding_opened"} == {"O3", "O6"}

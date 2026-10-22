@@ -23,13 +23,15 @@ changes. A missing or unreadable file means the defaults.
   ``orch remote`` changes it.
 * ``remote_fetch_minutes``: how often the coordinator fetches the cloud branches of a
   repository that has them on (a failure doubles the wait, up to an hour).
+* ``claim_minutes``: how long a claim holds when ``orch claim --for`` (or the MCP tool's
+  ``minutes``) does not say; see ``claims``.
 """
 import json
 import os
 
 DEFAULTS = {"repos": [], "idle_seconds": 600, "session_timeout": 1800, "level0_seconds": 5,
             "steer": False, "wake": False, "settings": "", "acted_minutes": 30,
-            "declare_minutes": 120, "remote": {}, "remote_fetch_minutes": 5}
+            "declare_minutes": 120, "remote": {}, "remote_fetch_minutes": 5, "claim_minutes": 120}
 
 
 def _same(a, b):

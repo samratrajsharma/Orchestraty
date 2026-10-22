@@ -5,14 +5,15 @@ and when it does not; ``render`` turns the result into text. The JSON form (``--
 ``collect``'s result as it is, with a schema number for other tools to check. Cloud agents'
 branches (``orch remote``) are a group of their own in each repository, with the last fetch's
 result, which the shadow repository keeps beside it. Each session says which kinds of note its
-agent can be handed (``adapters``), and the text says what an agent there cannot be told.
+agent can be handed (``adapters``), and the text says what an agent there cannot be told. A
+live session's claims (``orch claim``) that hold are listed with it.
 """
 import calendar
 import json
 import os
 import time
 
-from orchestraty import adapters, config, remote
+from orchestraty import adapters, claims as claiming, config, remote
 from orchestraty.coordinator.lock import is_fresh
 from orchestraty.coordinator.record import Record, repo_key, repo_name
 
@@ -44,7 +45,12 @@ def _hears(agent):
     return [] if agent in (LEVEL0_AGENT, remote.CLOUD_AGENT) else list(adapters.hears(agent))
 
 
-def _session(s, now, changes, declared=()):
+def _claim(c):
+    return {"id": c["id"], "kind": c["kind"], "target": c["target"], "file": c["file"], "hard": bool(c["hard"]),
+            "since": _iso(c["ts"] / NS), "until": _iso(c["expires"] / NS)}
+
+
+def _session(s, now, changes, declared=(), claims=()):
     files, unattributed, symbols = changes
     return {"id": s["id"], "agent": s["agent"], "hears": _hears(s["agent"]), "worktree": s["worktree"],
             "branch": s["branch"],
@@ -54,14 +60,15 @@ def _session(s, now, changes, declared=()):
             "seconds_since_last_event": max(0, int(now - s["last_seen"] / NS)),
             "changes": {"files": files, "unattributed": unattributed, "symbols": symbols},
             "declared": [{"paths": d["paths"], "symbols": d["symbols"], "task": d["task"], "since": _iso(d["ts"] / NS),
-                          "until": _iso(d["expires"] / NS)} for d in declared]}
+                          "until": _iso(d["expires"] / NS)} for d in declared],
+            "claims": [_claim(c) for c in claims]}
 
 
 def collect(state, include_ended=False, now=None):
     now = time.time() if now is None else now
     cfg = config.load(state)
     data = {"schema": STATUS_SCHEMA, "coordinator": _coordinator(state, now), "repositories": []}
-    sessions_by_repo, repo_rows, changes, findings, declared = {}, {}, {}, {}, {}
+    sessions_by_repo, repo_rows, changes, findings, declared, claimed = {}, {}, {}, {}, {}, {}
     if os.path.exists(state.record):
         record = Record(state.record, readonly=True)
         try:
@@ -72,6 +79,8 @@ def collect(state, include_ended=False, now=None):
                 changes[s["id"]] = record.changes(s["id"])
             for d in record.declarations(active_at=int(now * NS)):
                 declared.setdefault(d["session_id"], []).append(d)
+            for c in record.claims(active_at=int(now * NS)):
+                claimed.setdefault(c["session_id"], []).append(c)
             for f in record.findings():
                 if include_ended or not f["detail"].get("latent"):
                     findings.setdefault(f["repo_id"], []).append(f)
@@ -85,7 +94,8 @@ def collect(state, include_ended=False, now=None):
         data["repositories"].append({
             "name": repo_name(common_dir), "common_dir": common_dir,
             "sessions": [_session(s, now, changes.get(s["id"], ({}, [], [])),
-                                  declared.get(s["id"], ()) if s["state"] == "live" else ())
+                                  declared.get(s["id"], ()) if s["state"] == "live" else (),
+                                  claimed.get(s["id"], ()) if s["state"] == "live" else ())
                          for s in sorted(local, key=lambda s: (s["started"], s["id"]))],
             "overlaps": [_finding(f) for f in sorted(findings.get(row["id"], []) if row else [], key=_finding_order)],
             "cloud": _cloud(state, cfg, common_dir, now, cloud, changes)})
@@ -174,6 +184,11 @@ def _declared_line(d, limit=4):
     names = f" ({', '.join(x.split('::')[-1] for x in d['symbols'][:limit])})" if d["symbols"] else ""
     until = time.strftime("%H:%M", time.localtime(calendar.timegm(time.strptime(d["until"], "%Y-%m-%dT%H:%M:%SZ"))))
     return f"declared: {paths}{names} until {until}" + (f': "{d["task"]}"' if d.get("task") else "")
+
+
+def _claim_line(c):
+    """One line for one claim that holds: its number, what it reserves, until when, and whether it is hard."""
+    return f"claimed #{c['id']}: {claiming.describe(c)} until {_local(c['until'])}" + (", hard" if c["hard"] else "")
 
 
 def _ago(seconds):
@@ -270,4 +285,6 @@ def _session_lines(sessions):
             lines.append("    " + summary)
         for d in s["declared"]:
             lines.append("    " + _declared_line(d))
+        for c in s["claims"]:
+            lines.append("    " + _claim_line(c))
     return lines

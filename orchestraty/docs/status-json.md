@@ -1,6 +1,6 @@
 # `orch status --json`
 
-What `orch status` shows, as JSON for other tools: the coordinator, every watched repository, its live sessions and what each has changed and declared, and the overlaps between them. It is read from the record without changing it, so it works whether the coordinator runs or not; it says what the coordinator last saw.
+What `orch status` shows, as JSON for other tools: the coordinator, every watched repository, its live sessions and what each has changed, declared and claimed, and the overlaps between them. It is read from the record without changing it, so it works whether the coordinator runs or not; it says what the coordinator last saw.
 
 ```bash
 orch status --json          # live sessions, overlaps that are not latent
@@ -65,8 +65,9 @@ A session is an agent session with hooks, or a plain-git one: a worktree with ch
 | `seconds_since_last_event` | integer | From `last_event` to the moment of the call. |
 | `changes` | object | What it has changed since `base_commit`. See [changes](#changes). |
 | `declared` | array | What it says it is about to change (the MCP tool `declare`): the declarations that still hold, for live sessions; `[]` otherwise. See [declared](#declared). |
+| `claims` | array | What it has reserved (`orch claim`, the MCP tool `claim`): its claims that still hold, oldest first, for live sessions; `[]` otherwise. See [claims](#claims). |
 
-A cloud branch, in [`cloud`](#cloud), has the same fields, read this way: `worktree` is `""` (it has none here), `branch` is `<remote>/<branch>`, `base_commit` is its merge base with the remote's default branch, `last_event` and `seconds_since_last_event` are its last commit's time, `turn` is `""`, and `declared` is `[]`.
+A cloud branch, in [`cloud`](#cloud), has the same fields, read this way: `worktree` is `""` (it has none here), `branch` is `<remote>/<branch>`, `base_commit` is its merge base with the remote's default branch, `last_event` and `seconds_since_last_event` are its last commit's time, `turn` is `""`, and `declared` and `claims` are `[]`.
 
 ### `changes`
 
@@ -98,6 +99,20 @@ A cloud branch, in [`cloud`](#cloud), has the same fields, read this way: `workt
 | `task` | string | The agent's own short line about the task; `""` when it gave none. Kept on this machine, and never put into another session's note. |
 | `since` | string (time) | When it declared. |
 | `until` | string (time) | When the declaration stops holding: `declare_minutes` later (120 by default, in `config.json`). |
+
+### `claims`
+
+A claim reserves a file, a folder or a Python function or class for one session: another session is told before it edits there, and a hard claim makes that edit wait for its user's answer where the agent can ask. A claim ends when it expires, when it is released (`orch release`, the MCP tool `release`), or when its session ends.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | integer | Its number, which `orch claims` shows and `orch release` takes. |
+| `kind` | string | `file`, `area` (a folder: every file in it) or `symbol` (a Python function or class). |
+| `target` | string | What it reserves, in canonical form: a file's path, a folder's path (no `/` at the end), or `path::Qualified.name`. |
+| `file` | string (path) | For a symbol, the file that defines it; `""` otherwise. |
+| `hard` | boolean | Another session's edit there waits for its user's answer, where its agent can ask (Claude Code); other agents' sessions are told only. |
+| `since` | string (time) | When it was made. |
+| `until` | string (time) | When it expires: the time given (`orch claim --for`), else `claim_minutes` later (120 by default, in `config.json`). |
 
 ### Overlap
 
