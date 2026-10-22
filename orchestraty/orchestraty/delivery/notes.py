@@ -177,8 +177,8 @@ def left_behind(finding):
                 f"them: {left}. Update them, or say why they need no change. {COVERAGE}")
 
 
-def _reserved(claim):
-    """What a claim reserves: a file, "the folder pkg/", or "charge in a.py"."""
+def reserved(claim):
+    """What a claim reserves, cleaned: a file, "the folder pkg/", or "charge in a.py"."""
     if claim["kind"] == "symbol":
         return f"{_name(claim['target'])} in {_path(claim['file'])}"
     if claim["kind"] == "area":
@@ -202,7 +202,7 @@ def claimed(claim, claimer, before_edit=True, ask=None):
     until = time.strftime("%H:%M", time.localtime(claim["expires"] / 1e9))
     number = int(claim["id"])
     how = "hard claim" if claim["hard"] else "claim"
-    what = f"{who} has claimed {_reserved(claim)} until {until} ({how} #{number})."
+    what = f"{who} has claimed {reserved(claim)} until {until} ({how} #{number})."
     if not before_edit:
         then = "You have changed it in your worktree: agree with that session, or ask your user, before you go on."
     elif ask:

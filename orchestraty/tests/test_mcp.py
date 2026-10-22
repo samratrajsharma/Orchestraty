@@ -133,7 +133,8 @@ def test_initialize_then_list_then_each_tool_on_two_sessions(state, two):
     assert init["protocolVersion"] == "2025-06-18" and init["serverInfo"]["name"] == "orchestraty"
     assert init["capabilities"] == {"tools": {"listChanged": False}} and "check_before_edit" in init["instructions"]
     listed = result(answers, 1)["tools"]
-    assert [t["name"] for t in listed] == ["who_is_changing", "check_before_edit", "my_overlaps", "status", "declare"]
+    assert [t["name"] for t in listed] == ["who_is_changing", "check_before_edit", "my_overlaps", "status", "declare",
+                                           "claim", "release"]
     assert all(t["inputSchema"]["type"] == "object" and t["description"] and "handler" not in t for t in listed)
     assert result(answers, 9) == {}
     assert "initialize: test-client 1.0" in err and "tools/call check_before_edit" in err
@@ -220,6 +221,49 @@ def test_declare_reaches_the_record_through_the_coordinator_and_expires(state, t
     data, _ = tools.call(state, str(wb), "who_is_changing", {"path": "b.py"}, now=later)
     assert data["sessions"] == []
     assert all(s["declared"] == [] for s in status.collect(state, now=later)["repositories"][0]["sessions"])
+
+
+def test_the_claim_tools_reach_the_record_through_the_coordinator(state, two):
+    c, wa, wb = two
+    answers, _ = mcp(state, wa, initialize(), call(1, "claim", target="charge", hard=True, minutes=30),
+                     call(2, "claim", target="a.py::charge", hard=True, minutes=30),
+                     call(3, "claim", target="a.py", hard="yes"), call(4, "claim", target="a.py", minutes=0),
+                     call(5, "claim", target="a.py", minutes=True), call(6, "claim", target="nothing.py"))
+    assert result(answers, 1)["isError"] is True and "no file or folder" in text_of(result(answers, 1))
+    made = result(answers, 2)["structuredContent"]
+    assert (made["session"], made["kind"], made["target"], made["file"], made["hard"], made["holds_minutes"]) == (
+        "A", "symbol", "a.py::charge", "a.py", True, 30)
+    assert "Claimed charge in a.py for this session for 30 minutes, hard." in text_of(result(answers, 2))
+    assert {rid: answers[rid]["error"]["code"] for rid in (3, 4, 5)} == {3: -32602, 4: -32602, 5: -32602}
+    assert result(answers, 6)["isError"] is True
+    assert c.record.claims() == []                                  # the server wrote no record...
+    c.step()                                                         # ...the coordinator stores it
+    [held] = c.record.claims()
+    assert (held["session_id"], held["target"], held["hard"]) == ("A", "a.py::charge", 1)
+
+    # B, before it edits a.py, hears of it; it cannot release A's claim
+    answers, _ = mcp(state, wb, initialize(), call(1, "check_before_edit", path="a.py"),
+                     call(2, "release", target="a.py::charge"), call(3, "declare", paths=["a.py"]))
+    [claimed] = result(answers, 1)["structuredContent"]["claimed"]
+    assert (claimed["claim"], claimed["session"], claimed["hard"]) == (held["id"], "A", True)
+    assert f"{A_IS} has claimed charge in a.py until " in claimed["note"]
+    assert "This edit waits for the user's answer" in claimed["note"]          # B's own hook asks (Claude Code)
+    assert claimed["note"][len("Orchestraty: "):] in text_of(result(answers, 1))
+    assert result(answers, 2)["isError"] is True and "No claim of this session" in text_of(result(answers, 2))
+    settle(c)
+    answers, _ = mcp(state, wb, initialize(), call(1, "my_overlaps"))
+    o7 = [o for o in result(answers, 1)["structuredContent"]["overlaps"] if o["rule"] == "O7"]
+    assert [o["note"] for o in o7] == [f"{A_IS} has claimed charge in a.py, which you have declared too (rule O7). "
+                                       "Agree with that session on who changes it before either of you goes on; nothing "
+                                       "is held back."]
+
+    # A releases it, by its number
+    answers, _ = mcp(state, wa, initialize(), call(1, "release", target=f"#{held['id']}"),
+                     call(2, "release", target="a.py::charge"))
+    assert result(answers, 1)["structuredContent"]["released"] == [held["id"]]
+    assert result(answers, 2)["structuredContent"]["released"] == [held["id"]]  # the record has not heard yet
+    c.step()
+    assert c.record.claim(held["id"])["why"] == "released" and c.record.claims(active_at=time.time_ns()) == []
 
 
 def test_unknown_methods_and_bad_arguments_get_json_rpc_errors(state, two):
@@ -324,5 +368,5 @@ def test_without_a_record_or_a_repository_it_still_answers_cleanly(state, tmp_pa
     answers, _ = mcp(state, folder, initialize(), call(1, "who_is_changing", path="x.py"), call(2, "status"),
                      request(3, "tools/list"))
     assert result(answers, 1)["isError"] is True and result(answers, 2)["isError"] is True
-    assert len(result(answers, 3)["tools"]) == 5
+    assert len(result(answers, 3)["tools"]) == 7
     assert not Path(state.record).exists()                 # the server made no record

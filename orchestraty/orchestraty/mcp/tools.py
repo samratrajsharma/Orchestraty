@@ -1,5 +1,5 @@
-"""The MCP tools: what an agent can ask Orchestraty before it edits, and what it can say it is
-about to change.
+"""The MCP tools: what an agent can ask Orchestraty before it edits, what it can say it is
+about to change, and what it can claim for itself.
 
 Every answer comes from what the coordinator keeps, the record, opened read-only: who works
 where and what each session changed, as of the coordinator's last pass. The server builds no
@@ -21,7 +21,7 @@ import calendar
 import os
 import time
 
-from orchestraty import config, declarations, feedback, gitio, status
+from orchestraty import adapters, claims as claiming, config, declarations, feedback, gitio, status
 from orchestraty.coordinator.record import Record, repo_key
 from orchestraty.delivery import notes as templates
 
@@ -108,12 +108,13 @@ class Workspace:
         self.now = time.time() if now is None else now
         self.top, self.repo_id, self.common_key, self.head = None, None, None, ""
         self.me, self._several = None, []
-        self.sessions, self.findings, self.changes, self.declared = {}, [], {}, {}
+        self.sessions, self.findings, self.changes, self.declared, self.claims = {}, [], {}, {}, []
         self.record = Record(state.record, readonly=True) if os.path.exists(state.record) else None
         if self.record is not None:
             self.sessions = {s["id"]: s for s in self.record.sessions()}
             for d in self.record.declarations(active_at=int(self.now * NS)):
                 self.declared.setdefault(d["session_id"], []).append(d)
+            self.claims = self.record.claims(active_at=int(self.now * NS))
 
     def close(self):
         if self.record is not None:
@@ -228,6 +229,10 @@ class Workspace:
     def coordinator(self):
         return "running" if feedback.coordinator_running(self.state, self.now) else "not running: this is what it last saw"
 
+    def common_dir(self, session):
+        """The git common folder of a session's repository, as the record keeps it."""
+        return next((r["common_dir"] for r in self.record.repos() if r["id"] == session["repo_id"]), "")
+
 
 def _session_facts(ws, s, me):
     return {"session": s["id"], "you": me is not None and s["id"] == me["id"], "agent": s["agent"],
@@ -337,11 +342,23 @@ def check_before_edit(ws, args):
                 other = ws.sessions.get(next((x for x in f["sessions"] if x != me["id"]), ""))
                 if other:
                     items.append(("same_folder", f, templates.same_folder(other)))
+    for c in ws.claims:
+        claimer = ws.sessions.get(c["session_id"])
+        if (claimer is not None and claimer["repo_id"] == ws.repo_id and (me is None or c["session_id"] != me["id"])
+                and claiming.covers(c, path)):
+            # a hard claim: the caller's edit waits for its user only where its own hook asks
+            ask = (me is not None and adapters.asks(me["agent"])) if c["hard"] else None
+            items.append(("claimed", c, templates.claimed(c, claimer, ask=ask)))
     data = {"path": path, "session": me["id"] if me else None, "uses_broken": [], "also_changing": [],
-            "same_folder": [], "others_changed_file": others_changed_file, "notes": [t for _, _, t in items],
-            "coverage": templates.COVERAGE, "scope": SCOPE, "coordinator": ws.coordinator()}
+            "same_folder": [], "claimed": [], "others_changed_file": others_changed_file,
+            "notes": [t for _, _, t in items], "coverage": templates.COVERAGE, "scope": SCOPE,
+            "coordinator": ws.coordinator()}
     for kind, f, text in items:
-        if kind == "also_changing":
+        if kind == "claimed":
+            data[kind].append({"claim": f["id"], "kind": f["kind"], "target": templates.clean(f["target"], 200),
+                               "hard": bool(f["hard"]), "session": f["session_id"], "until": _iso(f["expires"] / NS),
+                               "note": text})
+        elif kind == "also_changing":
             data[kind].append({"symbol": templates.clean(f["symbol"], 200), "session": f["session"], "note": text})
         else:
             data[kind].append({"finding": f["key"], "rule": f["rule"], "strength": f["strength"],
@@ -351,7 +368,7 @@ def check_before_edit(ws, args):
         text = f"Before you edit {templates.clean(path, 200)}:\n" + "\n".join("- " + _bare(t) for _, _, t in items)
     else:
         text = (f"Nothing known concerns {templates.clean(path, 200)}: no other live session broke or removed a function "
-                "it uses, or is changing a function in it.")
+                "it uses, is changing a function in it, or has claimed it.")
     if others_changed_file:
         text += (f"\n{others_changed_file} other live session(s) also changed this file outside any function; "
                  "who_is_changing lists them.")
@@ -451,6 +468,60 @@ def declare(ws, args):
     return data, text
 
 
+def claim(ws, args):
+    me = ws.caller()
+    common_dir = ws.common_dir(me)
+    if not common_dir or not config.is_watched(config.load(ws.state), common_dir):
+        raise ToolError("This repository is not watched: run orch watch (or orch init) in it.")
+    top = me["worktree"]
+    base = ws.folder if top and _inside(ws.folder, top) else top
+    try:
+        kind, target, file = claiming.resolve(top, base, args["target"])
+    except claiming.Refused as exc:
+        raise ToolError(templates.clean_reason(str(exc)).rstrip(".") + ".") from None
+    hard = bool(args.get("hard", False))
+    minutes = args.get("minutes") or claiming.default_minutes(config.load(ws.state))
+    claiming.append_claim(ws.state, me["id"], common_dir, kind, target, file, hard, minutes, now=ws.now)
+    running = feedback.coordinator_running(ws.state, ws.now)
+    what = templates.reserved({"kind": kind, "target": target, "file": file})
+    data = {"session": me["id"], "kind": kind, "target": target, "file": file, "hard": hard, "holds_minutes": minutes,
+            "until": _iso(ws.now + minutes * 60), "recorded": "now" if running else "when the coordinator next runs"}
+    text = (f"Claimed {what} for this session for {minutes} minutes{', hard' if hard else ''}. Other sessions are told "
+            "before they edit it" + ("; a Claude Code session's edit waits for its user's answer, and other agents' "
+                                     "sessions are told only" if hard else "")
+            + ". " + ("The coordinator records it now." if running else
+                      "The coordinator records it when it next runs (a hook starts it with the next event).")
+            + " Release it with the tool release when you are done.")
+    return data, text
+
+
+def release(ws, args):
+    me = ws.caller()
+    ref = args["target"].strip()
+    mine = [c for c in ws.claims if c["session_id"] == me["id"]]
+    if ref.lstrip("#").isdigit():
+        chosen = [c for c in mine if c["id"] == int(ref.lstrip("#"))]
+    else:
+        chosen = [c for c in mine if c["target"] == ref]
+        if not chosen and me["worktree"]:
+            base = ws.folder if _inside(ws.folder, me["worktree"]) else me["worktree"]
+            try:
+                target = claiming.resolve(me["worktree"], base, ref)[1]
+            except claiming.Refused:
+                target = None
+            chosen = [c for c in mine if c["target"] == target]
+    if not chosen:
+        raise ToolError(f"No claim of this session on {templates.clean(ref, 200)} holds (status lists its claims).")
+    common_dir = ws.common_dir(me)
+    for c in chosen:
+        claiming.append_release(ws.state, common_dir, claim_id=c["id"], session_id=me["id"], now=ws.now)
+    data = {"session": me["id"], "released": [c["id"] for c in chosen]}
+    text = ("Released " + ", ".join(f"#{c['id']} {templates.reserved(c)}" for c in chosen)
+            + ". " + ("The coordinator records it now." if feedback.coordinator_running(ws.state, ws.now) else
+                      "The coordinator records it when it next runs."))
+    return data, text
+
+
 _SESSION = {"type": "string", "minLength": 1, "maxLength": declarations.MAX_SESSION,
             "description": "Your session's id, or its first characters (orch status shows them). Needed only when "
                            "several sessions work in this folder, or the server runs outside your workspace."}
@@ -501,6 +572,27 @@ TOOLS = [
                   "description": "One short line about the task, kept on this machine."},
          "session": _SESSION}, "required": ["paths"], "additionalProperties": False},
      "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False}},
+    {"name": "claim", "title": "Claim a file, folder or function", "handler": claim,
+     "description": "Reserve a file, a folder, or a Python function or class (path::name, or module.name) for this "
+                    "session: other sessions are told before they edit it. A hard claim makes their edit wait for "
+                    "their user's answer, where their agent can ask (Claude Code); others are told only. It holds for 2 "
+                    "hours by default, or `minutes`, until you release it, or until this session ends.",
+     "inputSchema": {"type": "object", "properties": {
+         "target": {"type": "string", "minLength": 1, "maxLength": 1000,
+                    "description": "A file or folder in the repository (absolute, or relative to your workspace), "
+                                   "or a function or class as path::name or module.name."},
+         "hard": {"type": "boolean", "description": "Make other sessions' edits there wait for their user's answer."},
+         "minutes": {"type": "integer", "minimum": 1, "maximum": claiming.MAX_MINUTES,
+                     "description": "How long it holds (default 120)."},
+         "session": _SESSION}, "required": ["target"], "additionalProperties": False},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False}},
+    {"name": "release", "title": "Release a claim", "handler": release,
+     "description": "End a claim this session made: name what it claims, as you claimed it, or its number.",
+     "inputSchema": {"type": "object", "properties": {
+         "target": {"type": "string", "minLength": 1, "maxLength": 1000,
+                    "description": "The file, folder or function you claimed, or the claim's number."},
+         "session": _SESSION}, "required": ["target"], "additionalProperties": False},
+     "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}},
 ]
 BY_NAME = {t["name"]: t for t in TOOLS}
 
@@ -527,6 +619,12 @@ def check_arguments(schema, args):
             if not isinstance(value, str) or not spec.get("minLength", 0) <= len(value) <= spec["maxLength"]:
                 raise ArgumentError(f"{key} must be a string of {spec.get('minLength', 0)} to {spec['maxLength']} "
                                     "characters")
+        elif spec["type"] == "boolean":
+            if not isinstance(value, bool):
+                raise ArgumentError(f"{key} must be true or false")
+        elif spec["type"] == "integer":
+            if isinstance(value, bool) or not isinstance(value, int) or not spec["minimum"] <= value <= spec["maximum"]:
+                raise ArgumentError(f"{key} must be a whole number from {spec['minimum']} to {spec['maximum']}")
         else:
             item = spec["items"]
             if (not isinstance(value, list) or not spec.get("minItems", 0) <= len(value) <= spec["maxItems"]

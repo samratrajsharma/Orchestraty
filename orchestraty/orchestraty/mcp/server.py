@@ -9,8 +9,9 @@ request "invalid request", and a call that does not fit the method or the tool's
 (an unknown tool, a missing, unknown or mistyped argument) "invalid params". When a tool cannot
 answer (no session works in this folder, say), its result says why and is marked ``isError``.
 
-It reads the record (read-only) and appends declarations to orch's spool; it starts no
-coordinator, opens no socket and calls nothing on the network. It ends when stdin closes.
+It reads the record (read-only) and appends declarations, claims and releases to orch's spool;
+it starts no coordinator, opens no socket and calls nothing on the network. It ends when stdin
+closes.
 """
 import json
 import os
@@ -31,7 +32,8 @@ STRUCTURED_SINCE = "2025-06-18"         # structuredContent; for older clients t
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS, INTERNAL_ERROR = -32700, -32600, -32601, -32602, -32603
 
 INSTRUCTIONS = ("Orchestraty sees the other coding-agent sessions on this repository and what they change. Call "
-                "check_before_edit before you edit code other sessions may share, and declare before a larger change. "
+                "check_before_edit before you edit code other sessions may share, declare before a larger change, "
+                "and claim what other sessions must leave to you. "
                 "Answers cite files, functions and rules, as of the coordinator's last pass.")
 
 
