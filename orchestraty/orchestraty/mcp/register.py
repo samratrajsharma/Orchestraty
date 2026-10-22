@@ -21,10 +21,11 @@ UNTESTED = "Built; not yet tested with the real agent."
 
 
 def _importable(python):
-    """Whether `python` imports this package and the engine without help from PYTHONPATH."""
+    """Whether `python` imports this package and the engine without help from PYTHONPATH. -I
+    ignores PYTHONDONTWRITEBYTECODE too, so -B: the check leaves no bytecode beside the code."""
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     try:
-        proc = subprocess.run([python, "-I", "-c", "import orchestraty, orch_engine"], env=env, capture_output=True,
+        proc = subprocess.run([python, "-I", "-B", "-c", "import orchestraty, orch_engine"], env=env, capture_output=True,
                               stdin=subprocess.DEVNULL, timeout=60,
                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.TimeoutExpired):
@@ -73,7 +74,8 @@ def text(agent, argv=None, env=None):
                  _indent("\n".join(table))]
         where = []
     elif agent == "antigravity":
-        entry = [f'      "command": {json.dumps(python)},', '      "args": [' + ", ".join(json.dumps(a) for a in args) + "]"]
+        entry = [f'      "command": {json.dumps(python)},',
+                 '      "args": [' + ", ".join(json.dumps(a) for a in args) + "]"]
         if env:
             entry[-1] += ","
             entry.append('      "env": {' + ", ".join(f"{json.dumps(k)}: {json.dumps(v)}" for k, v in env.items()) + "}")
