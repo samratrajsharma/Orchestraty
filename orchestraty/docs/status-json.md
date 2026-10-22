@@ -43,6 +43,7 @@ Times are UTC, as `YYYY-MM-DDTHH:MM:SSZ`. Paths of files in a repository are rel
 | `sessions` | array | Its live sessions, oldest first; with `--all`, also the ended ones. See [session](#session). |
 | `overlaps` | array | The open findings between its sessions, strongest first. Latent findings only with `--all`. See [overlap](#overlap). |
 | `merge_order` | array | Merge-order advice, one entry per pair of sessions that it concerns; `[]` when there is nothing to say. See [merge_order](#merge_order). |
+| `together` | object | The together check (`orch together`): its settings, and the latest result for each pair of the sessions listed. See [together](#together). |
 | `cloud` | object | Its cloud agents' branches (`orch remote`): the settings, the last fetch, and the branches followed. See [cloud](#cloud). |
 
 ### Session
@@ -153,6 +154,32 @@ Worked out from the open findings, the same way every time: when one session is 
 | `first` | string | The session to merge first; `""` when the two depend on each other. |
 | `symbols` | array of strings | The functions and classes it is about, `path::name`. |
 | `line` | string | The advice in a line, as `orch status` and `orch merge-order` print it: sessions named by their branch, else the start of their id. |
+
+### `together`
+
+Opt-in, for each repository. When the rules flag a medium or strong overlap between two sessions (O2, O3, O4, not latent), the user's command runs on each session's working copy alone and on both merged, in folders of Orchestraty's own outside the repository.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `on` | boolean | Whether it runs (`orch together on`); `false` by default. |
+| `command` | string | The command it runs, as the user set it; `""` when none is set. |
+| `timeout` | integer | The seconds each run may take (120 by default). |
+| `results` | array | The latest result for each pair of the sessions listed, the latest first. See [together result](#together-result). |
+
+### Together result
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `sessions` | array of strings | The two sessions. |
+| `findings` | array of strings | The keys of the findings that asked for the check. |
+| `at` | string (time) | When it ran. |
+| `command` | string | What ran. |
+| `result` | string | `fails together` (each passes alone; together it fails), `passes together`, `fails alone` (at least one fails alone), `conflict` (their changes conflict as text: nothing ran), `timed out` (together, it did not finish in time) or `error` (git could not make a snapshot or the merge). |
+| `conflicts` | array of paths | For a conflict, the files in conflict. |
+| `alone` | object | `{session id: {"exit_code", "timed_out"}}`, the command on each session's working copy alone; `exit_code` is null for a run that timed out. `{}` for a conflict. |
+| `together` | object or null | `{"exit_code", "timed_out"}` on both merged; null for a conflict. |
+| `first_failing_line` | string | When they fail together, the line of output that says the most (the last naming an error or a failure, else the last): the command's own words, cleaned. |
+| `error` | string | For an error, what git could not do. |
 
 ### `cloud`
 

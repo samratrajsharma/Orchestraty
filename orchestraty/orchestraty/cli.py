@@ -748,6 +748,42 @@ def cmd_remote(args):
     return 0 if result["ok"] else 1
 
 
+def cmd_together(args):
+    from orchestraty import config, together
+    state = State()
+    try:
+        common_dir, name = _remote_repo(state, args)
+    except ValueError as exc:
+        return _refuse("together", exc)
+    entry = together.settings(config.load(state), common_dir)
+    if args.action == "set":
+        if not (args.command or "").strip():
+            return _refuse("together", 'orch together set takes the command to run, such as "python -m pytest -q"')
+        changes = {"command": args.command.strip()}
+        if args.timeout is not None:
+            changes["timeout"] = args.timeout
+        entry = together.save_settings(state, common_dir, **changes)
+        print(f"Together check for {name}: `{entry['command']}`, up to {entry['timeout']} s"
+              + ("." if entry["on"] else ". It is off: orch together on turns it on."))
+        return 0
+    if args.action == "on":
+        if not entry["command"]:
+            return _refuse("together", 'set the command first: orch together set "<command>"')
+        together.save_settings(state, common_dir, on=True)
+        print(f"Together check on for {name}. When the rules flag a medium or strong overlap between two sessions "
+              f"there, `{entry['command']}` runs (up to {entry['timeout']} s) on each session's working copy alone and "
+              "on both merged, in folders of Orchestraty's own outside the repository. Nothing is written to your "
+              ".git, and nothing runs while it is off.")
+        return 0
+    if args.action == "off":
+        together.save_settings(state, common_dir, on=False)
+        print(f"Together check off for {name}.")
+        return 0
+    print(f"together check: {'on' if entry['on'] else 'off'}, for {name}; command: "
+          + (f"`{entry['command']}`, up to {entry['timeout']} s" if entry["command"] else "none set"))
+    return 0
+
+
 def cmd_mcp(args):
     if args.config:
         from orchestraty.mcp import register
@@ -1063,6 +1099,17 @@ def build_parser():
     pat.add_argument("glob", nargs="?", help="a branch pattern, such as agent/*")
     rem.add_argument("--repo", metavar="DIR", help="a folder inside the repository (default: here)")
     rem.set_defaults(handler=cmd_remote)
+
+    tog = commands.add_parser("together", help="the together check: run a check on two sessions' changes merged",
+                              description="Opt-in, for each repository: when the rules flag a medium or strong "
+                                          "overlap between two sessions, run your command on each session's working "
+                                          "copy alone and on both merged, outside the repository, and tell both "
+                                          "sessions when they pass alone and fail together. Off by default.")
+    tog.add_argument("action", nargs="?", choices=["on", "off", "set"])
+    tog.add_argument("command", nargs="?", help='with set: the command to run, such as "python -m pytest -q"')
+    tog.add_argument("--timeout", type=_seconds, metavar="SECONDS", help="with set: the time it may take (default 120)")
+    tog.add_argument("--repo", metavar="DIR", help="a folder inside the repository (default: here)")
+    tog.set_defaults(handler=cmd_together)
 
     cfg = commands.add_parser("config", help="show or switch steer and wake",
                               description="steer: a strong note stops the edit it rides on, so the agent re-plans "

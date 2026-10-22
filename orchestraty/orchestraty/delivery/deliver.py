@@ -18,6 +18,8 @@ Who hears what (Draft 4 §5.5):
 | W1     | another session works in this same folder | each of the two (with hooks)    | next      |
 | O7     | another session declared or claimed    | each of the two                  | next      |
 |        | this too (never held back)             |                                  |           |
+| together | each passes the user's check alone,  | each of the two                  | next      |
+| check  | together it fails (opt-in)             |                                  |           |
 | claim  | who claimed what, until when           | every other session (with hooks) | edit file |
 |        |                                        | on the repository                | (folder)  |
 |        | the same, when it has changed what is  | the same sessions                | next      |
@@ -174,6 +176,21 @@ class Deliverer:
                 continue
             cause = max(claim["ts"], sessions[sid]["last_seen"])
             if self.record.add_note(key, sid, kind, _rel(self.state, slot), text, self.now_ns(), cause):
+                made += 1
+        return made
+
+    def add_together(self, result, sessions):
+        """The notes of a together check whose pair passes alone and fails together: one to each
+        session (kept under ``together|<content state>``, so a new state can be told again)."""
+        a, b = result["sessions"]
+        key, made = f"together|{result['state']}", 0
+        for me, other in ((a, b), (b, a)):
+            s = sessions.get(me)
+            if (s is None or s["state"] != "live" or s["agent"] in NO_NOTES or other not in sessions
+                    or "next" not in adapters.hears(s["agent"])):
+                continue
+            if self.record.add_note(key, me, "next", _rel(self.state, slots.next_slot(self.state, me)),
+                                    templates.together_fails(result, sessions[other]), self.now_ns(), self.now_ns()):
                 made += 1
         return made
 

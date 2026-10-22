@@ -4,13 +4,16 @@ Every value placed in a note is an identifier that came from git or the engine (
 path, a line number, a worktree folder, a branch, an agent name) and is cleaned first: only
 letters, digits and ``_ . : / < > - [ ]`` survive, and each value is cut to a short length.
 Nothing another session wrote (a prompt, a message, a comment, a default value's text) ever
-reaches a note, so one session cannot steer another through it. Each note says what its
-analysis covers and is cut to ``MAX_NOTE`` characters.
+reaches a note, so one session cannot steer another through it. The one exception is the together
+check's note (``together_fails``), which quotes one line of the output of the user's own check
+command, cleaned (no control characters, cut short) and given as that output. Each note says
+what its analysis covers and is cut to ``MAX_NOTE`` characters.
 """
 import os
 import re
 import time
 
+from orchestraty import usercommand
 # Claude Code's hook outputs, under the names they had here. Each agent's own are in its adapter.
 from orchestraty.adapters.claude import post_tool_output, pre_tool_output, stop_output  # noqa: F401
 
@@ -226,6 +229,18 @@ def planned_overlap(finding, me, other):
     theirs = "claimed" if how.get(other["id"]) == "claimed" else "declared"
     return _cap(f"{_who(other)} has {theirs} {what}, which you have {mine} too (rule O7). Agree with that session "
                 "on who changes it before either of you goes on; nothing is held back.")
+
+
+def together_fails(result, other):
+    """The together check, to each of two sessions whose working copies pass the user's check
+    alone and fail it together. The command is the user's own; the line is the check's output,
+    cleaned (no control characters, cut short) and given as its output, in quotes."""
+    command = usercommand.clean_line(result["command"], 120)
+    line = usercommand.clean_line(result.get("first_failing_line") or "", 200)
+    said = f' Its output ends: "{line}".' if line else ""
+    return _cap(f"each passes alone, your working copy and that of {_who(other)}; together `{command}` fails.{said} "
+                "Orchestraty's together check merged the two working copies in a folder of its own and ran it there; "
+                "agree with that session on which change gives way.")
 
 
 def _one_folder(a, b):

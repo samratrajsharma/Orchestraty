@@ -7,14 +7,15 @@ branches (``orch remote``) are a group of their own in each repository, with the
 result, which the shadow repository keeps beside it. Each session says which kinds of note its
 agent can be handed (``adapters``), and the text says what an agent there cannot be told. A
 live session's claims (``orch claim``) that hold are listed with it, and each repository has
-its merge-order advice (``mergeorder``).
+its merge-order advice (``mergeorder``) and its together check: the settings, and the latest
+result for each pair of its sessions (``together``).
 """
 import calendar
 import json
 import os
 import time
 
-from orchestraty import adapters, claims as claiming, config, mergeorder, remote
+from orchestraty import adapters, claims as claiming, config, mergeorder, remote, together as checking
 from orchestraty.coordinator.lock import is_fresh
 from orchestraty.coordinator.record import Record, repo_key, repo_name
 
@@ -88,6 +89,10 @@ def collect(state, include_ended=False, now=None):
                     findings.setdefault(f["repo_id"], []).append(f)
         finally:
             record.close()
+    checked = {}
+    for r in checking.results(state):                     # oldest first: the latest for a pair wins
+        if isinstance(r.get("repo"), str) and isinstance(r.get("sessions"), list):
+            checked.setdefault(repo_key(r["repo"]), {})[tuple(r["sessions"])] = r
     for common_dir in cfg["repos"]:
         row = repo_rows.get(repo_key(common_dir))
         sessions = sessions_by_repo.get(row["id"], []) if row else []
@@ -101,6 +106,7 @@ def collect(state, include_ended=False, now=None):
                          for s in sorted(local, key=lambda s: (s["started"], s["id"]))],
             "overlaps": [_finding(f) for f in sorted(findings.get(row["id"], []) if row else [], key=_finding_order)],
             "merge_order": mergeorder.advise(every.get(row["id"], []) if row else [], {s["id"]: s for s in sessions}),
+            "together": _together(cfg, common_dir, checked.get(repo_key(common_dir), {}), {s["id"] for s in local}),
             "cloud": _cloud(state, cfg, common_dir, now, cloud, changes)})
     return data
 
@@ -120,6 +126,41 @@ def _cloud(state, cfg, common_dir, now, sessions, changes):
             "fetch": fetch,
             "branches": [_session(s, now, changes.get(s["id"], ({}, [], [])))
                          for s in sorted(sessions, key=lambda s: (s["branch"], s["id"]))]}
+
+
+def _together(cfg, common_dir, checked, shown):
+    """The together check of one repository: its settings, and the latest result for each pair of
+    the sessions shown, the latest first."""
+    entry = checking.settings(cfg, common_dir)
+    latest = [r for pair, r in checked.items() if set(pair) <= shown]
+    latest.sort(key=lambda r: r.get("at", ""), reverse=True)
+    results = [{"sessions": r["sessions"], "findings": r.get("findings", []), "at": r.get("at", ""),
+                "command": r.get("command", ""), "result": r.get("result", ""), "conflicts": r.get("conflicts", []),
+                "alone": {sid: _ran(x) for sid, x in (r.get("alone") or {}).items()},
+                "together": _ran(r["together"]) if isinstance(r.get("together"), dict) else None,
+                "first_failing_line": r.get("first_failing_line", ""), "error": r.get("error", "")} for r in latest]
+    return {"on": entry["on"], "command": entry["command"], "timeout": entry["timeout"], "results": results}
+
+
+def _ran(run):
+    return {"exit_code": run.get("exit_code"), "timed_out": bool(run.get("timed_out"))}
+
+
+def _together_line(r):
+    """One line for one together check's result."""
+    pair = " and ".join(sid[:8] for sid in r["sessions"])
+    if r["result"] == "fails together":
+        return f"{pair}: each passes alone; together it fails: {r['first_failing_line']}"
+    if r["result"] == "passes together":
+        return f"{pair}: pass together"
+    if r["result"] == "fails alone":
+        failing = " and ".join(sid[:8] for sid, x in r["alone"].items() if x["exit_code"] != 0)
+        return f"{pair}: already fails alone ({failing})"
+    if r["result"] == "conflict":
+        return f"{pair}: their changes conflict in {', '.join(r['conflicts'][:4])}"
+    if r["result"] == "timed out":
+        return f"{pair}: together, did not finish in time"
+    return f"{pair}: could not be checked: {r['error']}"
 
 
 _STRENGTH = {"strong": 0, "medium": 1, "weak": 2}
@@ -232,6 +273,11 @@ def render(data, wake=False):
             lines += ["    " + _overlap_line(f, names) for f in repo["overlaps"]]
         for m in repo.get("merge_order", ()):
             lines.append("  merge order: " + m["line"])
+        check = repo.get("together") or {}
+        if check.get("on") or check.get("results"):
+            command = check.get("command") or "no command"
+            lines.append(f"  together check: {'on' if check.get('on') else 'off'}, `{command}`")
+            lines += ["    " + _together_line(r) for r in check.get("results", [])]
     if any(s["base_guessed"] for r in data["repositories"] for s in r["sessions"]):
         lines += ["", "base?: the session was first seen after it started, so its base is the commit at that time."]
     return "\n".join(lines) + "\n"

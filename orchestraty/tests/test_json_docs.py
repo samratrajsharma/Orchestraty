@@ -86,6 +86,7 @@ def test_the_json_docs_name_every_field(state, repo, git, tmp_path):
         assert repository["overlaps"] and all(set(f) == set(doc["Overlap"]) for f in repository["overlaps"])
         assert "O7" in {f["rule"] for f in repository["overlaps"]}
         assert repository["merge_order"] and all(set(m) == set(doc["`merge_order`"]) for m in repository["merge_order"])
+        assert set(repository["together"]) == set(doc["`together`"]) and repository["together"]["results"] == []
         text = (DOCS / "status-json.md").read_text(encoding="utf-8")
         for f in repository["overlaps"]:
             assert f"| `{f['rule']}` " in text and all(f"`{k}`" in text for k in f["detail"])

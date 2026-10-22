@@ -5,7 +5,8 @@ It holds the single-writer lock, touches the heartbeat, reads the spools every
 lifecycle, and exits after ``idle_seconds`` with no live session and no new event. Lines in
 ``<spool>/orch/`` are the user's own (``orch label``, ``orch missed``), an agent's declaration
 (the MCP tool ``declare``), or a claim made or released (``orch claim``, ``orch release`` and
-their MCP tools): stored in the record only.
+their MCP tools): stored in the record only. Where the together check is on (``together``), the
+pairs of sessions a finding flags are checked on a worker thread, and the results taken in here.
 
 A session is created from its first event: its worktree, repository, branch and base commit
 (HEAD then) come from git in the event's folder. The base counts as guessed unless that first
@@ -37,7 +38,7 @@ import os
 import sys
 import time
 
-from orchestraty import __version__, claims, config, declarations, feedback, gitio, remote
+from orchestraty import __version__, claims, config, declarations, feedback, gitio, remote, together
 from orchestraty.coordinator.cloud import CloudBranches, session_id as cloud_session_id
 from orchestraty.coordinator.lock import Heartbeat, Lock
 from orchestraty.coordinator.record import Record, SchemaError, repo_key
@@ -51,6 +52,7 @@ from orchestraty.rules import overlap
 SCAN_SECONDS = 0.15
 HOUSEKEEPING_SECONDS = 10
 FRESH_START_SECONDS = 60          # a SessionStart read later than this gives a guessed base
+TOGETHER_SECONDS = 60             # a pair of sessions is checked together at most once in this
 KEEP_ENDED_SPOOL_SECONDS = 24 * 3600
 MAX_FAILURES = 20
 NS = 1_000_000_000
@@ -97,6 +99,9 @@ class Coordinator:
         self._status_written = 0.0
         self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
         self.cloud = CloudBranches(state, self.log)
+        self.together = together.Worker(state)
+        self._together_due = {}            # (session, session) -> the check to queue once its minute is up
+        self._together_queued = {}         # (session, session) -> when its last check was queued (monotonic)
         for session in self.sessions.values():
             if session["agent"] != CLOUD_AGENT:            # cloud branches are tracked by scan_cloud, from their tips
                 self._track(session)
@@ -158,8 +163,10 @@ class Coordinator:
             self._last_housekeeping = now
             self.expire(now)
             self.clean_spool(now)
+            together.clean_scratch(self.state)
         self.update_map()
         self.update_findings()
+        self.check_together()
         self.deliver()
         if lines or self.changed:
             self._status_dirty = True
@@ -289,8 +296,61 @@ class Coordinator:
                 changed = {sid: list(views[sid].files) for sid in ids}
                 for c in self.record.claims(active_at=now, repo_id=repo_id):
                     self.deliverer.add_claim(c, self.sessions, changed)
+            self._together_jobs(repo_id, found)
             self._push_dirty = True
         return self.new_findings
+
+    # the together check (opt-in)
+    def _together_jobs(self, repo_id, found):
+        """Mark the pairs of sessions a finding flags (O2, O3, O4, not latent) as due for a
+        together check, where it is on for this repository and has a command."""
+        key = self._repo_keys.get(repo_id, "")
+        entry = together.settings_for_key(self.cfg, key)
+        if not (entry["on"] and entry["command"]):
+            return
+        common_dir = next((r["common_dir"] for r in self.record.repos() if r["id"] == repo_id), "")
+        for f in found:
+            if f.rule not in together.RULES or f.detail.get("latent") or len(f.sessions) != 2:
+                continue
+            a, b = f.sessions
+            sa, sb = self.sessions.get(a), self.sessions.get(b)
+            if (not sa or not sb or CLOUD_AGENT in (sa["agent"], sb["agent"]) or not sa["worktree"]
+                    or not sb["worktree"] or _same(sa["worktree"], sb["worktree"])):
+                continue                                     # no working copies of their own to run
+            job = self._together_due.get((a, b))
+            if job is None:
+                job = {"findings": [], "sessions": [a, b], "worktrees": {a: sa["worktree"], b: sb["worktree"]},
+                       "bases": {a: sa["base_commit"], b: sb["base_commit"]}, "common_dir": common_dir, "key": key,
+                       "command": entry["command"], "timeout": entry["timeout"]}
+                self._together_due[(a, b)] = job
+            if f.key not in job["findings"]:
+                job["findings"].append(f.key)
+
+    def check_together(self):
+        """Queue the due checks whose pair's minute is up, and take in the finished ones: each kept
+        for orch status, and a note to both sessions when they pass alone and fail together."""
+        mono = time.monotonic()
+        for pair, job in list(self._together_due.items()):
+            entry = together.settings_for_key(self.cfg, job["key"])
+            if not (entry["on"] and entry["command"]) or not all(sid in self.sessions for sid in pair):
+                del self._together_due[pair]                     # turned off meanwhile, or a session ended
+                continue
+            last = self._together_queued.get(pair)
+            if last is not None and mono - last < TOGETHER_SECONDS:
+                continue
+            job.update(command=entry["command"], timeout=entry["timeout"])
+            if self.together.queue(job):
+                self._together_queued[pair] = mono
+                del self._together_due[pair]
+        for result in self.together.take():
+            if result["result"] == "unchanged":
+                continue
+            together.save_result(self.state, result)
+            self._status_dirty = True
+            self.log.info("together check of %s: %s", " and ".join(result["sessions"]), result["result"])
+            if result["result"] == "fails together":
+                with self.record.transaction():
+                    self.deliverer.add_together(result, self.sessions)
 
     def _planned(self, repo_id, ids, now):
         """{session id: [item]} for O7: what the live sessions `ids` of one repository declared

@@ -25,13 +25,15 @@ changes. A missing or unreadable file means the defaults.
   repository that has them on (a failure doubles the wait, up to an hour).
 * ``claim_minutes``: how long a claim holds when ``orch claim --for`` (or the MCP tool's
   ``minutes``) does not say; see ``claims``.
+* ``together``: the together check, per repository (keyed like ``remote``): ``{"on": false,
+  "command": "", "timeout": 120}``; see ``together``. ``orch together`` changes it.
 """
 import json
 import os
 
 DEFAULTS = {"repos": [], "idle_seconds": 600, "session_timeout": 1800, "level0_seconds": 5,
             "steer": False, "wake": False, "settings": "", "acted_minutes": 30,
-            "declare_minutes": 120, "remote": {}, "remote_fetch_minutes": 5, "claim_minutes": 120}
+            "declare_minutes": 120, "remote": {}, "remote_fetch_minutes": 5, "claim_minutes": 120, "together": {}}
 
 
 def _same(a, b):
