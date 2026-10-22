@@ -200,11 +200,28 @@ class Coordinator:
         kind, sid = line.get("took"), session["id"]
         if kind == "edit" and isinstance(line.get("file_path"), str):
             slot = slots.edit_slot(self.state, sid, line["file_path"])
+        elif kind == "area" and isinstance(line.get("file_path"), str):
+            slot = self._area_taken(sid, line["file_path"])
+            if slot is None:
+                return
         elif kind in ("next", "stop", "wake"):
             slot = {"next": slots.next_slot, "stop": slots.stop_slot, "wake": slots.wake_slot}[kind](self.state, sid)
         else:
             return
         self.deliverer.taken(os.path.relpath(slot, self.state.root).replace(os.sep, "/"), ts)
+
+    def _area_taken(self, sid, path):
+        """The folder slot above the file `path` that the hook took: the nearest one with notes
+        written to it that is gone from disk, or None."""
+        above, folder = path, os.path.dirname(path)
+        while folder and folder != above:
+            for ask in (True, False):
+                slot = slots.area_slot(self.state, sid, folder, ask)
+                rel = os.path.relpath(slot, self.state.root).replace(os.sep, "/")
+                if not slots.waiting(slot) and self.record.notes(slot=rel, states=("written",)):
+                    return slot
+            above, folder = folder, os.path.dirname(folder)
+        return None
 
     def update_map(self):
         """Refresh the live map where needed and record what changed. On the timer every live
@@ -234,6 +251,9 @@ class Coordinator:
         repos = self._dirty_repos | {self.sessions[sid]["repo_id"] for sid in self.changed if sid in self.sessions}
         self._dirty_repos = set()
         self.new_findings = []
+        if repos:
+            with self.record.transaction():                 # a claim that ended takes back its notes
+                self.deliverer.withdraw_claims({c["id"] for c in self.record.claims(active_at=self.now_ns())})
         for repo_id in sorted(repos):
             ids = sorted(sid for sid, s in self.sessions.items()
                          if s["repo_id"] == repo_id and s["state"] == "live" and sid in self.livemap.views)
@@ -264,6 +284,9 @@ class Coordinator:
                     # already made are not made again.
                     cause = max((self.sessions[s]["last_seen"] for s in f.sessions if s in self.sessions), default=now)
                     self.deliverer.add(f.as_dict(), self.sessions, cause, wake=self.cfg["wake"])
+                changed = {sid: list(views[sid].files) for sid in ids}
+                for c in self.record.claims(active_at=now, repo_id=repo_id):
+                    self.deliverer.add_claim(c, self.sessions, changed)
             self._push_dirty = True
         return self.new_findings
 

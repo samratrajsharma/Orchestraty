@@ -28,7 +28,8 @@ tool result, PostToolUse's ``hookSpecificOutput.additionalContext``; at the end 
 Stop's ``decision`` block with the note as ``reason``, which keeps the turn going with the note
 as its next prompt (``stop_hook_active`` then tells the next Stop not to take another). Those
 are Claude Code's forms, except Stop's. No wake: no Codex hook can wake a session that waits
-for its user.
+for its user. No ask: Codex takes only deny as a PreToolUse permission decision (``ask`` makes
+the hook count as failed, and the tool runs), so a hard claim only informs a Codex session.
 
 Config writer. Codex reads ``hooks.json`` in its home folder (``CODEX_HOME``, by default
 ``~/.codex``): ``{"hooks": {<event>: [{"matcher": ..., "hooks": [{"type": "command", "command":
@@ -58,7 +59,9 @@ EDIT_TOOLS = {"apply_patch": ()}             # no file field: the files are in t
 SLOTS = {"PreToolUse": "edit", "PostToolUse": "next", "Stop": "stop"}
 HEARS = ("edit", "next", "stop")
 QUIET = None                                 # with no note, the hook prints nothing
-CANNOT = {"wake": "no Codex hook can wake a session that waits for its user"}   # {kind: why not}
+CANNOT = {"wake": "no Codex hook can wake a session that waits for its user",       # {kind: why not}
+          "ask": "a Codex hook cannot make an edit wait for the user's answer, so a hard claim only informs it"}
+ASKS = False
 READ_ONLY_TOOLS = ()
 MATCHERS = {"PreToolUse": "apply_patch", "PostToolUse": "*"}
 TIMEOUT_SECONDS = 10

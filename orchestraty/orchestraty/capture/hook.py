@@ -55,6 +55,13 @@ exactly as written (it builds no JSON):
 * PostToolUse: ``next.json``, with the tool's result;
 * Stop: ``stop.json``, unless ``stop_hook_active`` says a stop hook already kept Claude going.
 
+A folder another session claimed has a slot of its own, ``area/<key of the folder>.json``, or
+``.ask.json`` when the edit is to wait for the user's answer (a hard claim). PreToolUse takes a
+folder's ``.ask.json`` slot first, the nearest folder above a file first, then a file's own edit
+slot, then a folder's other slot, so an edit that must wait never leaves that for a later one;
+the line records ``"took":"area"`` for a folder's slot. Looking costs one listing of the
+``area`` folder, which is usually not there.
+
 Codex takes the same slots (for a patch, the edit slot of the first of its files that has
 one). Antigravity takes ``next.json`` at PreInvocation, before its next model call, and
 ``stop.json`` at Stop; its PreToolUse can only allow or deny, so it takes no edit slot. A slot is
@@ -377,18 +384,45 @@ def session_of(raw, agent):
     return safe_name(token[1:-1] if token else b"", 64, b"nosession")
 
 
+def area_note(folder, areas, path, suffix):
+    """The note in the slot (named with `suffix`, one of `areas`) of the nearest folder above
+    `path` that has one, taken; or None."""
+    above, parent = path, os.path.dirname(path)
+    while parent and parent != above:
+        name = file_key(parent) + suffix
+        note = take_slot(os.path.join(folder, "area", name)) if name in areas else None
+        if note:
+            return note
+        above, parent = parent, os.path.dirname(parent)
+    return None
+
+
 def take_note(root, raw, event, session, agent=b"claude"):
     """(note, slot kind, the file whose slot it was) for the note this event takes, or
-    (None, None, None). An edit event tries the slot of each file its tool changes, in order."""
+    (None, None, None). An edit event tries the slot of each file its tool changes, in order,
+    and the slots of the folders above them (claimed areas): one that asks first."""
     kind = SLOTS.get(agent, SLOTS[b"claude"]).get(event)
     if kind is None or session == b"nosession":
         return None, None, None
     folder = os.path.join(root, "notes", session.decode("ascii"))
     if kind == b"edit":
-        for path in edit_files(raw, agent):
+        paths = edit_files(raw, agent)
+        try:
+            areas = set(os.listdir(os.path.join(folder, "area")))     # usually there is no such folder
+        except OSError:
+            areas = ()
+        for path in paths if areas else ():                         # an edit that must wait comes first
+            note = area_note(folder, areas, path, ".ask.json")
+            if note:
+                return note, b"area", path
+        for path in paths:
             note = take_slot(os.path.join(folder, "edit", file_key(path) + ".json"))
             if note:
                 return note, kind, path
+        for path in paths if areas else ():
+            note = area_note(folder, areas, path, ".json")
+            if note:
+                return note, b"area", path
         return None, None, None
     if kind == b"stop" and flag(raw, b"stop_hook_active") is True:
         return None, None, None                   # a stop hook already kept the agent going

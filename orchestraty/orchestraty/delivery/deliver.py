@@ -16,6 +16,19 @@ Who hears what (Draft 4 §5.5):
 | O3, O4 | the same note, when wake is on and the   | the session using it             | wake      |
 |        | session using it waits for its user      |                                  |           |
 | W1     | another session works in this same folder | each of the two (with hooks)    | next      |
+| claim  | who claimed what, until when           | every other session (with hooks) | edit file |
+|        |                                        | on the repository                | (folder)  |
+|        | the same, when it has changed what is  | the same sessions                | next      |
+|        | claimed already (not for an edit that  |                                  |           |
+|        | must ask, below)                       |                                  |           |
+
+Claims (``orch claim``) are not findings: their notes are kept under ``claim|<number>``, and a
+claim that ends takes back the notes not yet taken. A claim on a function or class is noted
+before an edit of the file that defines it; one on a folder, before an edit of any file in it,
+from the folder's slot (``slots.area_slot``). A hard claim makes the edit wait for the user's
+answer where the agent can ask (``adapters.asks``: Claude Code, a PreToolUse ``ask``); other
+agents' sessions are informed, and the note says so. Steer never turns a claim note into a
+deny: a slot denies only for a finding's note in it.
 
 Plain-git sessions get no notes (they have no hooks), and nor do cloud agents' branches (their
 agents work elsewhere). A note goes only to a session whose agent can take that kind at the
@@ -41,7 +54,7 @@ import os
 import shutil
 import time
 
-from orchestraty import adapters
+from orchestraty import adapters, claims
 from orchestraty.delivery import notes as templates
 from orchestraty.delivery import slots
 
@@ -118,6 +131,51 @@ class Deliverer:
                         out.append((me, "next", slots.next_slot(self.state, me),
                                     templates.same_folder(sessions[other])))
         return out
+
+    def plan_claim(self, claim, sessions, changed=None):
+        """[(session id, kind, slot path, text)] for one claim that holds, to every other live
+        session with hooks on its repository. `changed`: {session id: [posix path]}, the files
+        each has changed: one that changed a file the claim covers hears with its next step
+        too (it may never edit it again), unless its edit is to ask its user."""
+        claimer = sessions.get(claim["session_id"])
+        if claimer is None:
+            return []
+        out = []
+        for sid, s in sorted(sessions.items()):
+            if (sid == claimer["id"] or s["state"] != "live" or s["repo_id"] != claim["repo_id"]
+                    or s["agent"] in NO_NOTES or not s["worktree"]):
+                continue
+            can = adapters.hears(s["agent"])
+            ask = adapters.asks(s["agent"]) if claim["hard"] else None
+            path = os.path.join(s["worktree"], *claims.path_of(claim).split("/"))
+            if "edit" in can:
+                slot = (slots.area_slot(self.state, sid, path, ask=bool(ask)) if claim["kind"] == "area"
+                        else slots.edit_slot(self.state, sid, path))
+                out.append((sid, "edit", slot, templates.claimed(claim, claimer, ask=ask)))
+            if not ask and "next" in can and any(claims.covers(claim, f) for f in (changed or {}).get(sid, ())):
+                out.append((sid, "next", slots.next_slot(self.state, sid),
+                            templates.claimed(claim, claimer, before_edit=False)))
+        return out
+
+    def add_claim(self, claim, sessions, changed=None):
+        """Make the notes a claim that holds calls for (not again for one already made, nor for a
+        session that took one of them)."""
+        made, key = 0, claims.note_key(claim["id"])
+        for sid, kind, slot, text in self.plan_claim(claim, sessions, changed):
+            if self._heard(key, sid):
+                continue
+            cause = max(claim["ts"], sessions[sid]["last_seen"])
+            if self.record.add_note(key, sid, kind, _rel(self.state, slot), text, self.now_ns(), cause):
+                made += 1
+        return made
+
+    def withdraw_claims(self, holding):
+        """Take back the notes not yet taken of the claims that no longer hold (`holding`: the
+        numbers of those that do)."""
+        for key in sorted({n["finding_key"] for n in self.record.notes(states=("pending", "written"))}):
+            number = claims.from_note_key(key)
+            if number is not None and number not in holding:
+                self.withdraw(key)
 
     def add(self, finding, sessions, trigger_ns, wake=False):
         """Make the notes a newly seen finding calls for (not again for one already made)."""
@@ -210,7 +268,11 @@ class Deliverer:
             if sid not in agents:
                 row = self.record.session(sid)
                 agents[sid] = row["agent"] if row else ""
-            data = adapters.output(agents[sid], pending[0]["kind"], text, steer)
+            numbers = [claims.from_note_key(n["finding_key"]) for n in pending]
+            held = [self.record.claim(x) for x in numbers if x is not None]
+            data = adapters.output(agents[sid], pending[0]["kind"], text,
+                                   steer=steer and None in numbers,          # a finding's note, not only claims'
+                                   ask=any(c and c["hard"] for c in held))
             if slots.write(_abs(self.state, slot_rel), data):
                 self.record.mark_written([n["id"] for n in pending], self.now_ns())
                 written.append(slot_rel)

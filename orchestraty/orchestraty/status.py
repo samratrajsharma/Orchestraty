@@ -257,14 +257,20 @@ def _cloud_lines(cloud):
 
 
 def _cannot_lines(sessions, wake):
-    """One line for each agent among the sessions that cannot be handed a kind of note."""
+    """One line for each agent among the sessions that cannot be handed a kind of note, and,
+    where another session's hard claim holds, for each that cannot be made to ask its user."""
     lines = []
+    hard = {s["id"] for s in sessions if any(c["hard"] for c in s.get("claims", ()))}
+    asked = {s["agent"] for s in sessions if s["hears"] and hard - {s["id"]}}
     for agent in sorted({s["agent"] for s in sessions if s["hears"]}):
         cannot = adapters.cannot(agent)
         if "edit" in cannot:
             lines.append(f"  {agent}: no note before an edit; {cannot['edit']}.")
         if wake and "wake" in cannot:
             lines.append(f"  {agent}: not woken by a note; {cannot['wake']}.")
+        if agent in asked and not adapters.asks(agent):
+            lines.append(f"  {agent}: " + cannot.get("ask", "a hard claim only informs it: this agent is not known "
+                                                            "to ask its user before an edit") + ".")
     return lines
 
 

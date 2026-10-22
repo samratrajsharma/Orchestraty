@@ -25,7 +25,8 @@ from its hooks: with no note the hook prints ``{}``, and at PreToolUse ``{"decis
 
 What it cannot take: a note before an edit. Its PreToolUse hook can only allow or deny the
 tool, not pass text to the model, so a note about a file comes with its next step once it has
-changed that file, and none comes about a file it is not changing. No wake, either.
+changed that file, and none comes about a file it is not changing. No wake, either, and no
+ask: a hard claim only informs it, the same way.
 
 Config writer. Antigravity reads ``hooks.json`` from the user's ``~/.gemini/config`` (every
 workspace) and from a workspace's ``.agents`` folder. The file maps hook names to their events:
@@ -59,7 +60,10 @@ HEARS = ("next", "stop")
 QUIET = ("{}", {"PreToolUse": '{"decision":"allow"}'})      # (by default, {event: answer})
 CANNOT = {"edit": "its PreToolUse hook can only allow or deny the tool, so a note about a file comes with its "
                   "next step once it has changed that file",
-          "wake": "no Antigravity hook can wake a session that waits for its user"}      # {kind: why not}
+          "wake": "no Antigravity hook can wake a session that waits for its user",      # {kind: why not}
+          "ask": "no Antigravity hook can make an edit wait for the user's answer, so a hard claim only informs "
+                 "it, with its next step once it has changed what is claimed"}
+ASKS = False
 # Tools that change no file: no need to look at the worktree again after them.
 READ_ONLY_TOOLS = ("view_file", "list_dir", "find_by_name", "grep_search", "read_url_content", "search_web")
 HOOK_NAME = "orchestraty"

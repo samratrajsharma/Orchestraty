@@ -3,6 +3,10 @@
 A slot holds the complete output one hook prints, written in advance by the coordinator:
 
 * ``notes/<session>/edit/<file key>.json``: PreToolUse, before the session edits that file;
+* ``notes/<session>/area/<folder key>.json``: PreToolUse too, before it edits any file in that
+  folder or below it (a claimed area), when the file has no slot of its own waiting; named
+  ``.ask.json`` instead when the edit is to wait for the user's answer, and taken before the
+  file's own slot then;
 * ``notes/<session>/next.json``: PostToolUse, with the session's next tool result;
 * ``notes/<session>/stop.json``: Stop, when the session tries to finish its turn;
 * ``notes/<session>/wake.txt``: the text that wakes an idle session (wake is opt-in).
@@ -54,6 +58,12 @@ def folder(state, session_id):
 
 def edit_slot(state, session_id, path):
     return os.path.join(folder(state, session_id), "edit", file_key(path) + ".json")
+
+
+def area_slot(state, session_id, path, ask=False):
+    """The slot taken before the session edits any file in the folder `path` (absolute) or below
+    it; `ask`: the one of a note that makes the edit wait for the user's answer."""
+    return os.path.join(folder(state, session_id), "area", file_key(path) + (".ask.json" if ask else ".json"))
 
 
 def next_slot(state, session_id):

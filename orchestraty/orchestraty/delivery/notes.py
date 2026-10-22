@@ -9,6 +9,7 @@ analysis covers and is cut to ``MAX_NOTE`` characters.
 """
 import os
 import re
+import time
 
 # Claude Code's hook outputs, under the names they had here. Each agent's own are in its adapter.
 from orchestraty.adapters.claude import post_tool_output, pre_tool_output, stop_output  # noqa: F401
@@ -174,6 +175,40 @@ def left_behind(finding):
     return _cap(f"you changed the contract of {_name(finding['symbol'])} in {_path(finding['symbol'])} "
                 f"({_reasons(d.get('reasons', []))}). These callers still use it and no session has updated "
                 f"them: {left}. Update them, or say why they need no change. {COVERAGE}")
+
+
+def _reserved(claim):
+    """What a claim reserves: a file, "the folder pkg/", or "charge in a.py"."""
+    if claim["kind"] == "symbol":
+        return f"{_name(claim['target'])} in {_path(claim['file'])}"
+    if claim["kind"] == "area":
+        return f"the folder {clean(claim['target'])}/"
+    return clean(claim["target"])
+
+
+def claimed(claim, claimer, before_edit=True, ask=None):
+    """A claim, to another session: before it edits what the claim covers (for a function or
+    class, the file that defines it; for a folder, any file in it), or with its next step when
+    it has changed that already (before_edit=False). `ask`, for a hard claim: True when this
+    edit waits for the user's answer, False when the agent cannot be made to wait."""
+    if claimer.get("agent") == "git":
+        who = "someone working outside any agent session (" + describe(claimer).split(" (", 1)[-1]
+    else:
+        who = describe(claimer)
+    until = time.strftime("%H:%M", time.localtime(claim["expires"] / 1e9))
+    number = int(claim["id"])
+    how = "hard claim" if claim["hard"] else "claim"
+    what = f"{who} has claimed {_reserved(claim)} until {until} ({how} #{number})."
+    if not before_edit:
+        then = "You have changed it in your worktree: agree with that session, or ask your user, before you go on."
+    elif ask:
+        then = "This edit waits for the user's answer: leave it to that session unless the user agrees."
+    elif ask is False:
+        then = ("This session cannot be made to wait for its user before an edit, so this note only informs: ask your "
+                "user before you change it.")
+    else:
+        then = "Leave it to that session, or agree with it before you change it."
+    return _cap(f"{what} {then} The user can end the claim with orch release {number}.")
 
 
 def push_line(findings):

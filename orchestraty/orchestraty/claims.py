@@ -146,6 +146,17 @@ def resolve(top, cwd, target):
     raise Refused(f"{target}: no file or folder of that name here, and no Python function or class")
 
 
+def note_key(claim_id):
+    """The key the notes about a claim are kept under, where a finding's notes have its key."""
+    return f"claim|{int(claim_id)}"
+
+
+def from_note_key(key):
+    """The number of the claim a note's key names, or None for a finding's key."""
+    head, _, number = str(key).partition("|")
+    return int(number) if head == "claim" and number.isdigit() else None
+
+
 def path_of(claim):
     """The path a claim's notes are keyed by: the file, the folder, or the symbol's file."""
     return claim["file"] if claim["kind"] == "symbol" else claim["target"]

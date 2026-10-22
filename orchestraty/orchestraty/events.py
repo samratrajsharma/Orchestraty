@@ -17,7 +17,7 @@ import os
 import re
 import time
 
-from orchestraty.claims import describe
+from orchestraty.claims import describe, from_note_key
 from orchestraty.coordinator.record import Record
 
 EVENTS_SCHEMA = 1
@@ -82,6 +82,8 @@ def event(record, change, declared=None):
         f = record.finding(change["finding_key"])
         if f:
             out["rule"] = f["rule"]
+        elif from_note_key(change["finding_key"]) is not None:
+            out["claim"] = from_note_key(change["finding_key"])     # a note about a claim, not a finding
     elif kind == "declared":
         d = (declared if declared is not None else {d["id"]: d for d in record.declarations()}).get(change["ref"])
         if d:

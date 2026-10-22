@@ -15,7 +15,10 @@ copy; a test checks the two agree): ``session_id``, ``hook_event_name``, ``cwd``
 Notes, each in the output its event takes: before an edit (PreToolUse, as
 ``additionalContext``, or, with steer on, as the reason of a deny), with the next tool result
 (PostToolUse), at the end of a turn (Stop), and, with wake on, when the session waits for its
-user (an ``asyncRewake`` Stop hook that exits 2 with the note).
+user (an ``asyncRewake`` Stop hook that exits 2 with the note). Before an edit of what another
+session claimed hard, PreToolUse's permission decision ``ask``: the edit waits for the user's
+answer, the note the reason shown to them and context for Claude. Never ``allow``, which would
+skip the user's own permission prompt.
 
 Config writer. The hook entries go into a Claude Code settings file. By default that is the
 user's own settings (``~/.claude/settings.json``, or the folder ``CLAUDE_CONFIG_DIR`` names), so
@@ -56,6 +59,7 @@ SLOTS = {"PreToolUse": "edit", "PostToolUse": "next", "PostToolUseFailure": "nex
 HEARS = ("edit", "next", "stop", "wake")      # wake: from the opt-in asyncRewake Stop hook
 QUIET = None                                  # with no note, it prints nothing
 CANNOT = {}                                   # every kind of note reaches it
+ASKS = True                                   # an edit can wait for the user's answer (a hard claim)
 
 
 def _same(a, b):
@@ -69,6 +73,14 @@ def pre_tool_output(text, steer=False):
     else:
         out = {"hookEventName": "PreToolUse", "additionalContext": text}
     return json.dumps({"hookSpecificOutput": out}).encode("utf-8")
+
+
+def ask_output(text):
+    """Before an edit: ask the user, with the note as the reason they see and as context for
+    Claude. Never "allow": that would skip the user's own permission prompt."""
+    return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
+                                              "permissionDecisionReason": text, "additionalContext": text}}
+                      ).encode("utf-8")
 
 
 def post_tool_output(text):

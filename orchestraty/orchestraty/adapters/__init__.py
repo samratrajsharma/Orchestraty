@@ -29,8 +29,18 @@ def cannot(agent):
     return get(agent).CANNOT
 
 
-def output(agent, kind, text, steer=False):
-    """The bytes the hook prints for a note of this kind, in the form the agent accepts."""
+def asks(agent):
+    """Whether a session of this agent can be made to wait for its user's answer before an edit
+    (a hard claim): Claude Code only. An agent with no adapter of its own is only informed."""
+    module = AGENTS.get(agent)
+    return bool(module and module.ASKS)
+
+
+def output(agent, kind, text, steer=False, ask=False):
+    """The bytes the hook prints for a note of this kind, in the form the agent accepts. `ask`:
+    before an edit, make it wait for the user's answer, where the agent can (else it informs)."""
+    if ask and kind == "edit" and asks(agent):
+        return get(agent).ask_output(text)
     return get(agent).output(kind, text, steer)
 
 
