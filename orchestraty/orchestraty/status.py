@@ -4,18 +4,20 @@
 and when it does not; ``render`` turns the result into text. The JSON form (``--json``) is
 ``collect``'s result as it is, with a schema number for other tools to check. Cloud agents'
 branches (``orch remote``) are a group of their own in each repository, with the last fetch's
-result, which the shadow repository keeps beside it.
+result, which the shadow repository keeps beside it. Each session says which kinds of note its
+agent can be handed (``adapters``), and the text says what an agent there cannot be told.
 """
 import calendar
 import json
 import os
 import time
 
-from orchestraty import config, remote
+from orchestraty import adapters, config, remote
 from orchestraty.coordinator.lock import is_fresh
 from orchestraty.coordinator.record import Record, repo_key, repo_name
 
 STATUS_SCHEMA = 1
+LEVEL0_AGENT = "git"
 STALE_SECONDS = 10.0
 NS = 1_000_000_000
 
@@ -37,9 +39,15 @@ def _coordinator(state, now):
     return out
 
 
+def _hears(agent):
+    """The kinds of note a session of this agent can be handed: none for plain git and cloud branches."""
+    return [] if agent in (LEVEL0_AGENT, remote.CLOUD_AGENT) else list(adapters.hears(agent))
+
+
 def _session(s, now, changes, declared=()):
     files, unattributed, symbols = changes
-    return {"id": s["id"], "agent": s["agent"], "worktree": s["worktree"], "branch": s["branch"],
+    return {"id": s["id"], "agent": s["agent"], "hears": _hears(s["agent"]), "worktree": s["worktree"],
+            "branch": s["branch"],
             "base_commit": s["base_commit"], "base_guessed": bool(s["base_guessed"]),
             "state": s["state"], "turn": s["turn"], "note": s["note"],
             "started": _iso(s["started"] / NS), "last_event": _iso(s["last_seen"] / NS),
@@ -176,7 +184,8 @@ def _ago(seconds):
     return f"{seconds // 3600}h ago"
 
 
-def render(data):
+def render(data, wake=False):
+    """The text of orch status; `wake`: whether wake is on (it says then who cannot be woken)."""
     c = data["coordinator"]
     if c["running"]:
         lines = [f"Coordinator: running (pid {c.get('pid', '?')}, since {c.get('since', '?')})"]
@@ -191,6 +200,7 @@ def render(data):
         names = {s["id"]: s["branch"] for s in cloud.get("branches", [])}
         if repo["sessions"]:
             lines += _session_lines(repo["sessions"])
+            lines += _cannot_lines(repo["sessions"], wake)
         else:
             lines.append("  no live sessions")
         if cloud.get("on") or cloud.get("branches"):
@@ -228,6 +238,18 @@ def _cloud_lines(cloud):
         summary = _summary(s["changes"])
         if summary:
             lines.append("      " + summary)
+    return lines
+
+
+def _cannot_lines(sessions, wake):
+    """One line for each agent among the sessions that cannot be handed a kind of note."""
+    lines = []
+    for agent in sorted({s["agent"] for s in sessions if s["hears"]}):
+        cannot = adapters.cannot(agent)
+        if "edit" in cannot:
+            lines.append(f"  {agent}: no note before an edit; {cannot['edit']}.")
+        if wake and "wake" in cannot:
+            lines.append(f"  {agent}: not woken by a note; {cannot['wake']}.")
     return lines
 
 

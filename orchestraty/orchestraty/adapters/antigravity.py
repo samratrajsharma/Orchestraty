@@ -44,8 +44,9 @@ EDIT_TOOLS = {"write_to_file": ("TargetFile",), "replace_file_content": ("Target
 SLOTS = {"PreInvocation": "next", "Stop": "stop"}
 HEARS = ("next", "stop")
 QUIET = ("{}", {"PreToolUse": '{"decision":"allow"}'})      # (by default, {event: answer})
-CANNOT = ("no note before an edit: its PreToolUse hook can only allow or deny the tool, so a note about a "
-          "file comes with its next step once it has changed that file; no wake")
+CANNOT = {"edit": "its PreToolUse hook can only allow or deny the tool, so a note about a file comes with its "
+                  "next step once it has changed that file",
+          "wake": "no Antigravity hook can wake a session that waits for its user"}      # {kind: why not}
 # Tools that change no file: no need to look at the worktree again after them.
 READ_ONLY_TOOLS = ("view_file", "list_dir", "find_by_name", "grep_search", "read_url_content", "search_web")
 

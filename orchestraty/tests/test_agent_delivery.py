@@ -171,3 +171,23 @@ def test_two_codex_sessions_of_one_shared_process_are_two_sessions_in_their_own_
         assert [s["agent"] for r in status.collect(state)["repositories"] for s in r["sessions"]] == ["codex", "codex"]
     finally:
         c.close()
+
+
+@pytest.mark.parametrize("agent,hears,limits", [
+    ("antigravity", ["next", "stop"],
+     ["antigravity: no note before an edit; its PreToolUse hook can only allow or deny"]),
+    ("codex", ["edit", "next", "stop"], []),
+])
+def test_orch_status_shows_each_sessions_agent_and_what_it_cannot_be_told(state, repo, git, tmp_path, agent, hears,
+                                                                         limits):
+    c, wa, wb = start(state, repo, git, tmp_path, agent)
+    try:
+        data = status.collect(state)
+        [r] = data["repositories"]
+        assert [(s["id"], s["agent"], s["hears"]) for s in r["sessions"]] == [
+            ("A", "claude", ["edit", "next", "stop", "wake"]), ("B", agent, hears)]
+        text = status.render(data)
+        assert all(line in text for line in limits) and "claude:" not in text and "not woken" not in text
+        assert f"{agent}: not woken by a note; no {agent.capitalize()} hook can wake" in status.render(data, wake=True)
+    finally:
+        c.close()

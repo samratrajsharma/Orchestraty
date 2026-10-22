@@ -24,6 +24,11 @@ def hears(agent):
     return get(agent).HEARS
 
 
+def cannot(agent):
+    """{kind of note: why this agent cannot be handed it}, for the kinds it cannot take."""
+    return get(agent).CANNOT
+
+
 def output(agent, kind, text, steer=False):
     """The bytes the hook prints for a note of this kind, in the form the agent accepts."""
     return get(agent).output(kind, text, steer)

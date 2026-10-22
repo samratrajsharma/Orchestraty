@@ -48,7 +48,7 @@ EDIT_TOOLS = {"apply_patch": ()}             # no file field: the files are in t
 SLOTS = {"PreToolUse": "edit", "PostToolUse": "next", "Stop": "stop"}
 HEARS = ("edit", "next", "stop")
 QUIET = None                                 # with no note, the hook prints nothing
-CANNOT = "no wake: no Codex hook can wake a session that waits for its user"
+CANNOT = {"wake": "no Codex hook can wake a session that waits for its user"}   # {kind: why not}
 READ_ONLY_TOOLS = ()
 
 

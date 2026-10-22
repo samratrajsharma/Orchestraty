@@ -191,12 +191,13 @@ def cmd_config(args):
 
 
 def cmd_status(args):
-    from orchestraty import status
-    data = status.collect(State(), include_ended=args.all)
+    from orchestraty import config, status
+    state = State()
+    data = status.collect(state, include_ended=args.all)
     if args.json:
         print(json.dumps(data, indent=2))
     else:
-        sys.stdout.write(status.render(data))
+        sys.stdout.write(status.render(data, wake=config.load(state)["wake"]))
     return 0
 
 

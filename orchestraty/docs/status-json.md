@@ -51,7 +51,8 @@ A session is an agent session with hooks, or a plain-git one: a worktree with ch
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `id` | string | The agent's session id; for plain git, `git-` and twelve hex digits from the worktree's path; for a cloud branch, `cloud-` and twelve hex digits from the repository, remote and branch. |
-| `agent` | string | `claude` for Claude Code, `git` for plain git, `cloud` for a cloud agent's branch; other agents by their own short name. |
+| `agent` | string | `claude` for Claude Code, `codex` for Codex, `antigravity` for Antigravity, `git` for plain git, `cloud` for a cloud agent's branch; other agents by their own short name. |
+| `hears` | array of strings | The kinds of note its agent can be handed: `edit` (before it edits a file), `next` (with its next step), `stop` (at the end of a turn), `wake` (woken while it waits for its user, when wake is on). Claude Code takes all four, Codex all but `wake`, Antigravity `next` and `stop`; `[]` for plain git and cloud branches, which are never told. |
 | `worktree` | string (folder) | The top of the worktree it works in. |
 | `branch` | string | The branch checked out there; `""` for a detached HEAD. |
 | `base_commit` | string | The commit its changes are measured from (40 hex digits); `""` before the first commit. |

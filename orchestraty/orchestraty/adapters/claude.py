@@ -55,7 +55,7 @@ EDIT_TOOLS = {"Edit": ("file_path",), "Write": ("file_path",), "MultiEdit": ("fi
 SLOTS = {"PreToolUse": "edit", "PostToolUse": "next", "PostToolUseFailure": "next", "Stop": "stop"}
 HEARS = ("edit", "next", "stop", "wake")      # wake: from the opt-in asyncRewake Stop hook
 QUIET = None                                  # with no note, it prints nothing
-CANNOT = ""                                   # every note reaches it
+CANNOT = {}                                   # every kind of note reaches it
 
 
 def _same(a, b):
