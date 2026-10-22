@@ -228,6 +228,35 @@ def planned_overlap(finding, me, other):
                 "on who changes it before either of you goes on; nothing is held back.")
 
 
+def _one_folder(a, b):
+    return bool(a) and bool(b) and os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def about(finding, me, sessions):
+    """What a finding tells one session it involves (`me`, a session row), in the notes' words:
+    for the MCP tool my_overlaps and for a handoff. `sessions`: {session id: session row}."""
+    others = [sessions[x] for x in finding["sessions"] if x != me["id"] and x in sessions]
+    other = others[0] if others else None
+    rule = finding["rule"]
+    if rule in ("O3", "O4") and finding["receiver"] == me["id"] and finding["changer"] in sessions:
+        changer = sessions[finding["changer"]]
+        return for_user(finding, changer, before_edit=bool(finding["detail"].get("latent")),
+                        elsewhere=not _one_folder(changer["worktree"], me["worktree"]))
+    if rule in ("O3", "O4") and finding["changer"] == me["id"] and finding["receiver"] in sessions:
+        return for_changer(finding, sessions[finding["receiver"]])
+    if rule == "O6":
+        return left_behind(finding)
+    if rule == "O2" and other:
+        return for_both(finding, other)
+    if rule == "W1" and other:
+        return same_folder(other)
+    if rule == "O7" and other:
+        return planned_overlap(finding, me["id"], other)
+    if rule == "O1" and other:
+        return _cap(f"{describe(other)} has also changed {clean(finding['file'], 200)}.")
+    return _cap(f"{rule} {clean(finding['symbol'] or finding['file'], 200)}.")
+
+
 def push_line(findings):
     """The one line shown at push for the O6 findings still open in a worktree, or ""."""
     if not findings:

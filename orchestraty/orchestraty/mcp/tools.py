@@ -382,26 +382,7 @@ def check_before_edit(ws, args):
 
 def _overlap_note(ws, f, me):
     """What a finding tells the caller, in the notes' words."""
-    others = [ws.sessions[x] for x in f["sessions"] if x != me["id"] and x in ws.sessions]
-    other = others[0] if others else None
-    rule = f["rule"]
-    if rule in ("O3", "O4") and f["receiver"] == me["id"] and f["changer"] in ws.sessions:
-        changer = ws.sessions[f["changer"]]
-        return templates.for_user(f, changer, before_edit=bool(f["detail"].get("latent")),
-                                  elsewhere=not _same(changer["worktree"], me["worktree"]))
-    if rule in ("O3", "O4") and f["changer"] == me["id"] and f["receiver"] in ws.sessions:
-        return templates.for_changer(f, ws.sessions[f["receiver"]])
-    if rule == "O6":
-        return templates.left_behind(f)
-    if rule == "O2" and other:
-        return templates.for_both(f, other)
-    if rule == "W1" and other:
-        return templates.same_folder(other)
-    if rule == "O7" and other:
-        return templates.planned_overlap(f, me["id"], other)
-    if rule == "O1" and other:
-        return f"{templates.describe(other)} has also changed {templates.clean(f['file'], 200)}."
-    return f"{rule} {templates.clean(f['symbol'] or f['file'], 200)}."
+    return templates.about(f, me, ws.sessions)
 
 
 def my_overlaps(ws, args):
