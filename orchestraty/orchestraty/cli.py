@@ -280,6 +280,11 @@ def _days(text):
     return value
 
 
+def cmd_mcp(args):
+    from orchestraty.mcp import server
+    return server.main(args.folder)
+
+
 def cmd_coordinator(args):
     from orchestraty.coordinator import main as coordinator
     from orchestraty.coordinator.lock import Lock, touch
@@ -421,6 +426,14 @@ def build_parser():
     stats.add_argument("--out", metavar="FILE", help="with --summary: save it to FILE once you have seen it")
     stats.add_argument("--yes", action="store_true", help="save without asking")
     stats.set_defaults(handler=cmd_stats)
+
+    mcp = commands.add_parser("mcp", help="the MCP server agents ask before they edit",
+                              description="Run Orchestraty's MCP server over stdio (an agent starts it in its "
+                                          "workspace folder). The server reads the record without changing it; "
+                                          "declarations go to orch's spool.")
+    mcp.add_argument("--folder", metavar="DIR", help="the caller's workspace folder (default: CLAUDE_PROJECT_DIR, "
+                                                     "else here)")
+    mcp.set_defaults(handler=cmd_mcp)
 
     cfg = commands.add_parser("config", help="show or switch steer and wake",
                               description="steer: a strong note stops the edit it rides on, so the agent re-plans "

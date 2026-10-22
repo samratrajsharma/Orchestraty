@@ -48,8 +48,13 @@ def _list(items, render):
     return ", ".join(shown) + (f" and {more} more" if more > 0 else "")
 
 
+def clean_reason(value):
+    """One reason a contract changed (our own words around identifiers) made safe to place in a note."""
+    return _UNSAFE_REASON.sub("?", str(value))[:80]
+
+
 def _reasons(reasons):
-    kept = [_UNSAFE_REASON.sub("?", str(r))[:80] for r in reasons[:3]]
+    kept = [clean_reason(r) for r in reasons[:3]]
     return "; ".join(kept) or "its contract changed"
 
 
