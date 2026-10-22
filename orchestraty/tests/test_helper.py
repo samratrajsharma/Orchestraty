@@ -78,7 +78,11 @@ EVENTS = [("SessionStart", {"source": "startup"}, None),
           ("SessionEnd", {"reason": "other"}, None)]
 
 
-@pytest.mark.parametrize("folder", ["work", "wérk 代码 \"q\" (1)"])
+# Windows allows no '"' in a file name; elsewhere the folder tests the escapes too.
+ODD = "wérk 代码 (1)" + (' "q"' if os.name != "nt" else "")
+
+
+@pytest.mark.parametrize("folder", ["work", ODD])
 def test_in_process_writes_the_same_bytes_and_takes_slots_the_same_way(state, installed, tmp_path, folder):
     cwd = tmp_path / folder
     orch = Orchestraty(agent="mybot", cwd=cwd, session_id="S1")
