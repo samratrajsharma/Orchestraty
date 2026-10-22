@@ -4,6 +4,7 @@
 and when it does not; ``render`` turns the result into text. The JSON form (``--json``) is
 ``collect``'s result as it is, with a schema number for other tools to check.
 """
+import calendar
 import json
 import os
 import time
@@ -34,21 +35,23 @@ def _coordinator(state, now):
     return out
 
 
-def _session(s, now, changes):
+def _session(s, now, changes, declared=()):
     files, unattributed, symbols = changes
     return {"id": s["id"], "agent": s["agent"], "worktree": s["worktree"], "branch": s["branch"],
             "base_commit": s["base_commit"], "base_guessed": bool(s["base_guessed"]),
             "state": s["state"], "turn": s["turn"], "note": s["note"],
             "started": _iso(s["started"] / NS), "last_event": _iso(s["last_seen"] / NS),
             "seconds_since_last_event": max(0, int(now - s["last_seen"] / NS)),
-            "changes": {"files": files, "unattributed": unattributed, "symbols": symbols}}
+            "changes": {"files": files, "unattributed": unattributed, "symbols": symbols},
+            "declared": [{"paths": d["paths"], "symbols": d["symbols"], "task": d["task"], "since": _iso(d["ts"] / NS),
+                          "until": _iso(d["expires"] / NS)} for d in declared]}
 
 
 def collect(state, include_ended=False, now=None):
     now = time.time() if now is None else now
     cfg = config.load(state)
     data = {"schema": STATUS_SCHEMA, "coordinator": _coordinator(state, now), "repositories": []}
-    sessions_by_repo, repo_rows, changes, findings = {}, {}, {}, {}
+    sessions_by_repo, repo_rows, changes, findings, declared = {}, {}, {}, {}, {}
     if os.path.exists(state.record):
         record = Record(state.record, readonly=True)
         try:
@@ -57,6 +60,8 @@ def collect(state, include_ended=False, now=None):
             for s in record.sessions(states=states):
                 sessions_by_repo.setdefault(s["repo_id"], []).append(s)
                 changes[s["id"]] = record.changes(s["id"])
+            for d in record.declarations(active_at=int(now * NS)):
+                declared.setdefault(d["session_id"], []).append(d)
             for f in record.findings():
                 if include_ended or not f["detail"].get("latent"):
                     findings.setdefault(f["repo_id"], []).append(f)
@@ -67,7 +72,8 @@ def collect(state, include_ended=False, now=None):
         sessions = sessions_by_repo.get(row["id"], []) if row else []
         data["repositories"].append({
             "name": repo_name(common_dir), "common_dir": common_dir,
-            "sessions": [_session(s, now, changes.get(s["id"], ({}, [], [])))
+            "sessions": [_session(s, now, changes.get(s["id"], ({}, [], [])),
+                                  declared.get(s["id"], ()) if s["state"] == "live" else ())
                          for s in sorted(sessions, key=lambda s: (s["started"], s["id"]))],
             "overlaps": [_finding(f) for f in sorted(findings.get(row["id"], []) if row else [], key=_finding_order)]})
     return data
@@ -132,6 +138,14 @@ def _summary(changes, limit=4):
     return "; ".join(parts)
 
 
+def _declared_line(d, limit=4):
+    """One line for one declaration: what it names, until when, and the agent's task line."""
+    paths = ", ".join(d["paths"][:limit]) + (f" (+{len(d['paths']) - limit} more)" if len(d["paths"]) > limit else "")
+    names = f" ({', '.join(x.split('::')[-1] for x in d['symbols'][:limit])})" if d["symbols"] else ""
+    until = time.strftime("%H:%M", time.localtime(calendar.timegm(time.strptime(d["until"], "%Y-%m-%dT%H:%M:%SZ"))))
+    return f"declared: {paths}{names} until {until}" + (f': "{d["task"]}"' if d.get("task") else "")
+
+
 def _ago(seconds):
     if seconds < 60:
         return f"{seconds}s ago"
@@ -167,6 +181,8 @@ def render(data):
             summary = _summary(s["changes"])
             if summary:
                 lines.append("    " + summary)
+            for d in s["declared"]:
+                lines.append("    " + _declared_line(d))
         if repo["overlaps"]:
             lines.append("  overlaps:")
             lines += ["    " + _overlap_line(f) for f in repo["overlaps"]]

@@ -16,12 +16,15 @@ changes. A missing or unreadable file means the defaults.
 * ``settings``: the Claude Code settings file ``orch init`` installed the hooks in.
 * ``acted_minutes``: how long after its delivery a note can count as acted on in ``orch stats``
   (a proxy: the session edited a file the note cites, or its finding stopped holding).
+* ``declare_minutes``: how long what an agent declares it is about to change (the MCP tool
+  ``declare``) holds.
 """
 import json
 import os
 
 DEFAULTS = {"repos": [], "idle_seconds": 600, "session_timeout": 1800, "level0_seconds": 5,
-            "steer": False, "wake": False, "settings": "", "acted_minutes": 30}
+            "steer": False, "wake": False, "settings": "", "acted_minutes": 30,
+            "declare_minutes": 120}
 
 
 def _same(a, b):

@@ -47,7 +47,7 @@ def coordinator_running(state, now=None):
 
 
 # ------------------------------------------------------------------------------- the spool
-def _append(state, event, now, **fields):
+def append_line(state, event, now, **fields):
     """One line in orch's spool, as the hooks write theirs: one JSON object, ASCII, appended whole."""
     line = {"ts": int(now * NS), "pid": os.getpid(), "agent": SPOOL_AGENT, "event": event}
     line.update(fields)
@@ -60,7 +60,7 @@ def label(state, key, verdict, why="", now=None):
     """Append the user's verdict on one finding, for the coordinator to store."""
     if verdict not in VERDICTS:
         raise Refused(f"the verdict is one of {', '.join(VERDICTS)}")
-    _append(state, "label", time.time() if now is None else now, finding=key, verdict=verdict,
+    append_line(state, "label", time.time() if now is None else now, finding=key, verdict=verdict,
             why=(why or "").strip()[:MAX_WHY])
 
 
@@ -69,7 +69,7 @@ def missed(state, text, session_id="", now=None):
     text = (text or "").strip()
     if not text:
         raise Refused("say what should have been noted")
-    _append(state, "missed", time.time() if now is None else now, text=text[:MAX_TEXT],
+    append_line(state, "missed", time.time() if now is None else now, text=text[:MAX_TEXT],
             session_id=(session_id or "")[:MAX_SESSION])
 
 

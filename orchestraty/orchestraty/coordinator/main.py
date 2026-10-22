@@ -3,8 +3,8 @@
 It holds the single-writer lock, touches the heartbeat, reads the spools every
 ``SCAN_SECONDS``, records the events of watched repositories, keeps each session's
 lifecycle, and exits after ``idle_seconds`` with no live session and no new event. Lines in
-``<spool>/orch/`` are the user's own (``orch label``, ``orch missed``): stored as they are, in
-the record only.
+``<spool>/orch/`` are the user's own (``orch label``, ``orch missed``) or an agent's declaration
+(the MCP tool ``declare``): stored as they are, in the record only.
 
 A session is created from its first event: its worktree, repository, branch and base commit
 (HEAD then) come from git in the event's folder. The base counts as guessed unless that first
@@ -30,7 +30,7 @@ import os
 import sys
 import time
 
-from orchestraty import __version__, config, feedback, gitio
+from orchestraty import __version__, config, declarations, feedback, gitio
 from orchestraty.coordinator.lock import Heartbeat, Lock
 from orchestraty.coordinator.record import Record, SchemaError, repo_key
 from orchestraty.coordinator.spool import SpoolReader
@@ -323,7 +323,10 @@ class Coordinator:
         if not isinstance(ts, int) or isinstance(ts, bool):
             ts = self.now_ns()
         if agent == feedback.SPOOL_AGENT:
-            self.handle_feedback(line, ts)
+            if line.get("event") == "declare":
+                self.handle_declaration(line, ts)
+            else:
+                self.handle_feedback(line, ts)
             return
         if "shim_error" in line:
             self.record.add_event({"ts": ts, "agent": agent, "event": "shim_error"},
@@ -369,6 +372,19 @@ class Coordinator:
             self.record.add_label(item["finding"], item["verdict"], item["why"], ts)
         else:
             self.log.info("a label for a finding the record does not have was dropped")
+
+    def handle_declaration(self, line, ts):
+        """A line the MCP tool declare appended: what an agent says it is about to change. Kept
+        until declare_minutes have passed; its task line never goes into another session's note."""
+        item = declarations.parse_line(line)
+        if item is None:
+            self.bad_lines += 1
+        elif self.record.session(item["session_id"]) is None:
+            self.log.info("a declaration for a session the record does not have was dropped")
+        else:
+            self.record.add_declaration(item["session_id"], item["paths"], item["symbols"], item["task"], ts,
+                                        ts + self.cfg["declare_minutes"] * 60 * NS)
+            self._status_dirty = True
 
     def _follow(self, session, line):
         """A hooked session's edit landed in another worktree of its repository: the agent
