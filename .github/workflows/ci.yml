@@ -1,7 +1,8 @@
 # Two kinds of run, from one codebase that is pure Python and standard library only, so
 # nothing is built per operating system; CI only checks that the same code runs everywhere.
 #
-# - Every push and pull request: the quick check, on Windows and Linux with Python 3.12.
+# - Every push and pull request: the quick check, on Windows and Linux with Python 3.12, and the
+#   TypeScript helper's tests (helpers/typescript) with Node 20 on both.
 # - Weekly, on manual runs and on release tags (v*): the full matrix, which adds Python 3.9
 #   to 3.11, macOS and the older-Python runs of the experiments.
 #
@@ -73,6 +74,57 @@ jobs:
         shell: bash
         run: |
           leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes)"
+          if [ -n "$leftovers" ]; then
+            echo "The tests left files in the working copy:"
+            echo "$leftovers"
+            exit 1
+          fi
+
+  node:
+    name: node helper (${{ matrix.os }}, Node 20)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    defaults:
+      run:
+        working-directory: helpers/typescript
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: helpers/typescript/package-lock.json
+
+      # The tests run the real hook script and plant notes with the Python package.
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install the dev dependencies from the lockfile
+        run: npm ci
+
+      - name: Build
+        run: npx tsc -p tsconfig.json
+
+      - name: Run the tests
+        run: node --test dist/test/helper.test.js
+
+      # The build output and node_modules are ignored; nothing else may be left.
+      - name: Check that the tests left no files behind
+        shell: bash
+        working-directory: .
+        run: |
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes; git status --porcelain -- helpers)"
           if [ -n "$leftovers" ]; then
             echo "The tests left files in the working copy:"
             echo "$leftovers"
