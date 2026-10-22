@@ -67,6 +67,7 @@ def test_the_json_docs_name_every_field(state, repo, git, tmp_path):
         edit(state, c, "B", wb, "c.py", USES)
         declarations.append(state, "A", ["a.py"], ["a.py::charge"], "a line")
         claims.append_claim(state, "A", str(repo / ".git"), "symbol", "a.py::charge", "a.py", True, 30)
+        declarations.append(state, "B", ["a.py"], [])                            # O7 with A's claim
         c.step()
 
         # orch status --json, with the coordinator running
@@ -83,6 +84,7 @@ def test_the_json_docs_name_every_field(state, repo, git, tmp_path):
         assert set(a["changes"]["symbols"][0]) == set(doc["Symbol"]) and set(a["declared"][0]) == set(doc["`declared`"])
         assert set(a["claims"][0]) == set(doc["`claims`"])
         assert repository["overlaps"] and all(set(f) == set(doc["Overlap"]) for f in repository["overlaps"])
+        assert "O7" in {f["rule"] for f in repository["overlaps"]}
         text = (DOCS / "status-json.md").read_text(encoding="utf-8")
         for f in repository["overlaps"]:
             assert f"| `{f['rule']}` " in text and all(f"`{k}`" in text for k in f["detail"])

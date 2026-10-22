@@ -10,6 +10,8 @@
 |      | updated are left behind                                                 |          |
 | W1   | two sessions with hooks work in the same worktree (the same working     | medium   |
 |      | folder, whichever subfolder each started in)                            |          |
+| O7   | the work two sessions declared (the MCP tool ``declare``) or claimed    | medium   |
+|      | (``orch claim``) overlaps                                               |          |
 
 Two sessions in one worktree share its files, so what each of them did to a function cannot be
 told apart: between them O1 runs on the files each edited, and O2, O3 and O4 do not. W1 says
@@ -27,6 +29,14 @@ an overlap, but it gives the session its note before its first edit of that file
 MAX_LATENT files per change and session). O6 looks at the callers the base commit had, and a
 caller counts as updated when some live session modified it. Calls made at module level,
 outside any function, are not seen.
+
+O7 compares what each session said it will change, not what it changed: a declared path, a
+claimed file or folder (a path covers the files below it), and a declared or claimed function
+or class (``path::name``; a bare name a declaration of several files gave is not compared, and
+a declared file whose functions the declaration names stands for those functions only). Two
+items overlap when one path is the other or holds it, unless both name functions and those
+differ. The finding is about the narrower item, the function where there is one, and
+says how each session named it: ``claimed`` over ``declared``.
 
 Every finding has a stable key, so the coordinator can tell a new finding from one it already
 knows, and one that stopped holding.
@@ -185,13 +195,48 @@ def left_behind(changer, views, base_graphs):
                                   "left": left})
 
 
-def evaluate(views, graphs, base_graphs, hooked=None):
+def _within(path, folder):
+    return path == folder or path.startswith(folder.rstrip("/") + "/")
+
+
+def _meet(x, y):
+    """The narrower of two planned items when they overlap, else None. An item: {"path", "symbol",
+    "how"}; a function's path is its file."""
+    if x["symbol"] and y["symbol"]:
+        return x if x["symbol"] == y["symbol"] else None
+    if _within(x["path"], y["path"]):
+        return x if x["symbol"] or not y["symbol"] else y
+    if _within(y["path"], x["path"]):
+        return y if y["symbol"] or not x["symbol"] else x
+    return None
+
+
+def declared_work(a, b, planned):
+    """O7: the items `a` and `b` both declared or claimed. `planned`: {session id: [item]}."""
+    met = {}
+    for x in planned.get(a, ()):
+        for y in planned.get(b, ()):
+            item = _meet(x, y)
+            if item is None:
+                continue
+            what = item["symbol"] or item["path"]
+            how = met.setdefault(what, (item, {a: "declared", b: "declared"}))[1]
+            for sid, z in ((a, x), (b, y)):
+                if z["how"] == "claimed":
+                    how[sid] = "claimed"
+    for what, (item, how) in sorted(met.items()):
+        yield Finding(f"O7|{what}|{a}|{b}", "O7", MEDIUM, (a, b), symbol=item["symbol"], file=item["path"],
+                      detail={"what": what, "kind": "symbol" if item["symbol"] else "path", "how": how})
+
+
+def evaluate(views, graphs, base_graphs, hooked=None, planned=None):
     """Every finding among the sessions of one repository.
 
     views: {session id: SessionView}; graphs(sid) and base_graphs(sid) give that session's code
     graph and its base commit's graph, or None while they are not ready (then the rules that
     need them wait, and the rest still run). hooked: the sessions whose agent's hooks deliver
-    notes, the only ones W1 is about (None: W1 does not run)."""
+    notes, the only ones W1 is about (None: W1 does not run). planned: {session id: [item]},
+    what each declared or claimed, for O7 (None: O7 does not run)."""
     out = {}
     ids = sorted(views)
     for i, a in enumerate(ids):
@@ -202,6 +247,8 @@ def evaluate(views, graphs, base_graphs, hooked=None):
                 found += same_function(a, b, views)
             elif hooked is not None and a in hooked and b in hooked:
                 found += same_folder(a, b, views)
+            if planned:
+                found += declared_work(a, b, planned)
             for f in found:
                 out[f.key] = f
         for b in ids:

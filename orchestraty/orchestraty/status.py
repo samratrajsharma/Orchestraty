@@ -147,6 +147,10 @@ def _overlap_line(f, names=None):
     elif f["rule"] == "W1":
         folder = os.path.basename(d.get("worktree", "")) or "?"
         what = f"{' and '.join(_short(s) for s in f['sessions'])} work in the same folder, {folder}"
+    elif f["rule"] == "O7":
+        how = d.get("how") or {}
+        what = (f"{d.get('what') or f['symbol'] or f['file']}: "
+                + ", ".join(f"{how.get(s, 'declared')} by {_short(s)}" for s in f["sessions"]))
     elif f["rule"] in ("O3", "O4"):
         how = "removed" if f["rule"] == "O4" else "breaking change"
         what = (f"{name} ({f['symbol'].split('::')[0]}): {how} in {_short(f['changer'])}, "

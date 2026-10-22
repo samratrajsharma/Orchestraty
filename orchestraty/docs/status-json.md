@@ -119,10 +119,10 @@ A claim reserves a file, a folder or a Python function or class for one session:
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `key` | string | A stable key: the same overlap keeps it while it holds, and gets it again if it comes back. |
-| `rule` | string | `O1`, `O2`, `O3`, `O4`, `O6` or `W1` (below). |
+| `rule` | string | `O1`, `O2`, `O3`, `O4`, `O6`, `O7` or `W1` (below). |
 | `strength` | string | `strong`, `medium` or `weak`. |
-| `symbol` | string | The function or class it is about; `""` for O1 and W1. |
-| `file` | string (path) | The file it is about: the file both changed (O1), the function's file (O2, O6), the file that uses the change (O3, O4); `""` for W1. |
+| `symbol` | string | The function or class it is about; `""` for O1, W1, and O7 about a path. |
+| `file` | string (path) | The file it is about: the file both changed (O1), the function's file (O2, O6, O7), the file that uses the change (O3, O4), the file or folder both declared or claimed (O7); `""` for W1. |
 | `changer` | string | O3, O4, O6: the session whose change it is. `""` otherwise. |
 | `receiver` | string | O3, O4: the session that must hear first, whose file uses the change. `""` otherwise. |
 | `sessions` | array of strings | Every session involved, sorted. |
@@ -138,6 +138,7 @@ A claim reserves a file, a folder or a Python function or class for one session:
 | `O4` a removed function still used there | strong | as O3 |
 | `O6` callers no session has updated | strong | `symbol`; `kind`; `reasons`; `left`: `[{symbol, file, lines}]`, the callers in the base commit that still use the old form |
 | `W1` two sessions with hooks in one worktree | medium | `worktree`: its top |
+| `O7` the work two sessions declared or claimed overlaps | medium | `what`: the narrower of the two overlapping items, a path or `path::name`; `kind`: `path` or `symbol`; `how`: `{session id: "declared" or "claimed"}`, how each named it (`claimed` when it did both) |
 
 A latent finding is left out of `overlaps` unless `--all` is given.
 

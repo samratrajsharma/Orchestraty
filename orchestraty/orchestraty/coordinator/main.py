@@ -88,6 +88,7 @@ class Coordinator:
         self.changed = set()               # sessions whose live map changed in the last step
         self.new_findings = []             # findings first seen in the last step
         self._dirty_repos = set()          # repositories whose findings must be worked out again
+        self._last_expiry = None           # when expire() last looked for declarations that stopped holding
         self.reload_config()
         self.livemap = LiveMap(state, self.log)
         self.deliverer = Deliverer(state, self.record, self.log, now_ns)
@@ -261,7 +262,8 @@ class Coordinator:
             graph_ready = {sid: self.livemap.graph(sid) is not None for sid in ids}
             base_ready = {sid: self.livemap.base_graph(sid) is not None for sid in ids}
             hooked = {sid for sid in ids if self.sessions[sid]["agent"] not in NO_NOTES}
-            found = overlap.evaluate(views, self.livemap.graph, self.livemap.base_graph, hooked=hooked)
+            found = overlap.evaluate(views, self.livemap.graph, self.livemap.base_graph, hooked=hooked,
+                                     planned=self._planned(repo_id, ids, self.now_ns()))
             now = self.now_ns()
             with self.record.transaction():
                 # Resolve first: a note withdrawn here must not count as already told when a
@@ -289,6 +291,27 @@ class Coordinator:
                     self.deliverer.add_claim(c, self.sessions, changed)
             self._push_dirty = True
         return self.new_findings
+
+    def _planned(self, repo_id, ids, now):
+        """{session id: [item]} for O7: what the live sessions `ids` of one repository declared
+        (the MCP tool declare) and claimed (orch claim), as far as it holds at `now`. An item is
+        {"path", "symbol", "how"}. A declared file that the declaration names functions of
+        stands for those functions only; its bare function names (of several files) are left
+        out."""
+        ids, planned = set(ids), {}
+        for d in self.record.declarations(active_at=now):
+            if d["session_id"] in ids:
+                named = [x for x in d["symbols"] if "::" in x]
+                files = {x.split("::", 1)[0] for x in named}
+                items = planned.setdefault(d["session_id"], [])
+                items += [{"path": p, "symbol": "", "how": "declared"} for p in d["paths"] if p not in files]
+                items += [{"path": x.split("::", 1)[0], "symbol": x, "how": "declared"} for x in named]
+        for c in self.record.claims(active_at=now, repo_id=repo_id):
+            if c["session_id"] in ids:
+                symbol = c["target"] if c["kind"] == "symbol" else ""
+                planned.setdefault(c["session_id"], []).append({"path": claims.path_of(c), "symbol": symbol,
+                                                                "how": "claimed"})
+        return planned
 
     def scan_level0(self, forced=()):
         """Plain-git sessions: worktrees with changes and no live hooked session, in each
@@ -508,6 +531,8 @@ class Coordinator:
             self.record.add_declaration(item["session_id"], item["paths"], item["symbols"], item["task"], ts,
                                         ts + self.cfg["declare_minutes"] * 60 * NS)
             self._status_dirty = True
+            if item["session_id"] in self.sessions:                 # O7 compares it with the others'
+                self._dirty_repos.add(self.sessions[item["session_id"]]["repo_id"])
 
     def handle_claim(self, line, ts):
         """A line orch claim, orch release or their MCP tools appended. A claim is stored for a
@@ -643,6 +668,11 @@ class Coordinator:
         for c in expired:
             self._dirty_repos.add(c["repo_id"])
             self._status_dirty = True
+        for d in self.record.declarations_ended(now if self._last_expiry is None else self._last_expiry, now):
+            if d["session_id"] in self.sessions:                         # it stopped holding: O7 again
+                self._dirty_repos.add(self.sessions[d["session_id"]]["repo_id"])
+                self._status_dirty = True
+        self._last_expiry = now
 
     def clean_spool(self, now):
         """Delete spool files read to the end whose session is ignored, or ended more than a

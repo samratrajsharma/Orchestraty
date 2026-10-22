@@ -96,6 +96,13 @@ function describe(repo, o) {
     return who(repo, a) + ' and ' + who(repo, b) + ' work in one folder'
   }
   const other = (o.sessions || []).find((s) => s !== me)
+  if (o.rule === 'O7') {
+    const how = (o.detail && o.detail.how) || {}
+    const what = o.symbol ? name + ' (' + file + ')' : o.file
+    if ((o.sessions || []).includes(me)) return what + ' is also ' + (how[other] || 'declared') + ' by ' + who(repo, other)
+    const [a, b] = o.sessions || []
+    return what + ' is ' + (how[a] || 'declared') + ' by ' + who(repo, a) + ' and ' + (how[b] || 'declared') + ' by ' + who(repo, b)
+  }
   if (o.rule === 'O2') return name + ' (' + file + ') is also being changed by ' + who(repo, other)
   return o.file + ' is also being changed by ' + who(repo, other)
 }
@@ -104,12 +111,14 @@ function statusLine(repo) {
   if (!repo) return undefined
   const others = repo.sessions.filter((s) => s.id !== me).length
   const strong = strongForMe(repo).length
-  const medium = (repo.overlaps || []).filter((o) => o.strength === 'medium' && o.rule !== 'W1' && concernsMe(o)).length
+  const medium = (repo.overlaps || []).filter((o) => o.rule === 'O2' && concernsMe(o)).length
+  const planned = (repo.overlaps || []).filter((o) => o.rule === 'O7' && concernsMe(o)).length
   const folder = (repo.overlaps || []).some((o) => o.rule === 'W1' && concernsMe(o))
-  if (!others && !strong && !medium && !folder) return undefined
+  if (!others && !strong && !medium && !planned && !folder) return undefined
   const parts = [others + ' other session' + (others === 1 ? '' : 's')]
   if (strong) parts.push(strong + ' strong overlap' + (strong === 1 ? '' : 's'))
   if (medium) parts.push(medium + ' shared function' + (medium === 1 ? '' : 's'))
+  if (planned) parts.push(planned + ' overlap' + (planned === 1 ? '' : 's') + ' in declared work')
   if (folder) parts.push('sharing this folder')
   return parts.join(' · ')
 }

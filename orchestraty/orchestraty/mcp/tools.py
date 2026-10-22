@@ -380,6 +380,8 @@ def _overlap_note(ws, f, me):
         return templates.for_both(f, other)
     if rule == "W1" and other:
         return templates.same_folder(other)
+    if rule == "O7" and other:
+        return templates.planned_overlap(f, me["id"], other)
     if rule == "O1" and other:
         return f"{templates.describe(other)} has also changed {templates.clean(f['file'], 200)}."
     return f"{rule} {templates.clean(f['symbol'] or f['file'], 200)}."

@@ -186,15 +186,19 @@ def _reserved(claim):
     return clean(claim["target"])
 
 
+def _who(session):
+    """Another session, as a note names it; a plain-git one is someone outside any agent session."""
+    if session.get("agent") == "git":
+        return "someone working outside any agent session (" + describe(session).split(" (", 1)[-1]
+    return describe(session)
+
+
 def claimed(claim, claimer, before_edit=True, ask=None):
     """A claim, to another session: before it edits what the claim covers (for a function or
     class, the file that defines it; for a folder, any file in it), or with its next step when
     it has changed that already (before_edit=False). `ask`, for a hard claim: True when this
     edit waits for the user's answer, False when the agent cannot be made to wait."""
-    if claimer.get("agent") == "git":
-        who = "someone working outside any agent session (" + describe(claimer).split(" (", 1)[-1]
-    else:
-        who = describe(claimer)
+    who = _who(claimer)
     until = time.strftime("%H:%M", time.localtime(claim["expires"] / 1e9))
     number = int(claim["id"])
     how = "hard claim" if claim["hard"] else "claim"
@@ -209,6 +213,19 @@ def claimed(claim, claimer, before_edit=True, ask=None):
     else:
         then = "Leave it to that session, or agree with it before you change it."
     return _cap(f"{what} {then} The user can end the claim with orch release {number}.")
+
+
+def planned_overlap(finding, me, other):
+    """O7, to each of two sessions whose declared or claimed work overlaps, about the other one.
+    It only informs: in steer mode too, nothing is held back."""
+    d = finding["detail"]
+    how = d.get("how") or {}
+    what = (f"{_name(finding['symbol'])} in {_path(finding['symbol'])}" if finding.get("symbol")
+            else clean(finding["file"]))
+    mine = "claimed" if how.get(me) == "claimed" else "declared"
+    theirs = "claimed" if how.get(other["id"]) == "claimed" else "declared"
+    return _cap(f"{_who(other)} has {theirs} {what}, which you have {mine} too (rule O7). Agree with that session "
+                "on who changes it before either of you goes on; nothing is held back.")
 
 
 def push_line(findings):

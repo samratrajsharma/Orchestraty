@@ -477,6 +477,14 @@ class Record:
             out.append(d)
         return out
 
+    def declarations_ended(self, after, until):
+        """The declarations that stopped holding after `after` and by `until` (ns)."""
+        if not self.has_table("declarations"):
+            return []
+        return [dict(r) for r in self.db.execute("SELECT id, session_id, expires FROM declarations "
+                                                 "WHERE expires > ? AND expires <= ? ORDER BY expires, id",
+                                                 (after, until))]
+
     # what sessions have reserved (schema 4)
     def add_claim(self, repo_id, session_id, kind, target, file, hard, ts, expires):
         """Store a claim; returns its id."""

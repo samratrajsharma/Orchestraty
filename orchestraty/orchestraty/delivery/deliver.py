@@ -16,6 +16,8 @@ Who hears what (Draft 4 §5.5):
 | O3, O4 | the same note, when wake is on and the   | the session using it             | wake      |
 |        | session using it waits for its user      |                                  |           |
 | W1     | another session works in this same folder | each of the two (with hooks)    | next      |
+| O7     | another session declared or claimed    | each of the two                  | next      |
+|        | this too (never held back)             |                                  |           |
 | claim  | who claimed what, until when           | every other session (with hooks) | edit file |
 |        |                                        | on the repository                | (folder)  |
 |        | the same, when it has changed what is  | the same sessions                | next      |
@@ -123,6 +125,12 @@ class Deliverer:
             changer = finding["changer"]
             if hears(changer, "stop"):
                 out.append((changer, "stop", slots.stop_slot(self.state, changer), templates.left_behind(finding)))
+        elif rule == "O7":
+            a, b = finding["sessions"]
+            for me, other in ((a, b), (b, a)):
+                if hears(me, "next") and other in sessions:
+                    out.append((me, "next", slots.next_slot(self.state, me),
+                                templates.planned_overlap(finding, me, sessions[other])))
         elif rule == "W1":
             a, b = finding["sessions"]
             if hooked(a) and hooked(b):                     # a plain-git session gets none and causes none
