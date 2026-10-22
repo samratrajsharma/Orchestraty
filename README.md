@@ -86,6 +86,7 @@ Many agents document hooks today: Claude Code, Codex, Cursor, Gemini CLI, Copilo
 | A breaking change in one session, and a use of that contract in the other | Strong | The using session, before its next affected edit |
 | A breaking change whose callers no session has updated | Strong | The changing session, when it tries to finish; the push line if still left |
 | Two sessions working in one folder (one worktree) | Medium | Both agents, once, with their next tool result |
+| Two sessions that declared or claimed the same work | Medium | Both agents, once, with their next tool result; nothing is held back |
 
 ### Architecture
 
