@@ -163,19 +163,17 @@ class Orchestraty:
             return b""
         agent = hook.safe_name(self.agent.encode("utf-8", "replace"), MAX_AGENT, b"unknown")
         folder = os.path.join(root, "spool", agent.decode("ascii"))
-        path = None
+        path = note = None
         try:
             event = hook.safe_name(event.encode("utf-8", "replace"), 40, b"")
+            note, kind, first = hook.take_note(root, raw, event, hook.session_of(raw, agent), agent)
             name, line = hook.event_line(raw, agent, event, time.time_ns() if now_ns is None else now_ns,
-                                         os.getpid() if pid is None else pid)
+                                         os.getpid() if pid is None else pid, first)
             path = os.path.join(folder, name)
-            slot, kind = hook.slot_for(root, raw, event, name[:-6].encode("ascii"))
-            note = hook.take_slot(slot) if slot else None
             if note:
                 line = line[:-2] + b',"took":"' + kind + b'"}\n'
             hook.append(path, line)
             hook.start_coordinator(root, time.time())
-            return note or b""
         except Exception as exc:                 # as the hook does: fail open, and leave a trace
             line = hook.error_line(agent, exc, time.time_ns(), os.getpid())
             for target in (path, os.path.join(folder, "shim_errors.jsonl")):
@@ -186,7 +184,7 @@ class Orchestraty:
                     break
                 except Exception:
                     continue
-            return b""
+        return note or b""
 
     def _python(self):
         try:

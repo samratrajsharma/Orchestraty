@@ -22,8 +22,23 @@ SessionStart, ``reason`` for SessionEnd and ``stop_hook_active`` for Stop and Su
 The payload itself (prompts, file contents, commands, tool output) is never stored; ``len`` is
 its size.
 
-Silent and fail-open: it prints nothing and always exits 0. An internal failure appends one
-``{"shim_error": "<exception class>"}`` line instead, so failures show up in the data.
+Those are Claude Code's names, and an agent this script does not know is read as Claude Code:
+most agents copy its shape. Two agents differ (their adapters, ``orchestraty/adapters``, say
+the same; a test checks they agree), and the line keeps the names above for them too:
+
+* Codex uses Claude Code's names, but its edit tool, apply_patch, has no file field: the files
+  are on the patch's header lines (``*** Update File: <path>``, and Add File, Delete File, Move
+  to). The line gives the first as ``file_path`` (or the one whose note was taken) and the
+  others as ``other_files``, made absolute from ``cwd``.
+* Antigravity's names are camelCase: ``conversationId`` is the session, the first of
+  ``workspacePaths`` the folder, ``transcriptPath`` the transcript; the tool is
+  ``toolCall.name``, and an edit tool names its file in ``toolCall.args`` (``TargetFile``, or
+  ``file_path`` or ``path``), a ``file://`` URI made a path.
+
+Silent and fail-open: it prints nothing but a note, and always exits 0. An internal failure
+appends one ``{"shim_error": "<exception class>"}`` line instead, so failures show up in the
+data. Antigravity waits for an answer from its hooks, so for it the hook always prints one: the
+note, or with none ``{"decision":"allow"}`` at PreToolUse and ``{}`` at its other events.
 
 It also starts the coordinator when that is not running (its heartbeat file is stale), at
 most once every few seconds across all hooks: detached, with no handle or stream of the hook's,
@@ -40,7 +55,10 @@ exactly as written (it builds no JSON):
 * PostToolUse: ``next.json``, with the tool's result;
 * Stop: ``stop.json``, unless ``stop_hook_active`` says a stop hook already kept Claude going.
 
-A slot is taken exactly once (``take_slot``) and the spool line records ``"took"``.
+Codex takes the same slots (for a patch, the edit slot of the first of its files that has
+one). Antigravity takes ``next.json`` at PreInvocation, before its next model call, and
+``stop.json`` at Stop; its PreToolUse can only allow or deny, so it takes no edit slot. A slot is
+taken exactly once (``take_slot``) and the spool line records ``"took"``.
 
 Wake (opt-in): run as ``hook.py <agent> Wake`` from an ``asyncRewake`` Stop hook, it waits
 in the background for ``wake.txt``; when that appears it prints it to stderr and exits 2, which
@@ -77,6 +95,26 @@ EDIT_TOOLS = {b'"Edit"': b"file_path", b'"Write"': b"file_path", b'"MultiEdit"':
               b'"NotebookEdit"': b"notebook_path"}
 EVENT_FIELDS = {b"SessionStart": b"source", b"SessionEnd": b"reason"}
 FLAG_EVENTS = (b"Stop", b"SubagentStop")
+# Codex: the names above. The files its edit tool changes are on the patch's header lines,
+# each at the start of a line: in the JSON string, right after the two bytes \n.
+PATCH_TOOLS = (b'"apply_patch"',)
+PATCH_HEADERS = (b"Update File: ", b"Add File: ", b"Delete File: ", b"Move to: ")
+MAX_PATCH_FILES = 32
+# Antigravity: names of its own, and the tool in a toolCall object ({"name": ..., "args": ...}).
+AG_SESSION = b"conversationId"
+AG_CWD = b"workspacePaths"                  # a list: its first folder is the one that counts
+AG_TRANSCRIPT = b"transcriptPath"
+AG_TOOL_EVENTS = (b"PreToolUse", b"PostToolUse")
+AG_EDIT_TOOLS = {b'"write_to_file"': (b"TargetFile",), b'"replace_file_content"': (b"TargetFile",),
+                 b'"multi_replace_file_content"': (b"TargetFile",), b'"write_file"': (b"file_path", b"path"),
+                 b'"edit_file"': (b"file_path", b"path")}
+# The note slot each event may take, by agent (one not named takes Claude Code's), and what an
+# agent that waits for an answer gets when there is no note: (by default, {event: answer}).
+SLOTS = {b"claude": {b"PreToolUse": b"edit", b"PostToolUse": b"next", b"PostToolUseFailure": b"next",
+                     b"Stop": b"stop"},
+         b"codex": {b"PreToolUse": b"edit", b"PostToolUse": b"next", b"Stop": b"stop"},
+         b"antigravity": {b"PreInvocation": b"next", b"Stop": b"stop"}}
+QUIET = {b"antigravity": (b"{}", {b"PreToolUse": b'{"decision":"allow"}'})}
 MAX_FIELD = 4096            # bytes; longer values are left out
 KEY_TAIL = 24
 _KEY_SAFE = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-."
@@ -124,14 +162,14 @@ def _string_token(raw, j):
     return None
 
 
-def _value_at(raw, key, last):
-    """The index just past `"key":` and its spaces for the first (or last) such key, or -1. A
-    "key" not followed by a colon (for example the word used as a value) is skipped. Keys
-    inside string values cannot match: their quotes are escaped there."""
+def _value_at(raw, key, last, start=0):
+    """The index just past `"key":` and its spaces for the first (or last) such key from
+    `start` on, or -1. A "key" not followed by a colon (for example the word used as a value)
+    is skipped. Keys inside string values cannot match: their quotes are escaped there."""
     needle = b'"' + key + b'"'
-    start, end = 0, len(raw)
+    end = len(raw)
     while True:
-        i = raw.rfind(needle, 0, end) if last else raw.find(needle, start)
+        i = raw.rfind(needle, start, end) if last else raw.find(needle, start)
         if i < 0:
             return -1
         j = i + len(needle)
@@ -148,11 +186,24 @@ def _value_at(raw, key, last):
             start = i + 1
 
 
-def field(raw, key, last=False):
+def field(raw, key, last=False, start=0):
     """The raw JSON string value of the first (or, with last=True, the last) `"key": "..."` in
-    raw, quotes included, or None when that key's value is not a valid string."""
-    j = _value_at(raw, key, last)
+    raw from `start` on, quotes included, or None when that key's value is not a valid string."""
+    j = _value_at(raw, key, last, start)
     if j < 0 or j >= len(raw) or raw[j] != 34:
+        return None
+    return _string_token(raw, j)
+
+
+def first_item(raw, key):
+    """The raw JSON string value of the first item of `"key": ["...", ...]`, or None."""
+    j = _value_at(raw, key, False)
+    if j < 0 or j >= len(raw) or raw[j] != 91:  # '['
+        return None
+    j += 1
+    while j < len(raw) and raw[j] in _SPACE:
+        j += 1
+    if j >= len(raw) or raw[j] != 34:
         return None
     return _string_token(raw, j)
 
@@ -229,22 +280,126 @@ def file_key(path):
     return tail[-KEY_TAIL:] + "~" + _fnv1a64(p)
 
 
-def slot_for(root, raw, event, session):
-    """(slot path, kind) of the note this event may take, or (None, None)."""
-    if session == b"nosession":
-        return None, None
+def uri_path(text):
+    """A path from a file:// URI (its %-escapes decoded), or the text as it is."""
+    if not text.startswith("file://"):
+        return text
+    rest = text[7:]
+    if rest[:1] == "/" and rest[2:3] == ":":        # file:///C:/...
+        rest = rest[1:]
+    if "%" not in rest:
+        return rest
+    data, out, i = rest.encode("utf-8", "surrogatepass"), bytearray(), 0
+    while i < len(data):
+        digits = data[i + 1:i + 3]
+        if data[i] == 37 and len(digits) == 2 and all(d in _HEX for d in digits):
+            out.append(int(digits, 16))
+            i += 3
+        else:
+            out.append(data[i])
+            i += 1
+    return out.decode("utf-8", "replace")
+
+
+def _patch_path(raw, s):
+    """The path on a patch header line whose path starts at raw[s] (inside a JSON string),
+    up to the line's end, or None."""
+    e, end = s, min(len(raw), s + MAX_FIELD)
+    while e < end and raw[e] != 34:                 # the string's closing quote
+        if raw[e] == 92:                             # an escape; \n or \r ends the line
+            if raw[e + 1:e + 2] in (b"n", b"r"):
+                break
+            e += 2
+        else:
+            e += 1
+    token = b'"' + raw[s:e] + b'"'
+    if e >= end or _string_token(token, 0) != token:
+        return None
+    return json_unescape(token).strip() or None
+
+
+def patch_files(raw, cwd=""):
+    """The files the patch of an apply_patch payload changes, in order (at most
+    MAX_PATCH_FILES), each made absolute from `cwd`. Every header line starts after a newline,
+    which the JSON string holds as \\n: an odd run of backslashes before that n."""
+    start = _value_at(raw, b"tool_input", False)
+    files = []
+    i = start
+    while start >= 0 and len(files) < MAX_PATCH_FILES:
+        i = raw.find(b"\\n*** ", i)
+        if i < 0:
+            break
+        k = i
+        while k > start and raw[k - 1] == 92:
+            k -= 1
+        j = i + 6
+        if (i - k) % 2 == 0:
+            for header in PATCH_HEADERS:
+                if raw.startswith(header, j):
+                    path = _patch_path(raw, j + len(header))
+                    if path and cwd and not os.path.isabs(path):
+                        path = os.path.join(cwd, path)
+                    if path and path not in files:
+                        files.append(path)
+                    break
+        i = j
+    return files
+
+
+def _args_path(raw, call, keys):
+    """The file an Antigravity edit tool names in toolCall.args (`call`: where toolCall's value
+    starts), a file:// URI made a path, or None."""
+    args = _value_at(raw, b"args", False, call)
+    if args < 0:
+        return None
+    for key in keys:
+        token = field(raw, key, start=args)
+        if token is not None:
+            return uri_path(json_unescape(token)) or None
+    return None
+
+
+def edit_files(raw, agent):
+    """The files the tool of an edit event changes, for the agents that take edit notes: []
+    when it is not an edit tool."""
+    tool = field(raw, b"tool_name")
+    if agent == b"codex" and tool in PATCH_TOOLS:
+        cwd = field(raw, b"cwd")
+        return patch_files(raw, json_unescape(cwd) if cwd else "")
+    key = EDIT_TOOLS.get(tool)
+    token = field(raw, key) if key else None
+    return [json_unescape(token)] if token is not None else []
+
+
+def session_of(raw, agent):
+    """The payload's session id as the spool names its file (letters, digits, '-' and '_')."""
+    token = field(raw, AG_SESSION if agent == b"antigravity" else b"session_id")
+    return safe_name(token[1:-1] if token else b"", 64, b"nosession")
+
+
+def take_note(root, raw, event, session, agent=b"claude"):
+    """(note, slot kind, the file whose slot it was) for the note this event takes, or
+    (None, None, None). An edit event tries the slot of each file its tool changes, in order."""
+    kind = SLOTS.get(agent, SLOTS[b"claude"]).get(event)
+    if kind is None or session == b"nosession":
+        return None, None, None
     folder = os.path.join(root, "notes", session.decode("ascii"))
-    if event == b"PreToolUse":
-        key = EDIT_TOOLS.get(field(raw, b"tool_name"))
-        token = field(raw, key) if key else None
-        if token is None:
-            return None, None
-        return os.path.join(folder, "edit", file_key(json_unescape(token)) + ".json"), b"edit"
-    if event in (b"PostToolUse", b"PostToolUseFailure"):
-        return os.path.join(folder, "next.json"), b"next"
-    if event == b"Stop" and flag(raw, b"stop_hook_active") is not True:
-        return os.path.join(folder, "stop.json"), b"stop"
-    return None, None
+    if kind == b"edit":
+        for path in edit_files(raw, agent):
+            note = take_slot(os.path.join(folder, "edit", file_key(path) + ".json"))
+            if note:
+                return note, kind, path
+        return None, None, None
+    if kind == b"stop" and flag(raw, b"stop_hook_active") is True:
+        return None, None, None                   # a stop hook already kept the agent going
+    note = take_slot(os.path.join(folder, kind.decode("ascii") + ".json"))
+    return (note, kind, None) if note else (None, None, None)
+
+
+def quiet(agent, event):
+    """What the hook prints when it has no note: nothing (None), or the answer the agent waits for."""
+    answers = QUIET.get(agent)
+    return answers[1].get(event, answers[0]) if answers else None
 
 
 def safe_name(value, limit, fallback):
@@ -253,11 +408,23 @@ def safe_name(value, limit, fallback):
     return kept or fallback
 
 
-def event_line(raw, agent, event, now_ns, pid):
-    """(session file name, spool line) for one payload."""
+def event_line(raw, agent, event, now_ns, pid, first=None):
+    """(session file name, spool line) for one payload. `first`: the file of a patch whose
+    note was taken, which the line names as its file_path."""
     parts = [b'{"ts":%d,"pid":%d,"agent":"%s","event":"%s","len":%d' % (now_ns, pid, agent, event, len(raw))]
+    if agent == b"antigravity":
+        session = _antigravity_fields(raw, event, parts)
+    else:
+        session = _fields(raw, agent, event, parts, first)
+    parts.append(b"}\n")
+    return safe_name(session, 64, b"nosession").decode("ascii") + ".jsonl", b"".join(parts)
+
+
+def _fields(raw, agent, event, parts, first):
+    """Claude Code's names (Codex's, and those of an agent this script does not know), added to
+    the line's parts. Returns the session id."""
     session = b""
-    tool = None
+    tool = cwd = None
     not_a_tool_event = bool(event) and event not in TOOL_EVENTS
     for key in FIELDS:
         if not_a_tool_event and key in TOOL_FIELDS:
@@ -269,11 +436,15 @@ def event_line(raw, agent, event, now_ns, pid):
                 session = token[1:-1]
             elif key == b"tool_name":
                 tool = token
+            elif key == b"cwd":
+                cwd = token
     path_key = EDIT_TOOLS.get(tool) if event in TOOL_EVENTS else None
     if path_key:
         token = field(raw, path_key)
         if token is not None:
             parts.append(b',"file_path":%s' % token)
+    elif agent == b"codex" and event in TOOL_EVENTS and tool in PATCH_TOOLS:
+        _files(parts, patch_files(raw, json_unescape(cwd) if cwd else ""), first)
     extra = EVENT_FIELDS.get(event)
     if extra:
         token = field(raw, extra)
@@ -283,8 +454,42 @@ def event_line(raw, agent, event, now_ns, pid):
         value = flag(raw, b"stop_hook_active")
         if value is not None:
             parts.append(b',"stop_hook_active":%s' % (b"true" if value else b"false"))
-    parts.append(b"}\n")
-    return safe_name(session, 64, b"nosession").decode("ascii") + ".jsonl", b"".join(parts)
+    return session
+
+
+def _files(parts, files, first=None):
+    """Adds a patch's files to the line's parts: file_path (the first, or `first`) and
+    other_files (the rest)."""
+    if first in files:
+        files = [first] + [f for f in files if f != first]
+    if files:
+        parts.append(b',"file_path":' + json_string(files[0]))
+    if len(files) > 1:
+        parts.append(b',"other_files":[' + b",".join(json_string(f) for f in files[1:]) + b"]")
+
+
+def _antigravity_fields(raw, event, parts):
+    """Antigravity's names, added to the line's parts under the line's own. Returns the session id."""
+    session = b""
+    token = field(raw, AG_SESSION)
+    if token is not None:
+        parts.append(b',"session_id":%s' % token)
+        session = token[1:-1]
+    call = _value_at(raw, b"toolCall", False) if event in AG_TOOL_EVENTS else -1
+    tool = field(raw, b"name", start=call) if call >= 0 else None
+    if tool is not None:
+        parts.append(b',"tool_name":%s' % tool)
+    token = first_item(raw, AG_CWD)
+    if token is not None:
+        parts.append(b',"cwd":%s' % token)
+    token = field(raw, AG_TRANSCRIPT)
+    if token is not None:
+        parts.append(b',"transcript_path":%s' % token)
+    keys = AG_EDIT_TOOLS.get(tool)
+    path = _args_path(raw, call, keys) if keys else None
+    if path:
+        parts.append(b',"file_path":' + json_string(path))
+    return session
 
 
 def error_line(agent, exc, now_ns, pid):
@@ -544,31 +749,40 @@ def git_event(root, event, argv):
 def main(argv, script=__file__):
     """Returns the exit code: 0, or 2 when a Wake waiter wakes its session."""
     root = state_folder(script)
-    if root is None or not argv:                 # nowhere to write, or no agent named: stay silent
+    if not argv:                                 # no agent named: stay silent
         return 0
     agent = safe_name(argv[0].encode("utf-8", "replace"), 32, b"unknown")
+    event = safe_name(argv[1].encode("utf-8", "replace") if len(argv) > 1 else b"", 40, b"")
+    code, note = (0, None) if root is None else record(root, agent, event, argv)   # None: nowhere to write
+    answer = note or quiet(agent, event)        # an agent that waits for an answer always gets one
+    if answer:
+        try:
+            sys.stdout.buffer.write(answer)
+            sys.stdout.buffer.flush()
+        except BaseException:
+            pass
+    return code
+
+
+def record(root, agent, event, argv):
+    """Append the event's line and take its note: (exit code, the note or None). Never raises."""
     folder = os.path.join(root, "spool", agent.decode("ascii"))
-    path = None
+    path = note = None
     try:
-        event = safe_name(argv[1].encode("utf-8", "replace") if len(argv) > 1 else b"", 40, b"")
         if agent == b"git":
             git_event(root, event, argv[2:])
-            return 0
+            return 0, None
         if event == b"Take":                     # before stdin: the mod gives none
-            return take_for_mod(root, agent, argv[2:])
+            return take_for_mod(root, agent, argv[2:]), None
         raw = sys.stdin.buffer.read()
         if event == b"Wake":
-            return wait_for_wake(root, agent, raw)
-        name, line = event_line(raw, agent, event, time.time_ns(), os.getpid())
+            return wait_for_wake(root, agent, raw), None
+        note, kind, first = take_note(root, raw, event, session_of(raw, agent), agent)
+        name, line = event_line(raw, agent, event, time.time_ns(), os.getpid(), first)
         path = os.path.join(folder, name)
-        slot, kind = slot_for(root, raw, event, name[:-6].encode("ascii"))
-        note = take_slot(slot) if slot else None
         if note:
             line = line[:-2] + b',"took":"' + kind + b'"}\n'
         append(path, line)
-        if note:
-            sys.stdout.buffer.write(note)
-            sys.stdout.buffer.flush()
         start_coordinator(root, time.time())
     except BaseException as exc:                 # fail open, but leave a trace in the data
         line = error_line(agent, exc, time.time_ns(), os.getpid())
@@ -580,7 +794,7 @@ def main(argv, script=__file__):
                 break
             except BaseException:
                 continue
-    return 0
+    return 0, note
 
 
 if __name__ == "__main__":

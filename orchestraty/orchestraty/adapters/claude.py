@@ -39,6 +39,7 @@ EDIT_MATCHER = "Edit|Write|MultiEdit|NotebookEdit"
 # every tool, since a shell command can change files too.
 EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse",
           "PostToolUseFailure", "Stop", "SubagentStop", "StopFailure")
+CAPTURED = EVENTS
 MATCHERS = {"PreToolUse": EDIT_MATCHER, "PostToolUse": "*", "PostToolUseFailure": "*"}
 TIMEOUT_SECONDS = 10
 WAKE_TIMEOUT_SECONDS = 3600     # the wake waiter leaves on its own a little before this
