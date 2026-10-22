@@ -18,7 +18,10 @@ Who hears what (Draft 4 §5.5):
 | W1     | another session works in this same folder | each of the two (with hooks)    | next      |
 
 Plain-git sessions get no notes (they have no hooks), and nor do cloud agents' branches (their
-agents work elsewhere). A session hears each finding once:
+agents work elsewhere). A note goes only to a session whose agent can take that kind at the
+event its slot is for (``adapters``: Antigravity takes no edit note, so it hears the next note
+instead once it changes the file; only Claude Code can be woken), and it is written in the form
+that agent accepts. A session hears each finding once:
 when one of its notes for a finding is taken (the edit note, the next note or the wake note),
 the others count as delivered and come out of their slots, and no new one is made. The
 record's ``notes`` table remembers every note made, so a finding that comes back is not told
@@ -38,6 +41,7 @@ import os
 import shutil
 import time
 
+from orchestraty import adapters
 from orchestraty.delivery import notes as templates
 from orchestraty.delivery import slots
 
@@ -71,39 +75,48 @@ class Deliverer:
             s = sessions.get(sid)
             return s is not None and s["state"] == "live" and s["agent"] not in NO_NOTES
 
+        def hears(sid, kind):
+            """Whether the session's agent can be handed a note of this kind."""
+            return hooked(sid) and kind in adapters.hears(sessions[sid]["agent"])
+
         if rule == "O2":
             a, b = finding["sessions"]
             for me, other in ((a, b), (b, a)):
-                if hooked(me) and other in sessions:
+                if hears(me, "next") and other in sessions:
                     out.append((me, "next", slots.next_slot(self.state, me),
                                 templates.for_both(finding, sessions[other])))
         elif rule in ("O3", "O4"):
             user, changer = finding["receiver"], finding["changer"]
+            latent = finding["detail"].get("latent")
             if hooked(user) and changer in sessions:
                 path = os.path.join(sessions[user]["worktree"], *finding["file"].split("/"))
                 elsewhere = sessions[changer].get("worktree") != sessions[user].get("worktree")
                 text = templates.for_user(finding, sessions[changer], elsewhere=elsewhere)
-                out.append((user, "edit", slots.edit_slot(self.state, user, path), text))
-                if not finding["detail"].get("latent"):
+                if hears(user, "edit"):
+                    out.append((user, "edit", slots.edit_slot(self.state, user, path), text))
+                if not latent and hears(user, "next"):
                     # it already changed that file and may never edit it again: tell it with
                     # its next tool result too (whichever note it takes first counts)
                     out.append((user, "next", slots.next_slot(self.state, user),
                                 templates.for_user(finding, sessions[changer], before_edit=False,
                                                    elsewhere=elsewhere)))
-                if wake and sessions[user].get("turn") == "idle" and not finding["detail"].get("latent"):
+                if wake and sessions[user].get("turn") == "idle" and not latent and hears(user, "wake"):
                     out.append((user, "wake", slots.wake_slot(self.state, user), text))
-            if hooked(changer) and user in sessions and not finding["detail"].get("latent"):
+            if hears(changer, "next") and user in sessions and not latent:
+                told = hears(user, "edit") or ("next" if hears(user, "next") else False)
                 out.append((changer, "next", slots.next_slot(self.state, changer),
-                            templates.for_changer(finding, sessions[user], told=hooked(user))))
+                            templates.for_changer(finding, sessions[user], told=told)))
         elif rule == "O6":
             changer = finding["changer"]
-            if hooked(changer):
+            if hears(changer, "stop"):
                 out.append((changer, "stop", slots.stop_slot(self.state, changer), templates.left_behind(finding)))
         elif rule == "W1":
             a, b = finding["sessions"]
             if hooked(a) and hooked(b):                     # a plain-git session gets none and causes none
                 for me, other in ((a, b), (b, a)):
-                    out.append((me, "next", slots.next_slot(self.state, me), templates.same_folder(sessions[other])))
+                    if hears(me, "next"):
+                        out.append((me, "next", slots.next_slot(self.state, me),
+                                    templates.same_folder(sessions[other])))
         return out
 
     def add(self, finding, sessions, trigger_ns, wake=False):
@@ -184,18 +197,20 @@ class Deliverer:
         shutil.rmtree(slots.folder(self.state, session_id), ignore_errors=True)
 
     def fill(self, steer=False):
-        """Write every free slot that has notes waiting. Returns the slots written."""
-        written = []
+        """Write every free slot that has notes waiting, in the form its session's agent
+        accepts. Returns the slots written."""
+        written, agents = [], {}
         for slot_rel in self.record.slots_with(("pending", "written")):
             self._settle(slot_rel)
             pending = self.record.notes(slot=slot_rel, states=("pending",))
             if not pending or self.record.notes(slot=slot_rel, states=("written",)):
                 continue                                  # nothing new, or the slot still waits
             text = "\n\n".join(n["text"] for n in pending)[:MAX_SLOT_TEXT]
-            kind = pending[0]["kind"]
-            data = (templates.pre_tool_output(text, steer) if kind == "edit" else
-                    templates.post_tool_output(text) if kind == "next" else
-                    templates.stop_output(text) if kind == "stop" else text.encode("utf-8"))
+            sid = pending[0]["session_id"]
+            if sid not in agents:
+                row = self.record.session(sid)
+                agents[sid] = row["agent"] if row else ""
+            data = adapters.output(agents[sid], pending[0]["kind"], text, steer)
             if slots.write(_abs(self.state, slot_rel), data):
                 self.record.mark_written([n["id"] for n in pending], self.now_ns())
                 written.append(slot_rel)

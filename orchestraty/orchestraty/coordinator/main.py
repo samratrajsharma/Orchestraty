@@ -53,7 +53,8 @@ FRESH_START_SECONDS = 60          # a SessionStart read later than this gives a 
 KEEP_ENDED_SPOOL_SECONDS = 24 * 3600
 MAX_FAILURES = 20
 NS = 1_000_000_000
-WORKING_EVENTS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure")
+WORKING_EVENTS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
+                  "PreInvocation")          # Antigravity's: before each call of its model
 IDLE_EVENTS = ("SessionStart", "Stop", "StopFailure")
 DETAIL_FIELDS = ("source", "reason", "stop_hook_active", "len", "took")
 LOCK_WAIT_SECONDS = 3.0

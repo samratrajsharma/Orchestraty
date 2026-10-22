@@ -10,45 +10,13 @@ import time
 
 import pytest
 
-from helpers import run_hook, spool_lines
+from helpers import SECRET, ag, ag_tool, codex, patch_event, run_hook, spool_lines
 from orchestraty.adapters import antigravity as ag_adapter
 from orchestraty.adapters import codex as codex_adapter
 from orchestraty.capture import hook
 from orchestraty.delivery import slots
 
-SECRET = "SECRET-CONTENT-5d1e"
 ALLOW = b'{"decision":"allow"}'
-
-
-def codex(event, session, cwd, **fields):
-    """A Codex payload, its keys in the order Codex writes them."""
-    body = {"session_id": session}
-    if event not in ("SessionStart", "SessionEnd"):
-        body["turn_id"] = "turn-1"
-    body.update(transcript_path=None, cwd=str(cwd), hook_event_name=event)
-    if event != "SessionEnd":
-        body.update(model="model-1", permission_mode="default")
-    body.update(fields)
-    return json.dumps(body).encode("utf-8")
-
-
-def patch_event(event, session, cwd, patch, **fields):
-    extra = {"tool_response": {"output": SECRET}} if event == "PostToolUse" else {}
-    return codex(event, session, cwd, tool_name="apply_patch", tool_input={"command": patch}, **extra,
-                 tool_use_id="call_1", **fields)
-
-
-def ag(event, conversation, folders, **fields):
-    """An Antigravity payload."""
-    body = {"conversationId": conversation, "workspacePaths": [str(f) for f in folders],
-            "transcriptPath": "/t/brain/transcript.jsonl", "artifactDirectoryPath": "/t/brain/artifacts"}
-    body.update(fields)
-    return json.dumps(body).encode("utf-8")
-
-
-def ag_tool(event, conversation, folder, name, args, args_first=False):
-    call = {"args": args, "name": name} if args_first else {"name": name, "args": args}
-    return ag(event, conversation, [folder, "/second/workspace"], toolCall=call, stepIdx=7)
 
 
 PATCH = "\n".join([

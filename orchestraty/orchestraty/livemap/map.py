@@ -26,14 +26,15 @@ from dataclasses import dataclass, field
 from orch_engine.ingest import MAX_BLOB_BYTES, read_blobs
 from orch_engine.track import diff, file_fingerprint
 
-from orchestraty import gitio
+from orchestraty import adapters, gitio
 from orchestraty.livemap import changes as git_changes
 from orchestraty.livemap.contracts import ANY, BREAKING, COMPATIBLE, NONE, REVIEW, classify, worst
 from orchestraty.livemap.index import BaseIndexes, ParseCache, blob_id, view
 
 PYTHON = (".py",)
-READ_ONLY_TOOLS = {"Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "TodoWrite", "TodoRead",
-                   "ExitPlanMode", "BashOutput", "ListMcpResourcesTool", "ReadMcpResourceTool"}
+READ_ONLY_TOOLS = ({"Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "TodoWrite", "TodoRead",
+                    "ExitPlanMode", "BashOutput", "ListMcpResourcesTool", "ReadMcpResourceTool"}
+                   | adapters.READ_ONLY_TOOLS)                 # and the other agents' read-only tools
 
 
 @dataclass
@@ -212,10 +213,10 @@ class LiveMap:
         if sid not in self.sessions:
             return
         if event in ("PostToolUse", "PostToolUseFailure"):
-            path = self.rel(session, line.get("file_path"))
-            if path:
-                self.edits[sid].add(path)
-            if path or line.get("tool_name") not in READ_ONLY_TOOLS:
+            others = line.get("other_files") if isinstance(line.get("other_files"), list) else []
+            paths = [p for p in (self.rel(session, f) for f in [line.get("file_path")] + others) if p]
+            self.edits[sid].update(paths)                  # a patch can change several files
+            if paths or line.get("tool_name") not in READ_ONLY_TOOLS:
                 self.pending.add(sid)
 
     def mark_all(self):

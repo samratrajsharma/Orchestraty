@@ -19,7 +19,7 @@ MAX_ITEMS = 6
 COVERAGE = "Static calls only; dynamic calls are not analysed."
 _UNSAFE = re.compile(r"[^A-Za-z0-9_.:/<>\-\[\]]")
 _UNSAFE_REASON = re.compile(r"[^A-Za-z0-9_ *./]")      # reasons are our own words around identifiers
-AGENTS = {"claude": "Claude Code", "codex": "Codex", "git": "plain-git"}
+AGENTS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "git": "plain-git"}
 CLOUD = "cloud"             # a cloud agent's branch: its agent works elsewhere and is never told
 
 
@@ -127,8 +127,9 @@ def for_user(finding, changer, before_edit=True, elsewhere=True):
 
 def for_changer(finding, user, told=None):
     """O3/O4, to the session that broke or removed something another session's file uses.
-    `told`: whether that session gets a note of its own before it next edits the file; by
-    default, unless it is a plain-git session (no session with Orchestraty works there)."""
+    `told`: whether that session gets a note of its own before it next edits the file ("next":
+    with its next step, for an agent that takes no note before an edit); by default, unless it
+    is a plain-git session (no session with Orchestraty works there)."""
     d = finding["detail"]
     uses = _list(d.get("uses", []), lambda u: _name(u["symbol"]) + _lines(u.get("lines", [])))
     how = "removed" if finding["rule"] == "O4" else f"changed ({_reasons(d.get('reasons', []))})"
@@ -136,6 +137,8 @@ def for_changer(finding, user, told=None):
         told = user.get("agent") not in ("git", CLOUD)
     if user.get("agent") == CLOUD:
         then = "The agent on that branch works elsewhere and is not told; mention it to your user."
+    elif told == "next":
+        then = "That session is told with its next step."
     elif told:
         then = "That session is told before it next edits that file."
     else:
