@@ -68,10 +68,14 @@ Codex and Antigravity run each hook's command through a shell (on Windows, the l
 - the findings first seen in it, by rule and by strength (latent ones apart);
 - the notes made in it, by kind (`edit`, `next`, `stop`, `wake`) and by state (`pending`, `written`, `delivered`, `withdrawn`), how many were delivered, and the median and 90th percentile of their time to awareness: from the event that caused a note to the note written, ready for its agent;
 - the notes acted on, and the findings they were about;
+- notes per session per day: the notes handed to agents over the days agent sessions were live (each day is 24 hours counted back from now), on average and on the busiest day;
+- what was held back: weak findings, which no session hears (they show only in `orch status`), latent findings (nobody is changing the file that uses the change), notes a session did not get because it had heard of that finding already, and notes withdrawn because their finding stopped holding before the agent took them;
 - the labels given in it, by verdict (a finding's latest label), and the reports of missed notes;
 - an estimate of the tokens the notes handed to agents cost: their characters / 4.
 
 Notes about claims (see [Claims](#claims)) count with the others; having no finding, they never count as acted on.
+
+The hook's own time is not counted: the hook would have to read the clock and write it down on every event, which is work it must not do, and most of its time, the interpreter starting, passes before any of its code runs. The tests measure it from outside instead (see [Agents](#agents)).
 
 **Acted on is a proxy**, worked out from the record only. A note handed to its agent counts as acted on when, within `acted_minutes` of its delivery (30 by default; set it in `config.json`), either the receiving session edited a file the note cites (the file its finding names, or one holding a function it names), or the finding stopped holding while that session was live. It says the agent did something the note may have caused, not that the note caused it.
 

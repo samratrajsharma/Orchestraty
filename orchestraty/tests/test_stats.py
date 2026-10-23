@@ -212,7 +212,8 @@ def test_the_summary_holds_no_identifiers(state, capsys):
                   "by_strength",
                   "latent", "notes", "made", "by_kind", "by_state", "delivered", "awareness_ms", "measured", "median",
                   "p90", "acted_on", "findings_acted_on", "tokens_estimate", "labels", "by_verdict", "missed",
-                  summary["version"]})
+                  "per_session_day", "session_days", "mean", "max", "held_back"} | set(stats.HELD_BACK)
+               | {summary["version"]})
     assert set(strings) <= allowed
 
 
@@ -249,3 +250,47 @@ def test_stats_without_a_record(state, capsys):
     assert cli.main(["stats", "--days", "21"]) == 0
     assert capsys.readouterr().out.count("no delivered note yet") == 3
     assert not Path(state.record).exists()
+
+
+# --------------------------------------------------------------------------------------- #
+# Noise: notes per session per day, and what was held back
+# --------------------------------------------------------------------------------------- #
+def test_notes_per_session_per_day_and_what_was_held_back(state, tmp_path, capsys):
+    now = time.time()
+    t = int(now * NS)
+    day = 24 * 60 * MINUTE
+    rec = Record(state.record)
+    with rec.transaction():
+        rid = rec.repo_id(str(tmp_path / "repo" / ".git"))
+        for sid, agent, started in (("B", "claude", t - 2 * day - 12 * 60 * MINUTE), ("C", "codex", t - 120 * MINUTE),
+                                    ("G", "git", t - 3 * day)):
+            rec.put_session({"id": sid, "agent": agent, "repo_id": rid, "cwd": "/w", "worktree": "/w", "branch": "b",
+                             "base_commit": "c0", "base_guessed": 0, "started": started, "last_seen": t - MINUTE,
+                             "state": "live", "turn": "", "note": ""})
+
+        def finding(key, rule, strength, receiver, **detail):
+            rec.put_finding(rid, Finding(key, rule, strength, ("A", receiver), changer="A", receiver=receiver,
+                                         symbol="a.py::f", file="c.py", detail=detail), t - 3 * day)
+        for key, sid, delivered in (("S1", "B", t - 30 * MINUTE), ("S2", "B", t - 20 * MINUTE),
+                                    ("S3", "B", t - 2 * day - MINUTE), ("S4", "C", t - 10 * MINUTE)):
+            finding(key, "O3", "strong", sid)
+            put_note(rec, key, sid, delivered - MINUTE, delivered)
+        finding("O1|c.py|A|B", "O1", "weak", "B")                                   # status only
+        finding("L1", "O3", "strong", "B", latent=True)                              # nobody changes the using file
+        rec.add_note("S1", "B", "edit", "notes/B/edit.json", "Orchestraty: the same", t - 40 * MINUTE)
+        [heard] = rec.notes(finding_key="S1", session_id="B", states=("pending",))
+        rec.set_note_state(heard["id"], "delivered", t - 30 * MINUTE)               # B took the next note instead
+        rec.add_note("S2", "B", "stop", "notes/B/stop.json", "Orchestraty: gone", t - 40 * MINUTE)
+        [gone] = rec.notes(finding_key="S2", session_id="B", states=("pending",))
+        rec.set_note_state(gone["id"], "withdrawn", t - 35 * MINUTE)
+    rec.close()
+    notes = stats.collect(state, now=now)["weeks"][0]["notes"]
+    # B: live on 3 days (2 notes today, 1 two days ago), C on 1 (1 note); plain git does not count
+    assert notes["per_session_day"] == {"session_days": 4, "mean": 1.0, "max": 2}
+    assert notes["held_back"] == {"weak_findings": 1, "latent_findings": 1, "already_heard": 1, "withdrawn": 1}
+    assert cli.main(["stats"]) == 0
+    out = capsys.readouterr().out
+    assert "  per day     1.0 notes per session per day, at most 2 (over 4 session-days)" in out
+    assert "  held back   1 weak finding (status only), 1 latent finding, 1 note already heard, 1 withdrawn" in out
+    week = stats.summary(stats.collect(state, now=now))["weeks"][0]["notes"]
+    assert week["per_session_day"]["max"] == 2 and week["held_back"]["already_heard"] == 1

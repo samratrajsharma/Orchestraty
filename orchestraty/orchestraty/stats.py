@@ -10,6 +10,13 @@ Each week counts:
   percentile of their time to awareness: from the event that caused a note to the note written,
   ready for its agent;
 * notes acted on (a proxy, below), and the findings they were about;
+* notes per session per day: the notes handed to agents, over the days agent sessions were live
+  (the days are the 24 hours counted back from now), on average and at most;
+* what was held back, which the record keeps: weak findings, which no session hears (status
+  only), latent ones (nobody is changing the file that uses the change), notes a session did
+  not get because it had heard of the finding already, and notes withdrawn because their
+  finding stopped holding before the agent took them. A finding that comes back, or a change
+  found again under another session, is not told twice either; the record does not count those;
 * labels given in it by verdict (a finding's latest), and reports of missed notes;
 * an estimate of the tokens the notes handed to agents cost: their characters / 4.
 
@@ -18,6 +25,11 @@ acted on when, within ``acted_minutes`` of its delivery (30 by default, in confi
 receiving session edited a file the note cites (the file its finding names, or one holding a
 function it names), or the finding stopped holding while that session was live. It says the
 agent did something the note may have caused, not that the note caused it.
+
+The hook's own time is not in here: the hook would have to read the clock and write the time
+down on every event, which is work it must not do, and most of its time, the interpreter
+starting, passes before any of its code runs. The tests measure it from outside instead
+(``tests/test_agent_hooks.py``).
 
 ``summary`` keeps counts only: no path, name, symbol, session id, date or text of the user's,
 so it can be read in full before it is shared. Orchestraty never sends it anywhere.
@@ -43,6 +55,7 @@ RULES = ("O1", "O2", "O3", "O4", "O5", "O6", "O7", "W1")
 STRENGTHS = ("strong", "medium", "weak")
 KINDS = ("edit", "next", "stop", "wake")
 STATES = ("pending", "written", "delivered", "withdrawn")
+HELD_BACK = ("weak_findings", "latent_findings", "already_heard", "withdrawn")
 
 
 def _iso(seconds):
@@ -130,6 +143,25 @@ def _weeks(now, days):
     return out
 
 
+def per_session_day(lo, hi, agents, notes):
+    """Notes handed to agent sessions per session and day, between `lo` and `hi` (ns): each day
+    is 24 hours counted back from `hi`, and a session counts on each day it was live in."""
+    day = DAY * NS
+    counts = {}
+    for d in range(max(1, round((hi - lo) / day))):
+        top = hi - d * day
+        for s in agents:
+            if s["started"] < top and s["last_seen"] >= max(lo, top - day):
+                counts[(s["id"], d)] = 0
+    for x in notes:
+        if x["delivered"] is not None and lo <= x["delivered"] < hi:
+            key = (x["session_id"], (hi - 1 - x["delivered"]) // day)
+            counts[key] = counts.get(key, 0) + 1
+    return {"session_days": len(counts),
+            "mean": round(sum(counts.values()) / len(counts), 2) if counts else None,
+            "max": max(counts.values(), default=0)}
+
+
 def _week(n, start, end, rec, window_ns):
     lo, hi = int(start * NS), int(end * NS)
     live = [s for s in rec["sessions"].values() if s["started"] < hi and s["last_seen"] >= lo]
@@ -146,6 +178,11 @@ def _week(n, start, end, rec, window_ns):
                  if x["written"] is not None and x["cause_ts"] is not None and x["written"] >= x["cause_ts"])
     acted = [x for x in handed if acted_on(x, rec["findings"].get(x["finding_key"]), rec["sessions"].get(x["session_id"]),
                                            rec["edits"], window_ns)]
+    noted = rec["noted"]
+    held = {"weak_findings": sum(1 for f in shown if f["strength"] == "weak" and f["key"] not in noted),
+            "latent_findings": sum(1 for f in found if f["detail"].get("latent") and f["key"] not in noted),
+            "already_heard": len(delivered) - len(handed),
+            "withdrawn": sum(1 for x in made if x["state"] == "withdrawn")}
     latest = {}
     for row in rec["labels"]:                                              # oldest first: the latest wins
         if lo <= row["ts"] < hi:
@@ -165,7 +202,8 @@ def _week(n, start, end, rec, window_ns):
                                    "median": round(statistics.median(tta), 1) if tta else None,
                                    "p90": round(_percentile(tta, 90), 1) if tta else None},
                   "acted_on": len(acted), "findings_acted_on": len({x["finding_key"] for x in acted}),
-                  "tokens_estimate": round(sum(len(x["text"]) for x in handed) / 4)},
+                  "tokens_estimate": round(sum(len(x["text"]) for x in handed) / 4),
+                  "per_session_day": per_session_day(lo, hi, agents, rec["notes"]), "held_back": held},
         "labels": {"total": len(latest), "by_verdict": _counts(latest.values(), VERDICTS)},
         "missed": sum(1 for row in rec["missed"] if lo <= row["ts"] < hi),
     }
@@ -176,13 +214,14 @@ def collect(state, days=7, now=None):
     writing to it."""
     now = time.time() if now is None else now
     window = max(1, config.load(state)["acted_minutes"])
-    rec = {"sessions": {}, "findings": {}, "notes": [], "labels": [], "missed": [], "edits": {}}
+    rec = {"sessions": {}, "findings": {}, "notes": [], "labels": [], "missed": [], "edits": {}, "noted": set()}
     if os.path.exists(state.record):
         record = Record(state.record, readonly=True)
         try:
             rec["sessions"] = {s["id"]: s for s in record.sessions()}
             rec["findings"] = {f["key"]: f for f in record.findings(states=None)}
             rec["notes"] = record.notes()
+            rec["noted"] = {x["finding_key"] for x in rec["notes"]}
             rec["labels"] = record.labels()
             rec["missed"] = record.missed()
             rec["edits"] = _edits(record.edits(int((now - days * DAY) * NS)), rec["sessions"])
@@ -200,7 +239,7 @@ def summary(data):
 
     weeks = []
     for w in data["weeks"]:
-        notes, aware = w["notes"], w["notes"]["awareness_ms"]
+        notes, aware, per_day = w["notes"], w["notes"]["awareness_ms"], w["notes"]["per_session_day"]
         weeks.append({
             "week": int(w["week"]),
             "sessions": {k: int(w["sessions"][k]) for k in ("live", "agents", "plain_git", "cloud")},
@@ -214,7 +253,11 @@ def summary(data):
                                        "median": None if aware["median"] is None else float(aware["median"]),
                                        "p90": None if aware["p90"] is None else float(aware["p90"])},
                       "acted_on": int(notes["acted_on"]), "findings_acted_on": int(notes["findings_acted_on"]),
-                      "tokens_estimate": int(notes["tokens_estimate"])},
+                      "tokens_estimate": int(notes["tokens_estimate"]),
+                      "per_session_day": {"session_days": int(per_day["session_days"]),
+                                          "mean": None if per_day["mean"] is None else float(per_day["mean"]),
+                                          "max": int(per_day["max"])},
+                      "held_back": {k: int(notes["held_back"][k]) for k in HELD_BACK}},
             "labels": {"total": int(w["labels"]["total"]), "by_verdict": known(w["labels"]["by_verdict"], VERDICTS)},
             "missed": int(w["missed"])})
     return {"schema": SUMMARY_SCHEMA, "kind": "orchestraty usage summary", "version": str(__version__),
@@ -236,7 +279,7 @@ def render(data):
              "minutes of delivery (acted_minutes in config.json)."]
     for w in data["weeks"]:
         s, f, notes = w["sessions"], w["findings"], w["notes"]
-        aware = notes["awareness_ms"]
+        aware, per_day, held = notes["awareness_ms"], notes["per_session_day"], notes["held_back"]
         lines += ["", f"Week {w['week']}  {_day(w['start'])} to {_day(w['end'])}",
                   f"  sessions    {s['live']} live ({s['agents']} agent, {s['plain_git']} plain git"
                   + (f", {s['cloud']} cloud branch" + ("es" if s["cloud"] != 1 else "") if s["cloud"] else "") + "); "
@@ -248,6 +291,12 @@ def render(data):
                   "  awareness   " + (f"median {aware['median']} ms, 90th percentile {aware['p90']} ms, over "
                                       f"{_plural(aware['measured'], 'delivered note')}" if aware["measured"]
                                       else "no delivered note yet"),
+                  "  per day     " + (f"{per_day['mean']} notes per session per day, at most {per_day['max']} (over "
+                                      f"{_plural(per_day['session_days'], 'session-day')})" if per_day["session_days"]
+                                      else "no agent session"),
+                  f"  held back   {_plural(held['weak_findings'], 'weak finding')} (status only), "
+                  f"{_plural(held['latent_findings'], 'latent finding')}, {_plural(held['already_heard'], 'note')} "
+                  f"already heard, {held['withdrawn']} withdrawn",
                   f"  acted on    {_plural(notes['acted_on'], 'note')}, {_plural(notes['findings_acted_on'], 'finding')} "
                   "(proxy)",
                   f"  labels      {_some(w['labels']['by_verdict'])}",
