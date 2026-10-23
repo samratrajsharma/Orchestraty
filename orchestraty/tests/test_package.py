@@ -21,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[2]
 PACKAGES = {"orchestraty": ROOT / "orchestraty" / "orchestraty", "orch_engine": ROOT / "engine" / "orch_engine"}
 DATA = ["orchestraty/mod/.claude-plugin/plugin.json", "orchestraty/mod/hooks/hooks.json",
         "orchestraty/mod/hooks/register.js", "orchestraty/capture/hook.py"]
+# Read now: every test runs in a folder of its own (conftest), where a relative path would not lead.
+GIVEN = {name: os.path.abspath(os.environ[name]) for name in ("ORCH_WHEEL", "ORCH_SDIST") if os.environ.get(name)}
 
 
 def sources():
@@ -41,9 +43,8 @@ def skip_or_fail(why):
 
 @pytest.fixture(scope="module")
 def wheel(tmp_path_factory):
-    given = os.environ.get("ORCH_WHEEL")
-    if given:
-        return Path(given)
+    if "ORCH_WHEEL" in GIVEN:
+        return Path(GIVEN["ORCH_WHEEL"])
     if os.environ.get("ORCH_PACKAGE_REQUIRED"):
         pytest.fail("ORCH_PACKAGE_REQUIRED is set but ORCH_WHEEL names no wheel")
     if not all(importlib.util.find_spec(m) for m in ("pip", "setuptools")):
@@ -90,7 +91,7 @@ def test_the_wheel_holds_both_packages_and_the_data_files(wheel):
 def test_the_sdist_has_what_the_wheel_is_built_from():
     """CI only: the sdist has what the wheel is built from (python -m build builds the wheel
     from the sdist, so a file it lacked would be missing from the wheel too)."""
-    sdist = os.environ.get("ORCH_SDIST")
+    sdist = GIVEN.get("ORCH_SDIST")
     if not sdist:
         skip_or_fail("no sdist named in ORCH_SDIST; CI builds one with python -m build")
     with tarfile.open(sdist) as tar:
