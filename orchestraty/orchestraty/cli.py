@@ -116,9 +116,12 @@ def _init_for_plugin(args, state, path, python, wake, current, plugin_id):
         print(f"    (the current file is copied to {state.backups} first)")
     if args.no_mod:
         print("    (--no-mod changes nothing here: the mod comes with the plugin)")
-    if os.name == "nt" and not plugin.git_bash():
-        print("Claude Code runs a plugin's hooks with Git Bash, and none was found: install Git for Windows, or "
-              "set CLAUDE_CODE_GIT_BASH_PATH. orch doctor checks it.")
+    if os.name == "nt":
+        print("On Windows Claude Code runs a plugin's hooks through Git Bash, whose start makes each event slower than "
+              "the settings hooks, which start Python directly; without the plugin, orch init writes those.")
+        if not plugin.git_bash():
+            print("No Git Bash was found: install Git for Windows, or set CLAUDE_CODE_GIT_BASH_PATH. orch doctor "
+                  "checks it.")
     print(_scope_line(args) + " " + PRIVACY)
     if not confirm("Go ahead?", args.yes):
         print("Nothing changed.")
