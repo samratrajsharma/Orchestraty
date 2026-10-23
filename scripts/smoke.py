@@ -113,7 +113,8 @@ def isolated_env(folder, pythonpath=None):
     home = os.path.join(folder, "home")
     os.makedirs(home, exist_ok=True)
     env.update(ORCH_HOME=os.path.join(folder, "state"), CLAUDE_CONFIG_DIR=os.path.join(folder, "claude"),
-               CODEX_HOME=os.path.join(folder, "codex"), HOME=home, USERPROFILE=home, PYTHONDONTWRITEBYTECODE="1")
+               CODEX_HOME=os.path.join(folder, "codex"), HOME=home, USERPROFILE=home, PYTHONDONTWRITEBYTECODE="1",
+               PIP_CONFIG_FILE=os.devnull)                       # no pip configuration of the user's
     if pythonpath:
         env["PYTHONPATH"] = pythonpath
     return env
@@ -134,8 +135,8 @@ def make_venv(venv, env):
 
 def install_wheel(python, wheel, env):
     """Install the wheel into the environment of `python`, from the file alone (--no-index)."""
-    run([python, "-m", "pip", "install", "--no-index", "--no-deps", "--disable-pip-version-check", "--quiet",
-         os.path.abspath(wheel)], env)
+    run([python, "-m", "pip", "install", "--no-index", "--no-deps", "--no-cache-dir", "--disable-pip-version-check",
+         "--quiet", os.path.abspath(wheel)], env)
 
 
 # ------------------------------------------------------------------------------ the repository
