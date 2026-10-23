@@ -176,6 +176,7 @@ Experiment code lives in `spikes/` and will be deleted when the experiments end 
 │   ├── capture/            Capture shim, git-hook chaining, latency harness
 │   └── _shared/            Code shared by the experiments
 ├── plugins/claude-code/    The Claude Code plugin: the hooks, the mod, the MCP server and a skill
+├── editors/vscode/         The VS Code and Cursor extension: a status bar item and a panel
 ├── scripts/                The smoke test of the built wheel, the install-to-first-note timing, the plugin's build
 ├── docs/decisions/         Architecture decision records
 ├── pyproject.toml          The one distribution, orchestraty: both packages in one wheel
@@ -217,6 +218,8 @@ With Claude Code you can install Orchestraty's plugin as well, which holds the h
 ```
 
 Then `orch init` turns the plugin's hooks on and adds none to the settings file. The plugin is built and passes `claude plugin validate --strict`; it has not been installed in a real Claude Code session yet. See [the plugin](orchestraty/README.md#the-claude-code-plugin).
+
+In VS Code and Cursor, the extension in [`editors/vscode`](editors/vscode/README.md) shows the sessions on the workspace's repository and their overlaps, whatever agents run them, in a status bar item and a panel. Install it from the `.vsix` CI builds. It is built and unit-tested; it has not been tried in VS Code or Cursor yet.
 
 ### Run the tests
 
@@ -291,9 +294,10 @@ Orchestraty is pure Python and standard library only, so there is one codebase f
 | --- | --- | --- |
 | Quick | Windows 3.12; Linux 3.12 | Every push and pull request |
 | Package and smoke | The sdist and the wheel built on Linux; the smoke test of that wheel on Windows and Linux 3.12 | Every push and pull request |
+| Editor extension | Its tests on Windows and Linux with Node 22; the `.vsix` packaged on Linux and kept as the `vsix` artifact | Every push and pull request |
 | Full | Adds Linux 3.9, 3.10 and 3.11, and macOS 3.12, and the smoke test on macOS | Weekly on Mondays, on manual runs, and on release tags (`v*`) |
 
-The quick and full runs run the main package, engine and experiment tests; Python 3.9 runs only the experiments, because the scanner must work on older systems. The smoke test (`scripts/smoke.py`) installs the built wheel in a clean virtual environment and runs `orch --version`, `orch init --print`, two scripted sessions through the installed hook script that reach a note, and `orch doctor`, with no real agent and no network. Two more jobs test the TypeScript helper and the TypeScript contracts with Node. Every job fails if it leaves any file behind. A branch is merged once CI is green on it.
+The quick and full runs run the main package, engine and experiment tests; Python 3.9 runs only the experiments, because the scanner must work on older systems. The smoke test (`scripts/smoke.py`) installs the built wheel in a clean virtual environment and runs `orch --version`, `orch init --print`, two scripted sessions through the installed hook script that reach a note, and `orch doctor`, with no real agent and no network. Two more jobs test the TypeScript helper and the TypeScript contracts with Node. The editor extension's job publishes nothing. Every job fails if it leaves any file behind. A branch is merged once CI is green on it.
 
 ### Releases
 
