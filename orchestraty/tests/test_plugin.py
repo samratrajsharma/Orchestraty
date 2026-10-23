@@ -181,13 +181,17 @@ def test_the_skill_names_only_tools_and_commands_that_exist():
 
 
 def test_claude_plugin_validate_passes_strict():
-    """Claude Code's own check of the plugin and the marketplace, where its command line is here."""
-    exe = shutil.which("claude")
+    """Claude Code's own check of the plugin and the marketplace, where its command line is here
+    (ORCH_TEST_CLAUDE names one to use instead of the one on PATH). A Claude Code too old for
+    --strict, or for mods, cannot judge the plugin, so the test is skipped there."""
+    exe = os.environ.get("ORCH_TEST_CLAUDE") or shutil.which("claude")
     if not exe:
         pytest.skip("claude (Claude Code's command line) is not installed here")
     for target in (PLUGIN, ROOT):
-        proc = subprocess.run([exe, "plugin", "validate", "--strict", str(target)], capture_output=True, text=True,
-                              timeout=120, stdin=subprocess.DEVNULL)
+        proc = subprocess.run([exe, "plugin", "validate", "--strict", str(target)], capture_output=True,
+                              encoding="utf-8", errors="replace", timeout=120, stdin=subprocess.DEVNULL)
+        if "unknown option '--strict'" in proc.stdout + proc.stderr:
+            pytest.skip("this Claude Code is too old to check plugins strictly; set ORCH_TEST_CLAUDE to a newer one")
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert "Validation passed" in proc.stdout
 
