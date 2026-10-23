@@ -103,6 +103,11 @@ function describe(repo, o) {
     const [a, b] = o.sessions || []
     return what + ' is ' + (how[a] || 'declared') + ' by ' + who(repo, a) + ' and ' + (how[b] || 'declared') + ' by ' + who(repo, b)
   }
+  if (o.rule === 'O5') {
+    const d = o.detail || {}
+    return 'the route ' + (d.method || '?') + ' ' + (d.path || '?') + ' (' + o.file + ') is also being changed by ' +
+      who(repo, other)
+  }
   if (o.rule === 'O2') return name + ' (' + file + ') is also being changed by ' + who(repo, other)
   return o.file + ' is also being changed by ' + who(repo, other)
 }
