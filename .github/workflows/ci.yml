@@ -77,7 +77,7 @@ jobs:
       - name: Check that the tests left no files behind
         shell: bash
         run: |
-          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes scripts)"
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes scripts plugins .claude-plugin)"
           if [ -n "$leftovers" ]; then
             echo "The tests left files in the working copy:"
             echo "$leftovers"
@@ -265,7 +265,7 @@ jobs:
       - name: Check that the smoke test left no files behind
         shell: bash
         run: |
-          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes scripts)"
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes scripts plugins .claude-plugin)"
           if [ -n "$leftovers" ]; then
             echo "The smoke test left files in the working copy:"
             echo "$leftovers"
@@ -333,7 +333,7 @@ jobs:
       - name: Check that the tests left no files behind
         shell: bash
         run: |
-          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes scripts)"
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes scripts plugins .claude-plugin)"
           if [ -n "$leftovers" ]; then
             echo "The tests left files in the working copy:"
             echo "$leftovers"
