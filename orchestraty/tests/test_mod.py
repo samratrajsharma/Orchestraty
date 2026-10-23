@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -118,3 +119,22 @@ def test_the_coordinator_keeps_status_json_current(state, repo):
         assert [s["id"] for s in data["repositories"][0]["sessions"]] == ["s1", "s2"]
     finally:
         c.close()
+
+
+def test_orch_init_replaces_a_read_only_copy_of_the_mod(state, tmp_path, monkeypatch):
+    """The mod's source folders can carry a read-only attribute (seen on Windows). It came along
+    with the copy, and the next orch init, or wake switch, could not delete that copy."""
+    from orchestraty.adapters import claude
+    src = tmp_path / "mod-source"
+    shutil.copytree(install.MOD_SOURCE, src, ignore=shutil.ignore_patterns("__pycache__"))
+    paths = [os.path.join(root, n) for root, dirs, files in os.walk(src) for n in dirs + files]
+    for p in paths:
+        os.chmod(p, stat.S_IREAD | (stat.S_IEXEC if os.path.isdir(p) else 0))
+    monkeypatch.setattr(claude, "MOD_SOURCE", str(src))
+    try:
+        assert install.install_mod(state) == state.mod
+        assert install.install_mod(state) == state.mod                 # the first copy is replaced
+        assert os.access(os.path.join(state.mod, "hooks", "register.js"), os.W_OK)
+    finally:
+        for p in paths:
+            os.chmod(p, stat.S_IREAD | stat.S_IWRITE | (stat.S_IEXEC if os.path.isdir(p) else 0))

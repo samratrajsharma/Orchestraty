@@ -32,6 +32,7 @@ file that is not JSON, a backup before every change) is ``capture/install``'s.
 import json
 import os
 import shutil
+import stat
 
 NAME = "claude"
 TITLE = "Claude Code"
@@ -208,10 +209,15 @@ def mod_in(settings, mod_dir):
 
 def install_mod(state):
     """Copy the mod into the state folder (replacing an older copy); returns its folder."""
+    from orchestraty import gitio
     target = state.mod
     if os.path.isdir(target):
-        shutil.rmtree(target)
+        gitio.remove_tree(target)          # an older copy may carry a read-only attribute (Windows)
     shutil.copytree(MOD_SOURCE, target, ignore=shutil.ignore_patterns("__pycache__", "*.test.ts"))
+    for root, dirs, files in os.walk(target):  # the copy stays writable, so the next copy can replace it
+        for name in dirs + files:
+            p = os.path.join(root, name)
+            os.chmod(p, os.stat(p).st_mode | stat.S_IWRITE)
     return target
 
 
