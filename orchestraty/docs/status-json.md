@@ -121,10 +121,10 @@ A claim reserves a file, a folder or a Python function or class for one session:
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `key` | string | A stable key: the same overlap keeps it while it holds, and gets it again if it comes back. |
-| `rule` | string | `O1`, `O2`, `O3`, `O4`, `O6`, `O7` or `W1` (below). |
+| `rule` | string | `O1`, `O2`, `O3`, `O4`, `O5`, `O6`, `O7` or `W1` (below). |
 | `strength` | string | `strong`, `medium` or `weak`. |
-| `symbol` | string | The function or class it is about; `""` for O1, W1, and O7 about a path. |
-| `file` | string (path) | The file it is about: the file both changed (O1), the function's file (O2, O6, O7), the file that uses the change (O3, O4), the file or folder both declared or claimed (O7); `""` for W1. |
+| `symbol` | string | The function or class it is about (for O5, the route's handler, `""` when not known); `""` for O1, W1, and O7 about a path. |
+| `file` | string (path) | The file it is about: the file both changed (O1), the function's file (O2, O6, O7), the file that uses the change (O3, O4), the file the route is declared in (O5), the file or folder both declared or claimed (O7); `""` for W1. |
 | `changer` | string | O3, O4, O6: the session whose change it is. `""` otherwise. |
 | `receiver` | string | O3, O4: the session that must hear first, whose file uses the change. `""` otherwise. |
 | `sessions` | array of strings | Every session involved, sorted. |
@@ -138,6 +138,7 @@ A claim reserves a file, a folder or a Python function or class for one session:
 | `O2` the same function | medium | `symbol`; `kinds`: `{session id: kind}`, what each did to it |
 | `O3` a breaking change used in a file another session is changing | strong | `symbol`; `kind`; `reasons` (those the uses run into, then those that break no call); `moved_to` (where it lives now, for a move, else `""`); `uses`: `[{symbol, lines}]`, the functions in `file` that use it and their lines; `latent`: the receiver is not changing `file` yet, so it hears before its first edit of it |
 | `O4` a removed function still used there | strong | as O3 |
+| `O5` the same HTTP route | strong | `method` and `path`: the route both changed; `framework`: `fastapi`, `flask` or `django`; `changes`: `{session id: {kind, from, to, handler, file, line}}`, what each did to it: `kind` is `added`, `removed` or `changed`; for a change, `to` is the method and path it became, or `from` the one that became it (else `""`); `handler`, `file` and `line` say where the route is declared in that session's copy (in the base commit, for a removal) |
 | `O6` callers no session has updated | strong | `symbol`; `kind`; `reasons`; `left`: `[{symbol, file, lines}]`, the callers in the base commit that still use the old form |
 | `W1` two sessions with hooks in one worktree | medium | `worktree`: its top |
 | `O7` the work two sessions declared or claimed overlaps | medium | `what`: the narrower of the two overlapping items, a path or `path::name`; `kind`: `path` or `symbol`; `how`: `{session id: "declared" or "claimed"}`, how each named it (`claimed` when it did both) |
@@ -157,7 +158,7 @@ Worked out from the open findings, the same way every time: when one session is 
 
 ### `together`
 
-Opt-in, for each repository. When the rules flag a medium or strong overlap between two sessions (O2, O3, O4, not latent), the user's command runs on each session's working copy alone and on both merged, in folders of Orchestraty's own outside the repository.
+Opt-in, for each repository. When the rules flag a medium or strong overlap between two sessions (O2 to O5, not latent), the user's command runs on each session's working copy alone and on both merged, in folders of Orchestraty's own outside the repository.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
