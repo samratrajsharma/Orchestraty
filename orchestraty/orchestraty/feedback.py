@@ -184,6 +184,8 @@ def what(f):
         return f["symbol"]
     if f["rule"] in ("O3", "O4"):
         return f"{f['symbol']} -> {f['file']}" + (" (removed)" if f["rule"] == "O4" else "")
+    if f["rule"] == "O5":
+        return f"{d.get('method', '?')} {d.get('path', '?')} ({f['file']})"
     if f["rule"] == "O6":
         left = len(d.get("left", []))
         return f"{f['symbol']}: {left} caller{'s' if left != 1 else ''} left behind"

@@ -4,7 +4,7 @@ Static rules are precise only where the engine understands the language well, so
 check confirms an overlap by running code. It is off by default, for each repository; ``orch
 together on`` and ``orch together set "<command>"`` turn it on, and the settings live in
 Orchestraty's config, never in the repository. When the rules flag a medium or strong finding
-between two live sessions in worktrees of their own (O2, O3, O4, not latent), the coordinator
+between two live sessions in worktrees of their own (O2 to O5, not latent), the coordinator
 queues a check of the pair: once per content state of the two (the findings that asked are
 named in the result), at most once a minute for a pair, one at a time, in a worker thread,
 never in a hook, and never holding up the coordinator's loop. The check:
@@ -41,7 +41,7 @@ from orchestraty import config, gitio, usercommand
 from orchestraty.coordinator.record import repo_key
 
 DEFAULT_TIMEOUT = 120
-RULES = ("O2", "O3", "O4")
+RULES = ("O2", "O3", "O4", "O5")
 KEEP_RESULTS = 200                      # the latest results kept in results.json
 STALE_SECONDS = 3600                    # scratch folders older than this are an interrupted check's
 IDENTITY = {"GIT_AUTHOR_NAME": "Orchestraty", "GIT_AUTHOR_EMAIL": "orchestraty@localhost",

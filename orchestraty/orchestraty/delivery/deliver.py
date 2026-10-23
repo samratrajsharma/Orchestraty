@@ -12,6 +12,7 @@ Who hears what (Draft 4 §5.5):
 |        | that file (it may never edit it again) |                                  |           |
 |        | who uses what you changed (not for a   | the session that changed it      | next      |
 |        | latent finding: a file nobody is changing) |                              |           |
+| O5     | another session changes this route too | both sessions                    | next      |
 | O6     | callers you left behind                | the session that changed it      | stop      |
 | O3, O4 | the same note, when wake is on and the   | the session using it             | wake      |
 |        | session using it waits for its user      |                                  |           |
@@ -123,6 +124,12 @@ class Deliverer:
                 told = hears(user, "edit") or ("next" if hears(user, "next") else False)
                 out.append((changer, "next", slots.next_slot(self.state, changer),
                             templates.for_changer(finding, sessions[user], told=told)))
+        elif rule == "O5":
+            a, b = finding["sessions"]
+            for me, other in ((a, b), (b, a)):
+                if hears(me, "next") and other in sessions:
+                    out.append((me, "next", slots.next_slot(self.state, me),
+                                templates.same_route(finding, me, sessions[other])))
         elif rule == "O6":
             changer = finding["changer"]
             if hears(changer, "stop"):
@@ -218,7 +225,7 @@ class Deliverer:
         parts = key.split("|")
         if parts[0] in ("O3", "O4") and len(parts) == 5:
             return (parts[0], parts[1], parts[4])
-        if parts[0] == "O2" and len(parts) == 4 and sid in parts[2:]:
+        if parts[0] in ("O2", "O5") and len(parts) == 4 and sid in parts[2:]:
             return (parts[0], parts[1])
         return None
 

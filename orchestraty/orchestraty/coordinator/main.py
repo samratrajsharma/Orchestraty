@@ -269,9 +269,10 @@ class Coordinator:
             views = {sid: self.livemap.views[sid] for sid in ids}
             graph_ready = {sid: self.livemap.graph(sid) is not None for sid in ids}
             base_ready = {sid: self.livemap.base_graph(sid) is not None for sid in ids}
+            routes_ready = {sid: self.livemap.routes(sid) is not None for sid in ids}
             hooked = {sid for sid in ids if self.sessions[sid]["agent"] not in NO_NOTES}
             found = overlap.evaluate(views, self.livemap.graph, self.livemap.base_graph, hooked=hooked,
-                                     planned=self._planned(repo_id, ids, self.now_ns()))
+                                     planned=self._planned(repo_id, ids, self.now_ns()), routes=self.livemap.routes)
             now = self.now_ns()
             with self.record.transaction():
                 # Resolve first: a note withdrawn here must not count as already told when a
@@ -281,7 +282,8 @@ class Coordinator:
                     if old["key"] in keys:
                         continue
                     waiting = ((old["rule"] in ("O3", "O4") and graph_ready.get(old["receiver"]) is False)
-                               or (old["rule"] == "O6" and base_ready.get(old["changer"]) is False))
+                               or (old["rule"] == "O6" and base_ready.get(old["changer"]) is False)
+                               or (old["rule"] == "O5" and any(routes_ready.get(s) is False for s in old["sessions"])))
                     if not waiting:
                         self.record.resolve_finding(old["key"], now)
                         self.deliverer.withdraw(old["key"])
@@ -303,7 +305,7 @@ class Coordinator:
 
     # the together check (opt-in)
     def _together_jobs(self, repo_id, found):
-        """Mark the pairs of sessions a finding flags (O2, O3, O4, not latent) as due for a
+        """Mark the pairs of sessions a finding flags (O2 to O5, not latent) as due for a
         together check, where it is on for this repository and has a command."""
         key = self._repo_keys.get(repo_id, "")
         entry = together.settings_for_key(self.cfg, key)

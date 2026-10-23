@@ -6,6 +6,8 @@
 | O2   | both changed the same function or class                                 | medium   |
 | O3   | one made a breaking change to X, and a file the other is changing uses X | strong   |
 | O4   | one removed (or renamed) X, and a file the other is changing still uses X | strong   |
+| O5   | both changed the same HTTP route (its method and path): each added,     | strong   |
+|      | removed it, or changed its method or path                               |          |
 | O6   | one made a breaking change to X, and callers of X that no session has   | strong   |
 |      | updated are left behind                                                 |          |
 | W1   | two sessions with hooks work in the same worktree (the same working     | medium   |
@@ -14,7 +16,7 @@
 |      | (``orch claim``) overlaps                                               |          |
 
 Two sessions in one worktree share its files, so what each of them did to a function cannot be
-told apart: between them O1 runs on the files each edited, and O2, O3 and O4 do not. W1 says
+told apart: between them O1 runs on the files each edited, and O2 to O5 do not. W1 says
 they share the folder; a plain-git session (no hooks) neither gets nor causes one.
 
 Uses come from the code graphs the engine builds: a call resolved with evidence (an import,
@@ -30,6 +32,12 @@ MAX_LATENT files per change and session). O6 looks at the callers the base commi
 caller counts as updated when some live session modified it. Calls made at module level,
 outside any function, are not seen.
 
+O5 compares the routes of each session's copy of the code with its base commit's
+(``livemap.routes``: FastAPI, Flask and Django routes, from the engine). A route whose method or
+path changed counts under both its old and its new one. Only a route the engine is sure of
+(``exact``: every part of its path a literal, and its chain up to an app known) counts, on both
+sides: a heuristic route never makes this strong finding.
+
 O7 compares what each session said it will change, not what it changed: a declared path, a
 claimed file or folder (a path covers the files below it), and a declared or claimed function
 or class (``path::name``; a bare name a declaration of several files gave is not compared, and
@@ -43,6 +51,8 @@ knows, and one that stopped holding.
 """
 import os
 from dataclasses import dataclass, field
+
+from orch_engine.routes import EXACT
 
 from orchestraty.livemap.contracts import breaking_reasons
 
@@ -140,6 +150,36 @@ def same_function(a, b, views):
                           detail={"symbol": sym, "kinds": {a: sa[sym].kind, b: sb[sym].kind}})
 
 
+def _route_change(change, route):
+    """What one session did to the route `route` (the one under the finding's method and path)."""
+    out = {"kind": change.kind, "handler": route["handler"], "file": route["file"], "line": route["line"],
+           "from": "", "to": ""}
+    if change.kind == "changed":
+        if route is change.to:
+            out["from"] = f"{change.route['method']} {change.route['path']}"
+        else:
+            out["to"] = f"{change.to['method']} {change.to['path']}"
+    return out
+
+
+def same_route(a, b, routes):
+    """O5: both sessions changed the same route, method and path, each as sure of it as can be.
+    routes(sid) gives that session's livemap.routes.RouteView, or None while it is not known.
+    The key keeps a "|" in a path out of its separators."""
+    ra, rb = routes(a), routes(b)
+    if ra is None or rb is None:
+        return
+    for key in sorted(set(ra.touched) & set(rb.touched)):
+        (ca, route_a), (cb, route_b) = ra.touched[key], rb.touched[key]
+        if route_a["confidence"] != EXACT or route_b["confidence"] != EXACT:
+            continue
+        method, path = key
+        yield Finding(f"O5|{method} {path.replace('|', '%7C')}|{a}|{b}", "O5", STRONG, (a, b),
+                      symbol=route_a["handler"], file=route_a["file"],
+                      detail={"method": method, "path": path, "framework": route_a["framework"],
+                              "changes": {a: _route_change(ca, route_a), b: _route_change(cb, route_b)}})
+
+
 def contract_uses(changer, user, views, graphs):
     """O3 and O4: what `changer` broke or removed, used in `user`'s copy of the code; latent
     where `user` is not changing the file."""
@@ -229,14 +269,15 @@ def declared_work(a, b, planned):
                       detail={"what": what, "kind": "symbol" if item["symbol"] else "path", "how": how})
 
 
-def evaluate(views, graphs, base_graphs, hooked=None, planned=None):
+def evaluate(views, graphs, base_graphs, hooked=None, planned=None, routes=None):
     """Every finding among the sessions of one repository.
 
     views: {session id: SessionView}; graphs(sid) and base_graphs(sid) give that session's code
     graph and its base commit's graph, or None while they are not ready (then the rules that
     need them wait, and the rest still run). hooked: the sessions whose agent's hooks deliver
     notes, the only ones W1 is about (None: W1 does not run). planned: {session id: [item]},
-    what each declared or claimed, for O7 (None: O7 does not run)."""
+    what each declared or claimed, for O7 (None: O7 does not run). routes(sid): that session's
+    route changes, or None while they are not known, for O5 (None: O5 does not run)."""
     out = {}
     ids = sorted(views)
     for i, a in enumerate(ids):
@@ -245,6 +286,8 @@ def evaluate(views, graphs, base_graphs, hooked=None, planned=None):
             found = list(same_file(a, b, views))
             if not shared:
                 found += same_function(a, b, views)
+                if routes is not None:
+                    found += same_route(a, b, routes)
             elif hooked is not None and a in hooked and b in hooked:
                 found += same_folder(a, b, views)
             if planned:

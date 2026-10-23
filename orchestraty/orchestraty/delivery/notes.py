@@ -1,8 +1,10 @@
 """Notes: what an agent is told, built from templates over structured fields only.
 
 Every value placed in a note is an identifier that came from git or the engine (a symbol, a
-path, a line number, a worktree folder, a branch, an agent name) and is cleaned first: only
-letters, digits and ``_ . : / < > - [ ]`` survive, and each value is cut to a short length.
+path, a line number, a worktree folder, a branch, an agent name, an HTTP route) and is cleaned
+first: only letters, digits and ``_ . : / < > - [ ]`` survive (a route's path also keeps
+``{ } ( ) ^ $ * + ? |`` and the backslash, for its parameters and patterns; never a space), and
+each value is cut to a short length.
 Nothing another session wrote (a prompt, a message, a comment, a default value's text) ever
 reaches a note, so one session cannot steer another through it. The one exception is the together
 check's note (``together_fails``), which quotes one line of the output of the user's own check
@@ -23,6 +25,7 @@ MAX_ITEMS = 6
 COVERAGE = "Static calls only; dynamic calls are not analysed."
 _UNSAFE = re.compile(r"[^A-Za-z0-9_.:/<>\-\[\]]")
 _UNSAFE_REASON = re.compile(r"[^A-Za-z0-9_ *./]")      # reasons are our own words around identifiers
+_UNSAFE_PATH = re.compile(r"[^A-Za-z0-9_.:/<>\-\[\]{}()^$*+?|\\]")   # a route's path, its parameters kept
 AGENTS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "git": "plain-git"}
 CLOUD = "cloud"             # a cloud agent's branch: its agent works elsewhere and is never told
 
@@ -53,6 +56,15 @@ def _list(items, render):
     shown = [render(i) for i in items[:MAX_ITEMS]]
     more = len(items) - len(shown)
     return ", ".join(shown) + (f" and {more} more" if more > 0 else "")
+
+
+def clean_route(method, path):
+    """A route, its method and path, made safe to place in a note: a path keeps its parameters'
+    braces and its pattern's characters, never a space."""
+    path = _UNSAFE_PATH.sub("?", str(path))
+    if len(path) > MAX_VALUE:
+        path = path[:MAX_VALUE - 1] + "~"
+    return f"{re.sub(r'[^A-Z?]', '?', str(method).upper())[:12]} {path}"
 
 
 def clean_reason(value):
@@ -160,6 +172,39 @@ def for_both(finding, other):
                 + settle)
 
 
+def _route_done(change, who):
+    """What `who` ("you", or "that session") did to a route, from O5's detail for one session."""
+    if change.get("kind") == "removed":
+        return f"{who} removed it"
+    if change.get("kind") == "added":
+        return f"{who} added it"
+    if change.get("to"):
+        method, _, path = str(change["to"]).partition(" ")
+        return f"{who} changed it to {clean_route(method, path)}"
+    method, _, path = str(change.get("from", "")).partition(" ")
+    return f"{who} changed {clean_route(method, path)} into it"
+
+
+def same_route(finding, me, other):
+    """O5, to each of two sessions that changed the same HTTP route (its method and path),
+    about the other one."""
+    d = finding["detail"]
+    changes = d.get("changes") or {}
+    mine, theirs = changes.get(me) or {}, changes.get(other["id"]) or {}
+    file, line = mine.get("file") or finding.get("file") or "", mine.get("line")
+    where = (f", declared in {_path(file)}" + (f" at line {int(line)}" if isinstance(line, int) else "")) if file else ""
+    route = clean_route(d.get("method", ""), d.get("path", ""))
+    if other.get("agent") == CLOUD:
+        who, settle = "that branch", ("The agent on that branch works elsewhere and is not told: settle the route "
+                                      "with your user before either is merged.")
+    elif other.get("agent") == "git":
+        who, settle = "they", "No session with Orchestraty works there, so nobody there is told; mention it to your user."
+    else:
+        who, settle = "that session", "Agree with that session on the route's method and path before either of you merges."
+    return _cap(f"{_who(other)} is also changing the HTTP route {route}{where} (rule O5): "
+                f"{_route_done(theirs, who)}, and {_route_done(mine, 'you')}. {settle}")
+
+
 def same_folder(other):
     """W1, to each of two sessions with hooks working in one worktree, about the other one.
     It only informs: in steer mode too, nothing is held back."""
@@ -263,6 +308,8 @@ def about(finding, me, sessions):
         return left_behind(finding)
     if rule == "O2" and other:
         return for_both(finding, other)
+    if rule == "O5" and other:
+        return same_route(finding, me["id"], other)
     if rule == "W1" and other:
         return same_folder(other)
     if rule == "O7" and other:

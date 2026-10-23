@@ -188,6 +188,10 @@ def _overlap_line(f, names=None):
         what = f"{f['file']} changed in both " + " and ".join(_short(s) for s in f["sessions"])
     elif f["rule"] == "O2":
         what = f"{f['symbol']} changed in both " + " and ".join(_short(s) for s in f["sessions"])
+    elif f["rule"] == "O5":
+        did = d.get("changes") or {}
+        what = (f"{d.get('method', '?')} {d.get('path', '?')} ({f['file']}): "
+                + ", ".join(f"{_short(s)} {_route_done(did.get(s) or {})}" for s in f["sessions"]))
     elif f["rule"] == "W1":
         folder = os.path.basename(d.get("worktree", "")) or "?"
         what = f"{' and '.join(_short(s) for s in f['sessions'])} work in the same folder, {folder}"
@@ -204,6 +208,15 @@ def _overlap_line(f, names=None):
         what = (f"{name} ({f['symbol'].split('::')[0]}): {len(left)} caller{'s' if len(left) != 1 else ''} "
                 f"left behind by {_short(f['changer'])}")
     return f"{f['strength']:<6}  {f['rule']}  {what}"
+
+
+def _route_done(change):
+    """What one session did to a route, for an O5 line."""
+    if change.get("to"):
+        return "changed it to " + change["to"]
+    if change.get("from"):
+        return f"changed {change['from']} into it"
+    return change.get("kind") or "changed"
 
 
 def _summary(changes, limit=4):
