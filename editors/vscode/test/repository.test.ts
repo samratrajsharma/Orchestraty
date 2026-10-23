@@ -47,14 +47,18 @@ test("a main worktree, a linked one and a folder in no repository", () => {
 });
 
 test("the same answer as git, for a real repository and its worktree", (t) => {
-  const git = (cwd: string, ...args: string[]) => spawnSync("git", ["-c", "init.defaultBranch=main", ...args],
-    { cwd, encoding: "utf8", windowsHide: true, env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1" } });
-  const repo = path.join(scratch, "git", "repo");
-  mkdirSync(path.join(repo, "sub"), { recursive: true });
-  if (git(repo, "init", "-q").status !== 0) {
-    t.skip("git is not available here");
+  if (spawnSync("git", ["--version"], { windowsHide: true }).error) {
+    t.skip("git is not installed here");
     return;
   }
+  const config = path.join(scratch, "gitconfig");                // no user or system config of git's
+  writeFileSync(config, "");
+  const git = (cwd: string, ...args: string[]) => spawnSync("git", ["-c", "init.defaultBranch=main", ...args],
+    { cwd, encoding: "utf8", windowsHide: true, env: { ...process.env, GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: "1" } });
+  const repo = path.join(scratch, "git", "repo");
+  mkdirSync(path.join(repo, "sub"), { recursive: true });
+  const init = git(repo, "init", "-q");
+  assert.equal(init.status, 0, init.stderr);
   writeFileSync(path.join(repo, "sub", "a.txt"), "a\n");
   git(repo, "add", "-A");
   git(repo, "-c", "user.name=T", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "base");
