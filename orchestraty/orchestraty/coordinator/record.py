@@ -312,7 +312,8 @@ class Record:
         self.db.executemany("INSERT INTO session_symbols VALUES (?, ?, ?, ?, ?, ?)",
                             [(sid, s["symbol"], s["kind"], s["change"], s["contract"],
                               json.dumps({"reasons": s["reasons"], "file": s["file"], "lines": s["lines"],
-                                          "moved_from": s["moved_from"]}, sort_keys=True)) for s in symbols])
+                                          "moved_from": s["moved_from"], "language": s.get("language", "python"),
+                                          "heuristic": bool(s.get("heuristic"))}, sort_keys=True)) for s in symbols])
 
     def changes(self, sid):
         """({path: status}, [unattributed paths], [symbol dicts]) for one session."""
@@ -325,6 +326,8 @@ class Record:
         symbols = []
         for r in self.db.execute("SELECT * FROM session_symbols WHERE session_id = ? ORDER BY symbol", (sid,)):
             d = json.loads(r["detail"])
+            d.setdefault("language", "python")
+            d.setdefault("heuristic", False)
             d.update(symbol=r["symbol"], kind=r["kind"], change=r["change"], contract=r["contract"])
             symbols.append(d)
         return files, unattributed, symbols

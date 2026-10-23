@@ -23,6 +23,13 @@ MAX_NOTE = 1200
 MAX_VALUE = 120
 MAX_ITEMS = 6
 COVERAGE = "Static calls only; dynamic calls are not analysed."
+TS_COVERAGE = ("TypeScript, heuristic: calls not resolved; a use is a file that imports it and names it, which "
+               "is all the evidence there is.")
+
+
+def _coverage(finding):
+    """What a note's analysis covers: static calls, or for TypeScript, import evidence."""
+    return TS_COVERAGE if finding.get("detail", {}).get("heuristic") else COVERAGE
 _UNSAFE = re.compile(r"[^A-Za-z0-9_.:/<>\-\[\]]")
 _UNSAFE_REASON = re.compile(r"[^A-Za-z0-9_ *./]")      # reasons are our own words around identifiers
 _UNSAFE_PATH = re.compile(r"[^A-Za-z0-9_.:/<>\-\[\]{}()^$*+?|\\]")   # a route's path, its parameters kept
@@ -138,7 +145,8 @@ def for_user(finding, changer, before_edit=True, elsewhere=True):
     else:
         act = f": {hint}; otherwise agree" if hint else ", and agree"
         tail = " with that session if the old form must stay."
-    return _cap(f"{what} {clean(finding['file'])} uses it: {uses}. Check these uses {when}{act}{tail} {COVERAGE}")
+    return _cap(f"{what} {clean(finding['file'])} uses it: {uses}. Check these uses {when}{act}{tail} "
+                f"{_coverage(finding)}")
 
 
 def for_changer(finding, user, told=None):
@@ -160,7 +168,7 @@ def for_changer(finding, user, told=None):
     else:
         then = "No session with Orchestraty works in that worktree, so nobody there is told; mention it to your user."
     return _cap(f"{_name(finding['symbol'])} in {_path(finding['symbol'])}, which you {how}, is used in "
-                f"{clean(finding['file'])} by {describe(user)}: {uses}. {then} {COVERAGE}")
+                f"{clean(finding['file'])} by {describe(user)}: {uses}. {then} {_coverage(finding)}")
 
 
 def for_both(finding, other):

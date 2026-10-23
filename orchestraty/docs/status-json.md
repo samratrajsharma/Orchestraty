@@ -44,6 +44,7 @@ Times are UTC, as `YYYY-MM-DDTHH:MM:SSZ`. Paths of files in a repository are rel
 | `overlaps` | array | The open findings between its sessions, strongest first. Latent findings only with `--all`. See [overlap](#overlap). |
 | `merge_order` | array | Merge-order advice, one entry per pair of sessions that it concerns; `[]` when there is nothing to say. See [merge_order](#merge_order). |
 | `together` | object | The together check (`orch together`): its settings, and the latest result for each pair of the sessions listed. See [together](#together). |
+| `typescript` | object | TypeScript contracts (`orch ts`): the settings, and how the exports of each listed session were last read. See [typescript](#typescript). |
 | `cloud` | object | Its cloud agents' branches (`orch remote`): the settings, the last fetch, and the branches followed. See [cloud](#cloud). |
 
 ### Session
@@ -77,7 +78,7 @@ A cloud branch, in [`cloud`](#cloud), has the same fields, read this way: `workt
 | --- | --- | --- |
 | `files` | object | `{path: status}`, `status` being `A` (added), `M` (modified) or `D` (deleted). |
 | `unattributed` | array of paths | Files changed in a worktree two sessions share that neither session's edits name, so neither is said to have changed them. |
-| `symbols` | array | The functions and classes it added, removed, moved or modified, for Python. See [symbol](#symbol). |
+| `symbols` | array | The functions and classes it added, removed, moved or modified, for Python; with TypeScript contracts on (`orch ts on`), also the exports of its TypeScript modules that changed. See [symbol](#symbol). |
 
 ### Symbol
 
@@ -91,6 +92,8 @@ A cloud branch, in [`cloud`](#cloud), has the same fields, read this way: `workt
 | `file` | string (path) | The file that holds it. |
 | `lines` | array of 2 integers | Its first and last line in the session's copy; in the base commit for a removal. |
 | `moved_from` | string | For a move, where it was; `""` otherwise. |
+| `language` | string | `python`, or `typescript` for an export of a TypeScript module (`path::name`). |
+| `heuristic` | boolean | TypeScript: `true` when the export was read from source (the fallback), not from the compiler's declarations. `false` for Python. |
 
 ### `declared`
 
@@ -136,7 +139,7 @@ A claim reserves a file, a folder or a Python function or class for one session:
 | --- | --- | --- |
 | `O1` the same file | weak | `file` |
 | `O2` the same function | medium | `symbol`; `kinds`: `{session id: kind}`, what each did to it |
-| `O3` a breaking change used in a file another session is changing | strong | `symbol`; `kind`; `reasons` (those the uses run into, then those that break no call); `moved_to` (where it lives now, for a move, else `""`); `uses`: `[{symbol, lines}]`, the functions in `file` that use it and their lines; `latent`: the receiver is not changing `file` yet, so it hears before its first edit of it |
+| `O3` a breaking change used in a file another session is changing | strong | `symbol`; `kind`; `reasons` (those the uses run into, then those that break no call); `moved_to` (where it lives now, for a move, else `""`); `uses`: `[{symbol, lines}]`, the functions in `file` that use it and their lines; `latent`: the receiver is not changing `file` yet, so it hears before its first edit of it. About TypeScript (`orch ts on`) it is `medium`, never strong: each use is a file that imports the export and names it (`symbol` is that file), and the detail adds `language` (`typescript`), `heuristic` (`true`: calls are not resolved), `evidence` (`import`) and `source` (`compiler`, or `source` for the fallback) |
 | `O4` a removed function still used there | strong | as O3 |
 | `O5` the same HTTP route | strong | `method` and `path`: the route both changed; `framework`: `fastapi`, `flask` or `django`; `changes`: `{session id: {kind, from, to, handler, file, line}}`, what each did to it: `kind` is `added`, `removed` or `changed`; for a change, `to` is the method and path it became, or `from` the one that became it (else `""`); `handler`, `file` and `line` say where the route is declared in that session's copy (in the base commit, for a removal) |
 | `O6` callers no session has updated | strong | `symbol`; `kind`; `reasons`; `left`: `[{symbol, file, lines}]`, the callers in the base commit that still use the old form |
@@ -181,6 +184,28 @@ Opt-in, for each repository. When the rules flag a medium or strong overlap betw
 | `together` | object or null | `{"exit_code", "timed_out"}` on both merged; null for a conflict. |
 | `first_failing_line` | string | When they fail together, the line of output that says the most (the last giving an error or an assertion, such as `TypeError: ...`; else the last naming an error or a failure; else the last): the command's own words, cleaned. |
 | `error` | string | For an error, what git could not do. |
+
+### `typescript`
+
+Opt-in, for each repository. For a session that changes .ts files, the project's TypeScript compiler writes the declarations of its working copy and its base commit into the state folder, and the exported API is compared; without a tsconfig.json or a compiler, or when the project does not compile, the exports are read from the source instead (heuristic).
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `on` | boolean | Whether it runs (`orch ts on`); `false` by default. |
+| `timeout` | integer | The seconds each compiler run may take (300 by default). |
+| `runs` | array | The latest run for each of the sessions listed. See [TypeScript run](#typescript-run). |
+
+### TypeScript run
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `session` | string | The session. |
+| `at` | string (time) | When it ran. |
+| `source` | string | `compiler` (both the working copy and the base commit compiled) or `fallback` (the exports were read from the source of the changed files: heuristic). |
+| `why` | string | For the fallback, why: no tsconfig.json or compiler, a config with `outFile`, which side took too long, or which side did not compile (no declarations written, or an error about the project itself: its options, its inputs, its tsconfig.json), with that error. `""` otherwise. |
+| `head` | object or null | The compiler run on the working copy: `{"exit_code", "timed_out", "seconds", "error"}` (exit code 2: errors in the code, the declarations written all the same); null when the compiler did not run. |
+| `base` | object or null | The same for the base commit, checked out into the state folder; null when it did not run. |
+| `not_compared` | array of strings | Files of the working copy whose exports were not compared this time (at most 20): a syntax error the base commit does not have, as in a file caught mid-edit. From the compiler, its TS1xxx errors; in the fallback, brackets, template literals or comments left open. |
 
 ### `cloud`
 

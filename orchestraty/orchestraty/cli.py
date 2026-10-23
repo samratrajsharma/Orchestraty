@@ -784,6 +784,43 @@ def cmd_together(args):
     return 0
 
 
+def cmd_ts(args):
+    from orchestraty import config
+    from orchestraty.livemap import typescript
+    state = State()
+    try:
+        common_dir, name = _remote_repo(state, args)
+    except ValueError as exc:
+        return _refuse("ts", exc)
+    if args.action == "on":
+        changes = {"on": True}
+        if args.timeout is not None:
+            changes["timeout"] = args.timeout
+        entry = typescript.save_settings(state, common_dir, **changes)
+        print(f"TypeScript contracts on for {name}. For a session that changes .ts files, the project's own "
+              f"TypeScript compiler (node_modules/.bin/tsc, else tsc on PATH) writes the declarations of its working "
+              f"copy and of its base commit into Orchestraty's state folder, up to {entry['timeout']} s each, never in "
+              "a hook and never into the repository. Without a tsconfig.json or a compiler, or when the project does "
+              "not compile, the exports are read from the source instead, and what that finds is heuristic.")
+        return 0
+    if args.action == "off":
+        typescript.save_settings(state, common_dir, on=False)
+        print(f"TypeScript contracts off for {name}: the compiler no longer runs.")
+        return 0
+    entry = typescript.settings(config.load(state), common_dir)
+    print(f"TypeScript contracts: {'on' if entry['on'] else 'off'}, for {name}; up to {entry['timeout']} s a run.")
+    key = _repo_key(common_dir)
+    for sid, run in sorted(typescript.runs(state).items()):
+        if run.get("repo") == key:
+            print(f"  {sid[:8]}: {typescript.describe(run)} ({run.get('at', '')})")
+    return 0
+
+
+def _repo_key(common_dir):
+    from orchestraty.coordinator.record import repo_key
+    return repo_key(common_dir)
+
+
 def cmd_mcp(args):
     if args.config:
         from orchestraty.mcp import register
@@ -1110,6 +1147,15 @@ def build_parser():
     tog.add_argument("--timeout", type=_seconds, metavar="SECONDS", help="with set: the time it may take (default 120)")
     tog.add_argument("--repo", metavar="DIR", help="a folder inside the repository (default: here)")
     tog.set_defaults(handler=cmd_together)
+    ts = commands.add_parser("ts", help="TypeScript contracts: compare the exported API of .ts files",
+                             description="Opt-in, for each repository: for a session that changes .ts files, run the "
+                                         "project's TypeScript compiler on its working copy and its base commit, "
+                                         "writing the declarations into the state folder (never into the repository, "
+                                         "never in a hook), and compare the exported API. Off by default.")
+    ts.add_argument("action", nargs="?", choices=["on", "off"])
+    ts.add_argument("--timeout", type=_seconds, metavar="SECONDS", help="with on: the time a run may take (default 300)")
+    ts.add_argument("--repo", metavar="DIR", help="a folder inside the repository (default: here)")
+    ts.set_defaults(handler=cmd_ts)
 
     cfg = commands.add_parser("config", help="show or switch steer and wake",
                               description="steer: a strong note stops the edit it rides on, so the agent re-plans "

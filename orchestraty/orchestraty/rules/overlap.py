@@ -32,6 +32,12 @@ MAX_LATENT files per change and session). O6 looks at the callers the base commi
 caller counts as updated when some live session modified it. Calls made at module level,
 outside any function, are not seen.
 
+For TypeScript (``orch ts on``), the changes are those of a module's exports (``livemap.typescript``)
+and a use needs import evidence: a file of the other session's copy that imports the export (or
+a module re-exporting it) and names it. Which of those uses are calls is not resolved, so an O3
+or O4 about TypeScript is medium, never strong, and says so (``heuristic``); O6 does not run for
+it.
+
 O5 compares the routes of each session's copy of the code with its base commit's
 (``livemap.routes``: FastAPI, Flask and Django routes, from the engine). A route whose method or
 path changed counts under both its old and its new one. Only a route the engine is sure of
@@ -180,22 +186,41 @@ def same_route(a, b, routes):
                               "changes": {a: _route_change(ca, route_a), b: _route_change(cb, route_b)}})
 
 
-def contract_uses(changer, user, views, graphs):
+def _ts_uses(change, sym, imports):
+    """{file: [{"symbol": file, "lines"}]} of the files that import a TypeScript export and use it."""
+    module, name = sym.split("::", 1)
+    if imports is None or name == "*":
+        return {}
+    return {path: [{"symbol": path, "lines": lines}] for path, lines in imports.uses(module, name).items()}
+
+
+def contract_uses(changer, user, views, graphs, ts_uses=None):
     """O3 and O4: what `changer` broke or removed, used in `user`'s copy of the code; latent
-    where `user` is not changing the file."""
-    graph = graphs(user)
-    if graph is None:
-        return
+    where `user` is not changing the file. ts_uses(sid): that session's TypeScript imports, or
+    None (TypeScript contracts off, or not known yet)."""
     files = set(views[user].files)
+    graph, imports = None, None
     for sym, change in sorted(views[changer].symbols.items()):
         if change.contract != BREAKING:
             continue
         target = change.moved_from or sym                    # where the other session's code finds it
         removed = change.kind == "removed"
+        typescript = change.language == "typescript"
         by_file, why = {}, {}
-        for use, lines, hit in _breaking_uses(change, graph, target):
-            by_file.setdefault(_file_of(use), []).append({"symbol": use, "lines": lines})
-            why.setdefault(_file_of(use), set()).update(hit)
+        if typescript:
+            if imports is None and ts_uses is not None:
+                imports = ts_uses(user)
+            by_file = _ts_uses(change, target, imports)
+        else:
+            if graph is None:
+                graph = graphs(user)
+                if graph is None:
+                    graph = False
+            if graph is False:
+                continue
+            for use, lines, hit in _breaking_uses(change, graph, target):
+                by_file.setdefault(_file_of(use), []).append({"symbol": use, "lines": lines})
+                why.setdefault(_file_of(use), set()).update(hit)
         latent_left = MAX_LATENT
         for path, uses in sorted(by_file.items(), key=lambda kv: (kv[0] not in files, kv[0])):
             latent = path not in files
@@ -204,10 +229,15 @@ def contract_uses(changer, user, views, graphs):
                     continue
                 latent_left -= 1
             rule = "O4" if removed else "O3"
-            yield Finding(f"{rule}|{target}|{changer}|{user}|{path}", rule, STRONG, tuple(sorted((changer, user))),
-                          changer=changer, receiver=user, symbol=target, file=path,
-                          detail={"symbol": target, "kind": change.kind, "reasons": _reasons(change, why[path]),
-                                  "moved_to": sym if change.moved_from else "", "uses": uses, "latent": latent})
+            detail = {"symbol": target, "kind": change.kind, "moved_to": sym if change.moved_from else "",
+                      "uses": uses, "latent": latent,
+                      "reasons": list(change.reasons) if typescript else _reasons(change, why[path])}
+            if typescript:
+                detail.update(language="typescript", heuristic=True, evidence="import",
+                              source="source" if change.heuristic else "compiler")
+            yield Finding(f"{rule}|{target}|{changer}|{user}|{path}", rule, MEDIUM if typescript else STRONG,
+                          tuple(sorted((changer, user))), changer=changer, receiver=user, symbol=target, file=path,
+                          detail=detail)
 
 
 def left_behind(changer, views, base_graphs):
@@ -220,7 +250,7 @@ def left_behind(changer, views, base_graphs):
         updated.update(k for k, c in v.symbols.items() if c.kind in CHANGED_KINDS)
         updated.update(c.moved_from for c in v.symbols.values() if c.moved_from)
     for sym, change in sorted(views[changer].symbols.items()):
-        if change.contract != BREAKING:
+        if change.contract != BREAKING or change.language == "typescript":
             continue
         target = change.moved_from or sym
         left, why = [], set()
@@ -269,7 +299,7 @@ def declared_work(a, b, planned):
                       detail={"what": what, "kind": "symbol" if item["symbol"] else "path", "how": how})
 
 
-def evaluate(views, graphs, base_graphs, hooked=None, planned=None, routes=None):
+def evaluate(views, graphs, base_graphs, hooked=None, planned=None, routes=None, ts_uses=None):
     """Every finding among the sessions of one repository.
 
     views: {session id: SessionView}; graphs(sid) and base_graphs(sid) give that session's code
@@ -277,7 +307,8 @@ def evaluate(views, graphs, base_graphs, hooked=None, planned=None, routes=None)
     need them wait, and the rest still run). hooked: the sessions whose agent's hooks deliver
     notes, the only ones W1 is about (None: W1 does not run). planned: {session id: [item]},
     what each declared or claimed, for O7 (None: O7 does not run). routes(sid): that session's
-    route changes, or None while they are not known, for O5 (None: O5 does not run)."""
+    route changes, or None while they are not known, for O5 (None: O5 does not run).
+    ts_uses(sid): that session's TypeScript imports, for O3 and O4 about TypeScript."""
     out = {}
     ids = sorted(views)
     for i, a in enumerate(ids):
@@ -296,7 +327,7 @@ def evaluate(views, graphs, base_graphs, hooked=None, planned=None, routes=None)
                 out[f.key] = f
         for b in ids:
             if b != a and not one_folder(a, b, views):
-                for f in contract_uses(a, b, views, graphs):
+                for f in contract_uses(a, b, views, graphs, ts_uses):
                     out[f.key] = f
         for f in left_behind(a, views, base_graphs):
             out[f.key] = f

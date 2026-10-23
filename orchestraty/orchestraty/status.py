@@ -8,7 +8,8 @@ result, which the shadow repository keeps beside it. Each session says which kin
 agent can be handed (``adapters``), and the text says what an agent there cannot be told. A
 live session's claims (``orch claim``) that hold are listed with it, and each repository has
 its merge-order advice (``mergeorder``) and its together check: the settings, and the latest
-result for each pair of its sessions (``together``).
+result for each pair of its sessions (``together``); and its TypeScript contracts: the settings,
+and how each session's exports were last read (``livemap.typescript``).
 """
 import calendar
 import json
@@ -107,6 +108,7 @@ def collect(state, include_ended=False, now=None):
             "overlaps": [_finding(f) for f in sorted(findings.get(row["id"], []) if row else [], key=_finding_order)],
             "merge_order": mergeorder.advise(every.get(row["id"], []) if row else [], {s["id"]: s for s in sessions}),
             "together": _together(cfg, common_dir, checked.get(repo_key(common_dir), {}), {s["id"] for s in local}),
+            "typescript": _typescript(state, cfg, common_dir, {s["id"] for s in local}),
             "cloud": _cloud(state, cfg, common_dir, now, cloud, changes)})
     return data
 
@@ -140,6 +142,34 @@ def _together(cfg, common_dir, checked, shown):
                 "together": _ran(r["together"]) if isinstance(r.get("together"), dict) else None,
                 "first_failing_line": r.get("first_failing_line", ""), "error": r.get("error", "")} for r in latest]
     return {"on": entry["on"], "command": entry["command"], "timeout": entry["timeout"], "results": results}
+
+
+def _typescript(state, cfg, common_dir, shown):
+    """TypeScript contracts for one repository: the settings, and each shown session's latest run."""
+    from orchestraty.livemap import typescript
+    entry = typescript.settings(cfg, common_dir)
+    key = repo_key(common_dir)
+    found = []
+    for sid, run in sorted(typescript.runs(state).items()):
+        if run.get("repo") != key or sid not in shown:
+            continue
+        found.append({"session": sid, "at": run.get("at", ""), "source": run.get("source", ""), "why": run.get("why", ""),
+                      "head": _compiled(run.get("head")), "base": _compiled(run.get("base")),
+                      "not_compared": [str(p) for p in run.get("not_compared") or []]})
+    return {"on": entry["on"], "timeout": entry["timeout"], "runs": found}
+
+
+def _compiled(run):
+    if not isinstance(run, dict):
+        return None
+    return {"exit_code": run.get("exit_code"), "timed_out": bool(run.get("timed_out")), "seconds": run.get("seconds", 0),
+            "error": run.get("error", "")}
+
+
+def _ts_line(run):
+    """One line for one session's latest TypeScript run."""
+    from orchestraty.livemap import typescript
+    return f"{run['session'][:8]}: {typescript.describe(run)}"
 
 
 def _ran(run):
@@ -291,6 +321,10 @@ def render(data, wake=False):
             command = check.get("command") or "no command"
             lines.append(f"  together check: {'on' if check.get('on') else 'off'}, `{command}`")
             lines += ["    " + _together_line(r) for r in check.get("results", [])]
+        ts = repo.get("typescript") or {}
+        if ts.get("on") or ts.get("runs"):
+            lines.append(f"  TypeScript contracts: {'on' if ts.get('on') else 'off'}")
+            lines += ["    " + _ts_line(r) for r in ts.get("runs", [])]
     if any(s["base_guessed"] for r in data["repositories"] for s in r["sessions"]):
         lines += ["", "base?: the session was first seen after it started, so its base is the commit at that time."]
     return "\n".join(lines) + "\n"

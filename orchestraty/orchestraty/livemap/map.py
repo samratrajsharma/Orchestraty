@@ -8,7 +8,9 @@ Python files as they are on disk and as they were at the base (parses are cached
 and lets the engine's ``diff`` say which functions and classes were added, removed, moved or
 modified; ``contracts.classify`` rates each signature change and says which calls it breaks.
 A session's HTTP routes are compared with its base commit's on demand (``routes``), once the
-base commit's index is ready, since a route's prefix can come from another file.
+base commit's index is ready, since a route's prefix can come from another file. Where
+TypeScript contracts are on for the repository (``orch ts on``), the exported API of the
+session's .ts files is compared too (``typescript``), and its changes join the functions'.
 
 Which files belong to a session:
 * a file named by one of its edit events is always its own;
@@ -31,6 +33,7 @@ from orch_engine.track import diff, file_fingerprint
 from orchestraty import adapters, gitio
 from orchestraty.livemap import changes as git_changes
 from orchestraty.livemap import routes as route_changes
+from orchestraty.livemap import tsimports, typescript
 from orchestraty.livemap.contracts import ANY, BREAKING, COMPATIBLE, NONE, REVIEW, classify, worst
 from orchestraty.livemap.index import BaseIndexes, ParseCache, blob_id, view
 
@@ -51,11 +54,14 @@ class SymbolChange:
     lines: list                 # [start, end] in the session's copy (in the base for a removal)
     moved_from: str = ""
     breaks: dict = None         # breaking reason -> the calls it breaks (see contracts); None: not known
+    language: str = "python"    # python | typescript (an export of a TypeScript module)
+    heuristic: bool = False     # read from source, not from the compiler's declarations (TypeScript)
 
     def as_dict(self):
         return {"symbol": self.symbol, "kind": self.kind, "change": self.change, "contract": self.contract,
                 "reasons": list(self.reasons), "file": self.file, "lines": list(self.lines),
-                "moved_from": self.moved_from, "breaks": self.breaks}
+                "moved_from": self.moved_from, "breaks": self.breaks, "language": self.language,
+                "heuristic": self.heuristic}
 
 
 @dataclass
@@ -72,6 +78,7 @@ class SessionView:
     error: str = ""
     git_dir: str = ""                                  # a cloud branch: the shadow repository it is read from
     tip: str = ""                                      # and the branch's tip there
+    ts_blobs: dict = field(default_factory=dict)       # changed .ts/.js path -> blob id on disk (orch ts on)
 
     @property
     def source(self):
@@ -151,6 +158,8 @@ class LiveMap:
         self._base_blobs = {}                          # (commit, path) -> blob id or None
         self._graphs = {}                              # session id -> (view key, CodeGraph)
         self._routes = {}                              # session id -> (view key, RouteView)
+        self._ts_uses = {}                             # session id -> (view key, tsimports.Imports)
+        self.ts = typescript.TypeScript(state, self.log)
         self.cloud = {}                                # session id -> (shadow git dir, tip): cloud branches
 
     # sessions
@@ -195,9 +204,10 @@ class LiveMap:
 
     def forget(self, sid):
         for table in (self.sessions, self.views, self.edits, self.dirty_at_start, self._graphs, self._routes,
-                      self.cloud):
+                      self._ts_uses, self.cloud):
             table.pop(sid, None)
         self.pending.discard(sid)
+        self.ts.forget(sid)
 
     def rel(self, session, path):
         """A path an event named, as a posix path inside the session's worktree, or None."""
@@ -231,6 +241,7 @@ class LiveMap:
     def refresh_pending(self):
         """Refresh every session waiting for it; returns the ids whose view changed."""
         changed = set()
+        self.pending.update(sid for sid in self.ts.take() if sid in self.sessions)   # a compiler run finished
         for sid in sorted(self.pending):
             if sid in self.sessions and self.refresh(sid):
                 changed.add(sid)
@@ -271,8 +282,29 @@ class LiveMap:
         except (gitio.GitError, gitio.UntrustedRepositoryError, RuntimeError) as exc:
             new.error = str(exc)[:300]
             self.log.warning("session %s: no symbols: %s", sid[:8], exc)
+        if self.ts.on(old.repo_key):
+            self._typescript(sid, new, mine)
         self.views[sid] = new
         return new.key() != old.key()
+
+    def _typescript(self, sid, view, mine):
+        """Add the session's TypeScript contract changes to its view (orch ts on)."""
+        code = {p: s for p, s in mine.items() if p.endswith(tsimports.CODE_EXTS)}
+        for path, status in code.items():
+            data = None
+            if status != "D":
+                try:
+                    with open(os.path.join(view.worktree, *path.split("/")), "rb") as fh:
+                        data = fh.read(MAX_BLOB_BYTES + 1)
+                except OSError:
+                    data = None
+            view.ts_blobs[path] = blob_id(data) if data is not None and len(data) <= MAX_BLOB_BYTES else None
+        ts_files = {p: s for p, s in code.items() if tsimports.is_typescript(p)}
+        content = tuple(sorted((p, view.ts_blobs.get(p)) for p in ts_files))
+        for c in self.ts.changes(sid, view.worktree, view.base, view.repo_key, ts_files, content):
+            view.symbols[c["symbol"]] = SymbolChange(
+                c["symbol"], c["kind"], "signature" if c["kind"] == "modified" else "", c["contract"], list(c["reasons"]),
+                c["file"], [c["line"], c["line"]] if c["line"] else [], language="typescript", heuristic=c["heuristic"])
 
     def _refresh_cloud(self, sid):
         """A cloud branch's view: the files and functions changed from its base commit to its
@@ -380,6 +412,35 @@ class LiveMap:
         found = route_changes.compare(*route_changes.session_routes(idx, v.head))
         self._routes[sid] = (key, found)
         return found
+
+    def ts_uses(self, sid):
+        """Who imports what in the session's copy of the code (``tsimports.Imports``): its base
+        commit's TypeScript and JavaScript files with its own changes put in. None while that
+        commit's index is being built, for a cloud branch, or with TypeScript contracts off."""
+        v = self.views.get(sid)
+        if v is None or not v.worktree or not self.ts.on(v.repo_key):
+            return None
+        idx = self.indexes.get(v.repo_key, v.base, v.source)
+        if idx is None:
+            return None
+        code = {p: s for p, s in v.files.items() if p.endswith(tsimports.CODE_EXTS)}
+        key = (v.base, tuple(sorted(code.items())), tuple(sorted(v.ts_blobs.items(), key=lambda kv: kv[0])))
+        cached = self._ts_uses.get(sid)
+        if cached and cached[0] == key:
+            return cached[1]
+        texts = {pf.file: pf.text for pf in idx.parsed_files if pf.file.endswith(tsimports.CODE_EXTS)}
+        for path, status in code.items():
+            texts.pop(path, None)
+            if status != "D":
+                text = typescript._read(os.path.join(v.worktree, *path.split("/")))
+                if text is not None:
+                    texts[path] = text
+
+        def read(path):
+            return texts[path] if path in texts else typescript._read(os.path.join(v.worktree, *path.split("/")))
+        imports = tsimports.Imports(texts, tsimports.Resolver(set(texts), read))
+        self._ts_uses[sid] = (key, imports)
+        return imports
 
     def base_graph(self, sid):
         """The code graph of the session's base commit, or None while it is being built."""

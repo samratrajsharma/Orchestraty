@@ -46,6 +46,7 @@ from orchestraty.coordinator.spool import SpoolReader
 from orchestraty.delivery import slots
 from orchestraty.delivery.deliver import NO_NOTES, Deliverer
 from orchestraty.livemap import changes as git_changes
+from orchestraty.livemap import typescript
 from orchestraty.livemap.map import LiveMap
 from orchestraty.rules import overlap
 
@@ -93,6 +94,7 @@ class Coordinator:
         self._last_expiry = None           # when expire() last looked for declarations that stopped holding
         self.reload_config()
         self.livemap = LiveMap(state, self.log)
+        self.livemap.ts.cfg = self.cfg
         self.deliverer = Deliverer(state, self.record, self.log, now_ns)
         self._push_dirty = True
         self._status_dirty = True
@@ -147,6 +149,9 @@ class Coordinator:
         self._cfg_stamp = stamp
         self.cfg = config.load(self.state)
         self.ignored = {sid: why for sid, why in self.ignored.items() if why != "not watched"}
+        if hasattr(self, "livemap"):
+            self.livemap.ts.cfg = self.cfg
+            self.livemap.mark_all()                         # TypeScript contracts may have been turned on or off
         return True
 
     # one pass
@@ -165,6 +170,8 @@ class Coordinator:
             self.clean_spool(now)
             if not self.together.busy():            # a check that runs for hours keeps its folder
                 together.clean_scratch(self.state)
+            if not self.livemap.ts.busy():          # nor is a compiler run's folder taken from under it
+                typescript.clean(self.state, {s["worktree"] for s in self.sessions.values() if s.get("worktree")})
         self.update_map()
         self.update_findings()
         self.check_together()
@@ -272,7 +279,8 @@ class Coordinator:
             routes_ready = {sid: self.livemap.routes(sid) is not None for sid in ids}
             hooked = {sid for sid in ids if self.sessions[sid]["agent"] not in NO_NOTES}
             found = overlap.evaluate(views, self.livemap.graph, self.livemap.base_graph, hooked=hooked,
-                                     planned=self._planned(repo_id, ids, self.now_ns()), routes=self.livemap.routes)
+                                     planned=self._planned(repo_id, ids, self.now_ns()), routes=self.livemap.routes,
+                                     ts_uses=self.livemap.ts_uses)
             now = self.now_ns()
             with self.record.transaction():
                 # Resolve first: a note withdrawn here must not count as already told when a
