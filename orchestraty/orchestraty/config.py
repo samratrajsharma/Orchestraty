@@ -14,6 +14,8 @@ changes. A missing or unreadable file means the defaults.
 * ``wake``: a strong note for a session that is waiting for its user wakes it. Off by default;
   needs the wake hook, which ``orch config wake on`` installs.
 * ``settings``: the Claude Code settings file ``orch init`` installed the hooks in.
+* ``installed``: every agent config file ``orch init`` wrote, ``{"agent": ..., "path": ...}``,
+  so that ``orch uninstall`` finds them all, wherever they are.
 * ``acted_minutes``: how long after its delivery a note can count as acted on in ``orch stats``
   (a proxy: the session edited a file the note cites, or its finding stopped holding).
 * ``declare_minutes``: how long what an agent declares it is about to change (the MCP tool
@@ -36,7 +38,7 @@ import os
 DEFAULTS = {"repos": [], "idle_seconds": 600, "session_timeout": 1800, "level0_seconds": 5,
             "steer": False, "wake": False, "settings": "", "acted_minutes": 30,
             "declare_minutes": 120, "remote": {}, "remote_fetch_minutes": 5, "claim_minutes": 120, "together": {},
-            "typescript": {}}
+            "typescript": {}, "installed": []}
 
 
 def _same(a, b):
@@ -67,6 +69,17 @@ def save(state, cfg):
         json.dump(cfg, fh, indent=2)
         fh.write("\n")
     os.replace(tmp, state.config)
+
+
+def remember_install(state, agent, path):
+    """Note that orch init wrote an agent's config file at `path` (once)."""
+    cfg = load(state)
+    entry = {"agent": agent, "path": os.path.abspath(path)}
+    if any(isinstance(e, dict) and e.get("agent") == agent and isinstance(e.get("path"), str) and _same(e["path"], path)
+           for e in cfg["installed"]):
+        return
+    cfg["installed"] = cfg["installed"] + [entry]
+    save(state, cfg)
 
 
 def is_watched(cfg, common_dir):

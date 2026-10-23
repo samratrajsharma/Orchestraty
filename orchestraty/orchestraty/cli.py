@@ -99,6 +99,7 @@ def _remember_settings(state, path):
     if cfg["settings"] != path:
         cfg["settings"] = path
         config.save(state, cfg)
+    config.remember_install(state, "claude", path)
 
 
 def _init_for_plugin(args, state, path, python, wake, current, plugin_id):
@@ -210,6 +211,8 @@ def _init_agent(args):
         changed, saved = hooks.install_agent(state, adapter, path, python)
     except hooks.Refused as exc:
         return _refuse("init", exc)
+    from orchestraty import config
+    config.remember_install(state, args.agent, path)
     if not changed:
         print(f"Already installed in {path}; nothing changed.")
     else:
@@ -983,6 +986,12 @@ def _plugin_left(switched, found):
               f"claude plugin uninstall {found[0]}.")
 
 
+def cmd_uninstall(args):
+    from orchestraty import uninstall
+    return uninstall.run(State(), keep_state=args.keep_state, assume_yes=args.yes,
+                         ask=lambda question: confirm(question, False))
+
+
 def _restore_agent(args):
     """orch restore --agent codex|antigravity: take our hooks out (others kept), or put a backup back."""
     from orchestraty import adapters
@@ -1057,6 +1066,19 @@ def build_parser():
     restore.add_argument("--from-backup", action="store_true",
                          help="put back the agent's file as it was before the last orch init")
     restore.set_defaults(handler=cmd_restore)
+
+    uninstall = commands.add_parser(
+        "uninstall", help="take out everything Orchestraty added, then its state folder",
+        description="Take out everything Orchestraty added: every agent's hook entries, the mod, the plugin's "
+                    "hooks (and the plugin, with Claude Code's own command), the git hook chain in every watched "
+                    "repository and the cloud branches' shadows; then, after asking, the state folder. Prints what "
+                    "it will do first, leaves every entry that is not Orchestraty's, puts back the backups orch init "
+                    "made where that loses nothing (or where you say so), and changes nothing when run again.")
+    uninstall.add_argument("--keep-state", action="store_true",
+                           help="keep the state folder: the record, the backups and the settings")
+    uninstall.add_argument("--yes", action="store_true",
+                           help="do not ask; a file that changed since orch init keeps its changes")
+    uninstall.set_defaults(handler=cmd_uninstall)
 
     watch = commands.add_parser("watch", help="compare the sessions of this repository",
                                 description="Watch a repository: its sessions are recorded and compared.")
