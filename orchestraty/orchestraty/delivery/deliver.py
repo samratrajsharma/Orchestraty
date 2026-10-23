@@ -302,8 +302,11 @@ class Deliverer:
                 agents[sid] = row["agent"] if row else ""
             numbers = [claims.from_note_key(n["finding_key"]) for n in pending]
             held = [self.record.claim(x) for x in numbers if x is not None]
-            data = adapters.output(agents[sid], pending[0]["kind"], text,
-                                   steer=steer and None in numbers,          # a finding's note, not only claims'
+            # steer stops an edit only for a strong finding's note: never for a claim's, nor for a
+            # medium one (an O3 about TypeScript, whose uses are heuristic)
+            strong = steer and any((self.record.finding(n["finding_key"]) or {}).get("strength") == "strong"
+                                   for n, x in zip(pending, numbers) if x is None)
+            data = adapters.output(agents[sid], pending[0]["kind"], text, steer=strong,
                                    ask=any(c and c["hard"] for c in held))
             if slots.write(_abs(self.state, slot_rel), data):
                 self.record.mark_written([n["id"] for n in pending], self.now_ns())
