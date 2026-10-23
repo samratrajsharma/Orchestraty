@@ -31,6 +31,10 @@ Phase 1, on top of the coordination core already in place (the hook script and i
 - `orch handoff` packages a session's work; `orch resume` starts an agent on it in a new worktree.
 - Merge-order advice, in `orch status` and `orch merge-order`.
 
+**Seeing it**
+
+- `orch ui`, a dashboard in your browser for trying Orchestraty: served on 127.0.0.1 only, through a link that works once, read-only toward the record. `orch ui --demo` plays the whole loop with two scripted sessions in a temporary sandbox.
+
 **Measuring and feedback**
 
 - `orch findings`, `orch label` (real, harmless or false) and `orch missed`.
