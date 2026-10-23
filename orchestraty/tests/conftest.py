@@ -38,6 +38,7 @@ def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.setenv("ORCH_NO_COORDINATOR", "1")       # hooks start no coordinator unless a test asks
+    monkeypatch.delenv("CLAUDE_CODE_PLUGIN_CACHE_DIR", raising=False)   # plugins: under the config folder above
     work = tmp_path / "cwd"
     work.mkdir()
     monkeypatch.chdir(work)

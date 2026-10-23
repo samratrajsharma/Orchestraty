@@ -1,0 +1,120 @@
+{
+  "description": "Orchestraty's hooks: each runs the hook script orch init installs in Orchestraty's state folder, with the interpreter orch init names in hooks/plugin.txt there. Without that file they do nothing.",
+  "modules": [
+    "./register.js"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=$ORCH_HOME; if [ -z \"$s\" ]; then if [ \"$OS\" = Windows_NT ]; then s=$USERPROFILE/.orchestraty; else case $XDG_STATE_HOME in /*) s=$XDG_STATE_HOME/orchestraty;; *) s=$HOME/.local/state/orchestraty;; esac; fi; fi; { IFS= read -r p; } 2>/dev/null <\"$s/hooks/plugin.txt\" && [ -x \"$p\" ] && [ -f \"$s/hooks/hook.py\" ] && exec \"$p\" -S -I \"$s/hooks/hook.py\" claude SessionStart; exit 0",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=$ORCH_HOME; if [ -z \"$s\" ]; then if [ \"$OS\" = Windows_NT ]; then s=$USERPROFILE/.orchestraty; else case $XDG_STATE_HOME in /*) s=$XDG_STATE_HOME/orchestraty;; *) s=$HOME/.local/state/orchestraty;; esac; fi; fi; { IFS= read -r p; } 2>/dev/null <\"$s/hooks/plugin.txt\" && [ -x \"$p\" ] && [ -f \"$s/hooks/hook.py\" ] && exec \"$p\" -S -I \"$s/hooks/hook.py\" claude SessionEnd; exit 0",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=$ORCH_HOME; if [ -z \"$s\" ]; then if [ \"$OS\" = Windows_NT ]; then s=$USERPROFILE/.orchestraty; else case $XDG_STATE_HOME in /*) s=$XDG_STATE_HOME/orchestraty;; *) s=$HOME/.local/state/orchestraty;; esac; fi; fi; { IFS= read -r p; } 2>/dev/null <\"$s/hooks/plugin.txt\" && [ -x \"$p\" ] && [ -f \"$s/hooks/hook.py\" ] && exec \"$p\" -S -I \"$s/hooks/hook.py\" claude UserPromptSubmit; exit 0",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=$ORCH_HOME; if [ -z \"$s\" ]; then if [ \"$OS\" = Windows_NT ]; then s=$USERPROFILE/.orchestraty; else case $XDG_STATE_HOME in /*) s=$XDG_STATE_HOME/orchestraty;; *) s=$HOME/.local/state/orchestraty;; esac; fi; fi; { IFS= read -r p; } 2>/dev/null <\"$s/hooks/plugin.txt\" && [ -x \"$p\" ] && [ -f \"$s/hooks/hook.py\" ] && exec \"$p\" -S -I \"$s/hooks/hook.py\" claude PreToolUse; exit 0",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=$ORCH_HOME; if [ -z \"$s\" ]; then if [ \"$OS\" = Windows_NT ]; then s=$USERPROFILE/.orchestraty; else case $XDG_STATE_HOME in /*) s=$XDG_STATE_HOME/orchestraty;; *) s=$HOME/.local/state/orchestraty;; esac; fi; fi; { IFS= read -r p; } 2>/dev/null <\"$s/hooks/plugin.txt\" && [ -x \"$p\" ] && [ -f \"$s/hooks/hook.py\" ] && exec \"$p\" -S -I \"$s/hooks/hook.py\" claude PostToolUse; exit 0",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=$ORCH_HOME; if [ -z \"$s\" ]; then if [ \"$OS\" = Windows_NT ]; then s=$USERPROFILE/.orchestraty; else case $XDG_STATE_HOME in /*) s=$XDG_STATE_HOME/orchestraty;; *) s=$HOME/.local/state/orchestraty;; esac; fi; fi; { IFS= read -r p; } 2>/dev/null <\"$s/hooks/plugin.txt\" && [ -x \"$p\" ] && [ -f \"$s/hooks/hook.py\" ] && exec \"$p\" -S -I \"$s/hooks/hook.py\" claude PostToolUseFailure; exit 0",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=$ORCH_HOME; if [ -z \"$s\" ]; then if [ \"$OS\" = Windows_NT ]; then s=$USERPROFILE/.orchestraty; else case $XDG_STATE_HOME in /*) s=$XDG_STATE_HOME/orchestraty;; *) s=$HOME/.local/state/orchestraty;; esac; fi; fi; { IFS= read -r p; } 2>/dev/null <\"$s/hooks/plugin.txt\" && [ -x \"$p\" ] && [ -f \"$s/hooks/hook.py\" ] && exec \"$p\" -S -I \"$s/hooks/hook.py\" claude Stop; exit 0",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=$ORCH_HOME; if [ -z \"$s\" ]; then if [ \"$OS\" = Windows_NT ]; then s=$USERPROFILE/.orchestraty; else case $XDG_STATE_HOME in /*) s=$XDG_STATE_HOME/orchestraty;; *) s=$HOME/.local/state/orchestraty;; esac; fi; fi; { IFS= read -r p; IFS= read -r w; } 2>/dev/null <\"$s/hooks/plugin.txt\" && [ \"$w\" = wake ] && [ -x \"$p\" ] && [ -f \"$s/hooks/hook.py\" ] && exec \"$p\" -S -I \"$s/hooks/hook.py\" claude Wake; exit 0",
+            "asyncRewake": true,
+            "timeout": 3600
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=$ORCH_HOME; if [ -z \"$s\" ]; then if [ \"$OS\" = Windows_NT ]; then s=$USERPROFILE/.orchestraty; else case $XDG_STATE_HOME in /*) s=$XDG_STATE_HOME/orchestraty;; *) s=$HOME/.local/state/orchestraty;; esac; fi; fi; { IFS= read -r p; } 2>/dev/null <\"$s/hooks/plugin.txt\" && [ -x \"$p\" ] && [ -f \"$s/hooks/hook.py\" ] && exec \"$p\" -S -I \"$s/hooks/hook.py\" claude SubagentStop; exit 0",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "s=$ORCH_HOME; if [ -z \"$s\" ]; then if [ \"$OS\" = Windows_NT ]; then s=$USERPROFILE/.orchestraty; else case $XDG_STATE_HOME in /*) s=$XDG_STATE_HOME/orchestraty;; *) s=$HOME/.local/state/orchestraty;; esac; fi; fi; { IFS= read -r p; } 2>/dev/null <\"$s/hooks/plugin.txt\" && [ -x \"$p\" ] && [ -f \"$s/hooks/hook.py\" ] && exec \"$p\" -S -I \"$s/hooks/hook.py\" claude StopFailure; exit 0",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

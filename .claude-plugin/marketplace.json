@@ -1,0 +1,14 @@
+{
+  "name": "orchestraty",
+  "owner": {
+    "name": "Orchestraty"
+  },
+  "description": "Orchestraty's Claude Code plugin: its hooks, mod, MCP server and skill.",
+  "plugins": [
+    {
+      "name": "orchestraty",
+      "source": "./plugins/claude-code",
+      "description": "Keeps parallel coding-agent sessions on one repository aware of each other. Needs Orchestraty installed and orch init run."
+    }
+  ]
+}
