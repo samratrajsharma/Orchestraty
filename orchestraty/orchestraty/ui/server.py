@@ -172,7 +172,23 @@ class Handler(BaseHTTPRequestHandler):
         super().end_headers()
         self._sent = set()
 
+    def _drain(self):
+        """Read what is left of a POST's body (up to MAX_BODY) before answering it. Closing a
+        connection with unread data resets it, and the client may then lose the answer."""
+        try:
+            left = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return
+        if 0 < left <= MAX_BODY:
+            try:
+                self.rfile.read(left)
+            except OSError:
+                pass
+
     def _respond(self, code, body=b"", ctype=None, headers=()):
+        if self.command == "POST" and not getattr(self, "_body_read", False):
+            self._body_read = True
+            self._drain()                              # a refusal comes before the body was read
         self.send_response(code)
         if ctype:
             self.send_header("Content-Type", ctype)
@@ -332,6 +348,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(411, "say how long the body is")
         if not 0 <= length <= MAX_BODY:
             return self._error(413, "the body is too long")
+        self._body_read = True
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
