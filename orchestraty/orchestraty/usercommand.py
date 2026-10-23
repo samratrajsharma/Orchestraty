@@ -6,9 +6,9 @@ git's ``GIT_DIR`` and the rest would point git inside the command at another rep
 the time runs out, the command and everything it started are stopped: on POSIX the command runs
 in a session of its own, which is killed whole; on Windows, in a process group of its own,
 which ``taskkill /T`` ends. No console window opens on Windows. What comes back is the exit
-code (None on a timeout), the seconds it took and the last lines of its output, each cut to a
-length and with control characters taken out: output is the command's, and anything may be in
-it, so it is shown only as that.
+code (None on a timeout), the seconds it took and the last lines of its output (and, when asked,
+the first ones), each cut to a length and with control characters taken out: output is the
+command's, and anything may be in it, so it is shown only as that.
 """
 import os
 import signal
@@ -38,6 +38,12 @@ def last_lines(data, count=MAX_LINES):
     return [x for x in lines if x.strip()][-count:]
 
 
+def first_lines(data, count=MAX_LINES):
+    """The first non-empty lines of a command's output (bytes), cleaned."""
+    lines = [clean_line(x) for x in data.decode("utf-8", "replace").splitlines()]
+    return [x for x in lines if x.strip()][:count]
+
+
 def _stop(proc):
     """Stop a command that ran out of time, and everything it started."""
     try:
@@ -54,8 +60,9 @@ def _stop(proc):
         pass
 
 
-def run(command, cwd, timeout, env=None):
-    """{"command", "exit_code" (None when it timed out), "timed_out", "seconds", "last_lines"}."""
+def run(command, cwd, timeout, env=None, first=0):
+    """{"command", "exit_code" (None when it timed out), "timed_out", "seconds", "last_lines"};
+    with `first`, also "first_lines", the first that many non-empty lines, cleaned."""
     started = time.monotonic()
     kwargs = {"creationflags": _NO_WINDOW | _GROUP} if os.name == "nt" else {"start_new_session": True}
     try:
@@ -74,5 +81,8 @@ def run(command, cwd, timeout, env=None):
             out, _ = proc.communicate(timeout=30)
         except subprocess.TimeoutExpired:           # a child kept the output open: give up on it
             out = b""
-    return {"command": command, "exit_code": None if timed_out else proc.returncode, "timed_out": timed_out,
-            "seconds": round(time.monotonic() - started, 1), "last_lines": last_lines(out or b"")}
+    result = {"command": command, "exit_code": None if timed_out else proc.returncode, "timed_out": timed_out,
+              "seconds": round(time.monotonic() - started, 1), "last_lines": last_lines(out or b"")}
+    if first:
+        result["first_lines"] = first_lines(out or b"", first)
+    return result
