@@ -270,7 +270,10 @@ def _stop(state, seconds):
         if lock.acquire():
             lock.release()
             return True
-        touch(state.stop)
+        try:
+            touch(state.stop)
+        except OSError:              # Windows: the coordinator is removing it; the next round asks again
+            pass
         time.sleep(0.1)
     return False
 
