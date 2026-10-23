@@ -88,7 +88,7 @@ def everything(scene):
 def test_everything_orchestraty_added_goes_and_the_rest_stays(scene, git, capsys):
     s = scene
     script = str(Path(s["state"]) / "hooks" / "hook.py")
-    assert script in s["claude"].read_text(encoding="utf-8")
+    assert json.dumps(script)[1:-1] in s["claude"].read_text(encoding="utf-8")          # as JSON writes it
     assert "orch-hooks" in git(s["repo"], "config", "core.hooksPath")
     assert cli.main(["uninstall", "--yes"]) == 0
     out = capsys.readouterr().out
