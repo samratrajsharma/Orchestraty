@@ -412,8 +412,10 @@ class TypeScript:
         content = (base, content)
         with self._lock:
             result = self._results.get(sid)
-        tsc = compiler(worktree)
-        why = "no TypeScript compiler (node_modules/.bin/tsc, or tsc on PATH)" if tsc is None else project_problem(worktree)
+        why = project_problem(worktree)              # the project's reason first: the same on every machine
+        tsc = None if why else compiler(worktree)
+        if not why and tsc is None:
+            why = "no TypeScript compiler (node_modules/.bin/tsc, or tsc on PATH)"
         if why:
             if result is None or result["key"] != content or result["source"] != "fallback":
                 changes, unread = fallback_changes(worktree, base, ts_files)
