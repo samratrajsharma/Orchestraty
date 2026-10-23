@@ -5,4 +5,4 @@ chain), the coordinator, the live map, the overlap rules and delivery all work; 
 adapters for other agents come later.
 """
 
-__version__ = "0.0.1.dev0"
+__version__ = "0.0.1.dev0"        # the one place the version is kept (pyproject.toml reads it)
