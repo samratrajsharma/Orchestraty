@@ -48,7 +48,7 @@ from __future__ import annotations
 import ast
 
 from .graph import _Resolver
-from .parsing import _block_suites, _BLOCK_STMTS, _import_binds, _names_in
+from .parsing import _block_suites, _BLOCK_STMTS, _import_binds, _names_in, _statements
 
 EXACT, HEURISTIC = "exact", "heuristic"
 UNKNOWN = "{?}"                          # a part of a path that could not be worked out
@@ -68,6 +68,9 @@ CLASSES = {"fastapi.FastAPI": "fastapi", "fastapi.applications.FastAPI": "fastap
 DJANGO = {"django.urls.path": "path", "django.urls.re_path": "re_path", "django.conf.urls.url": "re_path",
           "django.urls.include": "include", "django.conf.urls.include": "include"}
 MOUNTS = ("include_router", "register_blueprint", "mount")
+# Text a file must hold to declare a route fact: a class or name above, or a decorator's call
+MARKERS = ("FastAPI", "APIRouter", "Flask", "Blueprint", "include_router", "register_blueprint", ".mount(",
+           "urlpatterns", "ROOT_URLCONF")
 NOT_ROUTERS = frozenset(("cache", "lru_cache", "functools", "memoize", "redis"))   # @cache.get("k")
 MAX_DEPTH = 8                            # mounts or includes followed from a route up to its app
 MAX_HOPS = 3                             # re-exports followed from an import to an app or router
@@ -95,6 +98,11 @@ def _single_assign(st):
     return None, None
 
 
+def _framework(b):
+    """Whether an import binding names something of fastapi, flask or django."""
+    return _binding(b) and (b[1] or (b[2] if len(b) > 2 else "")).split(".")[0] in ("fastapi", "flask", "django")
+
+
 def _methods(node):
     """The methods a literal list (tuple, set) of strings gives, upper case; UNKNOWN_METHOD else."""
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)) and node.elts and all(
@@ -105,18 +113,35 @@ def _methods(node):
 
 class _Fn:
     """A function's own names: how often it binds each (parameters, assignments, imports,
-    nested definitions), the apps and routers it makes, and what its own imports bind."""
+    nested definitions), the apps and routers it makes, and what its own imports bind. The
+    names are read the first time they are asked for: most functions never are."""
 
     def __init__(self, qual, node, pkg):
         self.qual = qual
-        self.counts, self.objects, self.bindings = {}, {}, {}
-        args = node.args
+        self.objects = {}
+        self._node, self._pkg, self._counts, self._bindings = node, pkg, None, None
+
+    @property
+    def counts(self):
+        if self._counts is None:
+            self._read()
+        return self._counts
+
+    @property
+    def bindings(self):
+        if self._bindings is None:
+            self._read()
+        return self._bindings
+
+    def _read(self):
+        self._counts, self._bindings = {}, {}
+        args = self._node.args
         for a in args.posonlyargs + args.args + args.kwonlyargs + [x for x in (args.vararg, args.kwarg) if x]:
             self._bind(a.arg)
-        self._visit(node.body, pkg)
+        self._visit(self._node.body, self._pkg)
 
     def _bind(self, name):
-        self.counts[name] = self.counts.get(name, 0) + 1
+        self._counts[name] = self._counts.get(name, 0) + 1
 
     def _visit(self, body, pkg):
         for st in body:
@@ -126,7 +151,7 @@ class _Fn:
                 for name, b in _import_binds(st, pkg):
                     if name != "*":
                         self._bind(name)
-                        self.bindings[name] = b
+                        self._bindings[name] = b
             else:
                 if isinstance(st, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
                     for t in (st.targets if isinstance(st, ast.Assign) else [st.target]):
@@ -162,6 +187,12 @@ class _Facts:
         self.routes, self.mounts, self.urls, self.root_urlconf = [], [], [], []
         self.lists = {}                 # module-level name -> URL patterns, for include(name)
         self.fns = {}                   # id(function node) -> _Fn
+        # the names an import anywhere in the file binds to something of fastapi, flask or django:
+        # only a call through one of them can make an app or a router
+        self.framework_names = {name for name, b in self.bindings.items() if _framework(b)}
+        for st in _statements(tree.body):
+            if isinstance(st, (ast.Import, ast.ImportFrom)):
+                self.framework_names.update(name for name, b in _import_binds(st, pkg) if name != "*" and _framework(b))
         for st in tree.body:
             name, value = _single_assign(st)
             if (name and isinstance(value, ast.Constant) and isinstance(value.value, str)
@@ -301,6 +332,11 @@ class _Facts:
         name, call = _single_assign(st)
         if not (name and isinstance(call, ast.Call)):
             return
+        base = call.func
+        while isinstance(base, ast.Attribute):
+            base = base.value
+        if not (isinstance(base, ast.Name) and base.id in self.framework_names):
+            return
         kind = CLASSES.get(self.origin(call.func, scopes) or "")
         if kind is None:
             return
@@ -433,9 +469,13 @@ class _Facts:
         return {"ref": r} if r else {"expr": _source(arg) if arg is not None else ""}
 
 
-def file_facts(tree, mscope, pkg):
+def file_facts(tree, mscope, pkg, source=None):
     """The route facts of one parsed Python file ({} when it has none), from its syntax tree and
-    the module scope the parser worked out. They are kept in ParsedFile.routes."""
+    the module scope the parser worked out. They are kept in ParsedFile.routes. A file whose
+    source holds none of the text a fact needs is not walked."""
+    if source is not None and not (any(m in source for m in MARKERS)
+                                   or ("@" in source and any(f".{a}(" in source for a in ROUTE_ATTRS))):
+        return {}
     return _Facts(tree, mscope, pkg).result()
 
 
