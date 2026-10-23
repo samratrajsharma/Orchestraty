@@ -284,6 +284,11 @@ def cmd_unwatch(args):
     return 0
 
 
+def cmd_doctor(args):
+    from orchestraty import doctor
+    return doctor.run(State(), os.getcwd(), index=not args.no_index)
+
+
 def cmd_config(args):
     from orchestraty import config
     state = State()
@@ -1164,6 +1169,14 @@ def build_parser():
     cfg.add_argument("name", nargs="?", choices=["steer", "wake"])
     cfg.add_argument("value", nargs="?", choices=["on", "off"])
     cfg.set_defaults(handler=cmd_config)
+
+    doctor = commands.add_parser("doctor", help="check what Orchestraty needs, with a fix for each problem",
+                                 description="Check the Python, the state folder, the hook script and each agent's "
+                                             "hooks, that the coordinator starts, git's version and the engine, "
+                                             "and time the first index of the repository here. Each problem comes "
+                                             "with its fix; the exit code is 1 when there is one.")
+    doctor.add_argument("--no-index", action="store_true", help="do not time the first index of this repository")
+    doctor.set_defaults(handler=cmd_doctor)
 
     coordinator = commands.add_parser("coordinator", help="run or stop the coordinator by hand",
                                       description="Hooks start the coordinator when needed; these are for "
