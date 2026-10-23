@@ -32,7 +32,8 @@ starting, passes before any of its code runs. The tests measure it from outside 
 (``tests/test_agent_hooks.py``).
 
 ``summary`` keeps counts only: no path, name, symbol, session id, date or text of the user's,
-so it can be read in full before it is shared. Orchestraty never sends it anywhere.
+so it can be read in full before it is shared. ``feedback`` (``orch feedback``) is the summary
+and the user's own comment, as typed. Orchestraty never sends either anywhere.
 """
 import calendar
 import math
@@ -46,6 +47,8 @@ from orchestraty.feedback import VERDICTS
 
 STATS_SCHEMA = 1
 SUMMARY_SCHEMA = 1
+FEEDBACK_SCHEMA = 1
+MAX_COMMENT = 4000
 NS = 1_000_000_000
 DAY = 86400
 WEEK = 7
@@ -262,6 +265,13 @@ def summary(data):
             "missed": int(w["missed"])})
     return {"schema": SUMMARY_SCHEMA, "kind": "orchestraty usage summary", "version": str(__version__),
             "days": int(data["days"]), "acted_minutes": int(data["acted_minutes"]), "weeks": weeks}
+
+
+def feedback(data, comment):
+    """What orch feedback shows: the user's own comment, as typed (up to MAX_COMMENT characters),
+    and the summary of the stats, counts only."""
+    return {"schema": FEEDBACK_SCHEMA, "kind": "orchestraty feedback", "comment": str(comment or "").strip()[:MAX_COMMENT],
+            "summary": summary(data)}
 
 
 def _some(counts):

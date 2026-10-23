@@ -2,6 +2,7 @@
 import hashlib
 import json
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -294,3 +295,63 @@ def test_notes_per_session_per_day_and_what_was_held_back(state, tmp_path, capsy
     assert "  held back   1 weak finding (status only), 1 latent finding, 1 note already heard, 1 withdrawn" in out
     week = stats.summary(stats.collect(state, now=now))["weeks"][0]["notes"]
     assert week["per_session_day"]["max"] == 2 and week["held_back"]["already_heard"] == 1
+
+
+# --------------------------------------------------------------------------------------- #
+# orch feedback: the summary and the user's comment, shown first, sent nowhere
+# --------------------------------------------------------------------------------------- #
+class Terminal:
+    def isatty(self):
+        return True
+
+
+@pytest.fixture
+def no_network(monkeypatch):
+    import socket
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("orch feedback opened a connection")
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket, "create_connection", refuse)
+
+
+def test_feedback_is_the_summary_and_the_comment_typed_at_the_prompt(state, capsys, monkeypatch, no_network):
+    now = time.time()
+    plant(state, now)
+    typed = iter(["Two notes came just in time.", "  One was about a file I had left.  ", ""])
+    monkeypatch.setattr(sys, "stdin", Terminal())
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(typed))
+    assert cli.main(["feedback"]) == 0
+    captured = capsys.readouterr()
+    assert "An empty line ends it." in captured.err
+    printed = captured.out
+    shown = json.loads(printed[:printed.rindex("}") + 1])
+    assert shown["kind"] == "orchestraty feedback" and shown["schema"] == 1
+    assert shown["comment"] == "Two notes came just in time.\n  One was about a file I had left."
+    assert shown["summary"] == stats.summary(stats.collect(state, days=14, now=now)) and shown["summary"]["days"] == 14
+    assert shown["summary"]["weeks"][0]["notes"]["acted_on"] == 1
+    lower = printed.lower()
+    assert not [word for word in PLANTED if word in lower]                # counts only, besides the comment
+    assert "Not saved and not sent" in printed and "sends nothing anywhere" in printed
+
+
+def test_feedback_is_saved_only_where_the_user_says_once_they_say_yes(state, capsys, tmp_path, no_network):
+    plant(state, time.time())
+    out = tmp_path / "feedback.json"
+    assert cli.main(["feedback", "--comment", "fine", "--out", str(out)]) == 1      # no terminal to ask in
+    captured = capsys.readouterr()
+    assert "--comment" not in captured.err and "Not saved." in captured.out and not out.exists()
+    assert cli.main(["feedback", "--comment", "fine", "--out", str(out), "--yes"]) == 0
+    printed = capsys.readouterr().out
+    assert json.loads(out.read_text(encoding="utf-8")) == json.loads(printed[:printed.rindex("}") + 1])
+    assert json.loads(out.read_text(encoding="utf-8"))["comment"] == "fine"
+    assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == ["feedback.json"]
+
+
+def test_feedback_without_a_terminal_or_a_record(state, capsys, no_network):
+    assert cli.main(["feedback", "--days", "7"]) == 0
+    captured = capsys.readouterr()
+    assert "No terminal to type a comment in" in captured.err
+    shown = json.loads(captured.out[:captured.out.rindex("}") + 1])
+    assert shown["comment"] == "" and len(shown["summary"]["weeks"]) == 1
+    assert not Path(state.record).exists()

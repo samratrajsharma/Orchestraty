@@ -696,17 +696,56 @@ def cmd_stats(args):
     sys.stdout.write(text)                              # first, so it is read before it is saved
     if not args.out:
         return 0
-    path = os.path.abspath(args.out)
-    if not confirm(f"Save this summary to {path}?", args.yes):
+    return _save_shown("stats", text, args.out, args.yes, "this summary")
+
+
+def _save_shown(command, text, out, assume_yes, what):
+    """Save text the user has just been shown to the file they named, once they say yes."""
+    path = os.path.abspath(out)
+    if not confirm(f"Save {what} to {path}?", assume_yes):
         print("Not saved.")
         return 1
     try:
         with open(path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
     except OSError as exc:
-        return _refuse("stats", exc)
+        return _refuse(command, exc)
     print(f"Saved to {path}. Orchestraty sends it nowhere; sharing it is up to you.")
     return 0
+
+
+def _typed_comment():
+    """The user's comment, typed at the terminal: lines until an empty one, or the end of input."""
+    print("Your comment, in your own words: what helped, what got in the way, what was missing. An empty line "
+          "ends it.", file=sys.stderr)
+    lines = []
+    while True:
+        try:
+            line = input("> ")
+        except EOFError:
+            break
+        if not line.strip():
+            break
+        lines.append(line.rstrip())
+    return "\n".join(lines)
+
+
+def cmd_feedback(args):
+    from orchestraty import stats
+    comment = args.comment
+    if comment is None:
+        if sys.stdin and sys.stdin.isatty():
+            comment = _typed_comment()
+        else:
+            print("No terminal to type a comment in: --comment \"...\" adds one.", file=sys.stderr)
+            comment = ""
+    text = json.dumps(stats.feedback(stats.collect(State(), days=args.days), comment), indent=2) + "\n"
+    sys.stdout.write(text)                              # first, so it is read before it is saved
+    if not args.out:
+        print("Not saved and not sent: copy it from here, or run again with --out FILE to save it. Orchestraty "
+              "sends nothing anywhere.")
+        return 0
+    return _save_shown("feedback", text, args.out, args.yes, "this feedback")
 
 
 def _days(text):
@@ -1187,6 +1226,17 @@ def build_parser():
     stats.add_argument("--out", metavar="FILE", help="with --summary: save it to FILE once you have seen it")
     stats.add_argument("--yes", action="store_true", help="save without asking")
     stats.set_defaults(handler=cmd_stats)
+
+    feedback = commands.add_parser(
+        "feedback", help="your feedback: the stats summary and your comment, shown first; sends nothing",
+        description="Your feedback for whoever asked you to try Orchestraty: the summary of orch stats (counts "
+                    "only) and your own comment, typed at a prompt. Prints it all; saves it only to the file you "
+                    "name, once you have seen it; sends nothing anywhere: sharing it is up to you.")
+    feedback.add_argument("--out", metavar="FILE", help="save it to FILE once you have seen it")
+    feedback.add_argument("--days", type=_days, default=14, metavar="N", help="the last N days (default 14)")
+    feedback.add_argument("--comment", metavar="TEXT", help="your comment, instead of typing it at the prompt")
+    feedback.add_argument("--yes", action="store_true", help="save without asking")
+    feedback.set_defaults(handler=cmd_feedback)
 
     mcp = commands.add_parser("mcp", help="the MCP server agents ask before they edit",
                               description="Run Orchestraty's MCP server over stdio (an agent starts it in its "

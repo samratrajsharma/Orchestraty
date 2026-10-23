@@ -27,6 +27,7 @@ The main package: the `orch` command, the hook shims, the coordinator, the live 
 | `orch label <number\|key> real\|harmless\|false [--why "..."]` | Your verdict on a finding: real, harmless or false, with your reason if you give one. |
 | `orch missed "<what should have been noted>" [--session ID]` | Reports a note that should have come; `--session` takes a session's id or its first characters. |
 | `orch stats [--days 7] [--json]` | How Orchestraty was used, week by week, from the record (see [Measuring daily use](#measuring-daily-use)). `--json` carries a schema number. `--summary [--out FILE]` gives an anonymous summary: counts only, shown before it is saved. |
+| `orch feedback [--out FILE] [--days 14] [--comment "..."]` | Your feedback: the `orch stats --summary` counts for the last `--days` days and your own comment, typed at a prompt (an empty line ends it). It prints all of it, saves it only to the file `--out` names once you say yes (`--yes` skips the question), and sends nothing anywhere: sharing it is up to you. |
 | `orch claim <target> [--hard] [--for 2h] [--session ID]` | Reserves a file, a folder or a Python function or class (`path::name`, or `module.name`, resolved through the engine) for a session: by default the live session in this worktree, and when several work here it asks which; `--session` takes a session's id or its first characters. Other sessions are told before they edit there; `--hard` makes their edit wait for their user's answer, where their agent can ask. It holds for `--for` (`30m`, `2h`, `1h30m`, up to `24h`; by default `claim_minutes`, 120, in `config.json`). See [Claims](#claims). |
 | `orch claims` | The claims that hold in each watched repository, with their numbers. Reads the record without changing it. |
 | `orch release <number\|target>` | Ends a claim before it expires: the one with that number, or every claim on that file, folder or function in this repository. |
@@ -79,7 +80,7 @@ The hook's own time is not counted: the hook would have to read the clock and wr
 
 **Acted on is a proxy**, worked out from the record only. A note handed to its agent counts as acted on when, within `acted_minutes` of its delivery (30 by default; set it in `config.json`), either the receiving session edited a file the note cites (the file its finding names, or one holding a function it names), or the finding stopped holding while that session was live. It says the agent did something the note may have caused, not that the note caused it.
 
-`orch stats --summary` keeps counts only: no path, name, symbol, session id, date or text of yours. It prints first, so you read all of it; `--out FILE` then saves it once you say yes (`--yes` skips the question). Orchestraty never sends it anywhere.
+`orch stats --summary` keeps counts only: no path, name, symbol, session id, date or text of yours. It prints first, so you read all of it; `--out FILE` then saves it once you say yes (`--yes` skips the question). Orchestraty never sends it anywhere. `orch feedback` is the same summary (for 14 days by default) with your own comment added as you typed it.
 
 ## MCP tools (level 1)
 
