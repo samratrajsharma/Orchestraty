@@ -4,8 +4,10 @@
 # - Every push and pull request: the quick check, on Windows and Linux with Python 3.12; the
 #   TypeScript helper's tests (helpers/typescript) with Node 20 on both; the TypeScript
 #   contract tests that run the compiler, with the TypeScript that orchestraty/tests/fixtures/ts
-#   pins, on both; and the one distribution, its sdist and wheel built on Linux, with the
-#   smoke test of that wheel in a clean virtual environment on Windows and Linux.
+#   pins, on both; the editor extension's tests (editors/vscode) with Node 22 on both, and its
+#   .vsix packaged on Linux and kept as a build artifact (nothing is published); and the one
+#   distribution, its sdist and wheel built on Linux, with the smoke test of that wheel in a
+#   clean virtual environment on Windows and Linux.
 # - Weekly, on manual runs and on release tags (v*): the full matrix, which adds Python 3.9
 #   to 3.11, macOS (the smoke test too) and the older-Python runs of the experiments.
 #   Releases themselves are release.yml's.
@@ -129,6 +131,71 @@ jobs:
         working-directory: .
         run: |
           leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes; git status --porcelain -- helpers)"
+          if [ -n "$leftovers" ]; then
+            echo "The tests left files in the working copy:"
+            echo "$leftovers"
+            exit 1
+          fi
+
+  # The VS Code and Cursor extension: its unit tests and the extension against a stand-in for
+  # the editor's API, on both systems; the .vsix packaged on Linux and kept for a week. The
+  # packaging tool needs Node 22. Python runs the tests' checks against the orchestraty package.
+  editor:
+    name: editor extension (${{ matrix.os }}, Node 22)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install the dev dependencies from the lockfile
+        run: npm ci
+
+      - name: Build and run the tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: npm test
+
+      - name: Package the .vsix
+        if: runner.os == 'Linux'
+        run: npx vsce package --no-dependencies --skip-license --out orchestraty.vsix
+
+      - name: Keep the .vsix
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: vsix
+          path: editors/vscode/orchestraty.vsix
+          if-no-files-found: error
+          retention-days: 7
+
+      # The build output, the .vsix and node_modules are ignored; nothing else may be left.
+      - name: Check that the tests left no files behind
+        shell: bash
+        working-directory: .
+        run: |
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes; git status --porcelain -- editors)"
           if [ -n "$leftovers" ]; then
             echo "The tests left files in the working copy:"
             echo "$leftovers"
