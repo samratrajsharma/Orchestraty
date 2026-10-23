@@ -187,6 +187,32 @@ def test_django_with_no_root_urlconf_is_heuristic(build_repo):
     assert found[("ANY", "/found/")]["confidence"] == "heuristic"                 # a root of its own, too
 
 
+def unreached(root):
+    """A Django project whose root URLconf is `root`, and two URLconfs it does not include, the
+    one included by the other sorting first."""
+    return {
+        "site/__init__.py": "",
+        "site/settings.py": "ROOT_URLCONF = 'site.urls'\n",
+        "site/urls.py": "from django.urls import path\n" + root,
+        "a_inner/__init__.py": "",
+        "a_inner/urls.py": "from django.urls import path\nurlpatterns = [path('inner/', print)]\n",
+        "z_outer/__init__.py": "",
+        "z_outer/urls.py": "from django.urls import include, path\nurlpatterns = [path('outer/', include('a_inner.urls'))]\n",
+    }
+
+
+def test_a_root_urlconf_that_cannot_be_read_leaves_every_prefix_unknown(build_repo):
+    idx = build_repo(unreached("urlpatterns = build_them()\n"))
+    assert [(r["path"], r["unresolved"]) for r in routes.for_index(idx)] == [
+        ("/{?}/outer/inner/", ["the root URLconf site.urls has no urlpatterns that could be read"])]
+
+
+def test_a_urlconf_no_root_reaches_is_listed_once_under_its_includer(build_repo):
+    idx = build_repo(unreached("urlpatterns = [path('', print)]\n"))
+    assert [(r["path"], r["unresolved"]) for r in routes.for_index(idx)] == [
+        ("/", []), ("/{?}/outer/inner/", ["z_outer/urls.py is included from no root URLconf that is known"])]
+
+
 def test_confidence_says_what_could_not_be_worked_out(build_repo):
     idx = build_repo({
         "svc/__init__.py": "",

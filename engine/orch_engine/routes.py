@@ -20,7 +20,8 @@ What is read:
   ``re_path()`` (and the older ``url()``), with ``include()`` of a module (named by its dotted
   name, or imported), of a list, or of a module-level list of patterns. The root URLconf is
   the module a literal ``ROOT_URLCONF`` names; where none does, each URLconf no other includes
-  is taken as a root, and its routes are heuristic. A Django route serves every method: ``ANY``.
+  is taken as a root, and its routes are heuristic, and where the one it names cannot be read,
+  every URLconf's prefix is unknown. A Django route serves every method: ``ANY``.
 
 An app, router or blueprint is known by the class it is made from (imported from ``fastapi``
 or ``flask``), assigned to a name bound once in its scope: the module, or a function (an app
@@ -670,27 +671,29 @@ class _Linker:
 
     # ---- Django
     def django(self):
+        """Django's routes, from the root URLconf down. With no literal ROOT_URLCONF, each URLconf
+        no other includes is taken as a root (heuristic); one a literal ROOT_URLCONF names but
+        whose urlpatterns cannot be read leaves every prefix unknown."""
         urlconfs = sorted(f for f, fx in self.facts.items() if fx.get("urls"))
         if not urlconfs:
             return []
-        named = sorted({f for fx in self.facts.values() for m in fx.get("root_urlconf", ())
-                        for f in [self.r.module_for(m)] if f in urlconfs})
-        if named:
-            roots, why = named, ()
-        else:
-            included = set()
-            for f in urlconfs:
-                for target in self._includes(f, self.facts[f]["urls"]):
-                    included.add(target)
-            roots = [f for f in urlconfs if f not in included]
-            why = ("no literal ROOT_URLCONF names the root URLconf",)
+        literal = sorted({m for fx in self.facts.values() for m in fx.get("root_urlconf", ())})
+        named = sorted({f for m in literal for f in [self.r.module_for(m)] if f in urlconfs})
+        included = {t for f in urlconfs for t in self._includes(f, self.facts[f]["urls"])}
+        top = [f for f in urlconfs if f not in included]
         out, reached = [], set()
-        for f in roots:
-            out += self.urlconf(f, [], why, reached, (f,))
-        for f in urlconfs:
-            if f not in reached:
-                out += self.urlconf(f, [UNKNOWN + "/"], (f"{f} is included from no root URLconf that is known",),
+        if named or not literal:
+            for f in named or top:
+                out += self.urlconf(f, [], () if named else ("no literal ROOT_URLCONF names the root URLconf",),
                                     reached, (f,))
+
+        def lost(f):
+            if literal and not named:
+                return f"the root URLconf {literal[0]} has no urlpatterns that could be read"
+            return f"{f} is included from no root URLconf that is known"
+        for f in top + urlconfs:                 # what no root reached, those no other URLconf includes first
+            if f not in reached:
+                out += self.urlconf(f, [UNKNOWN + "/"], (lost(f),), reached, (f,))
         return out
 
     def _includes(self, file, entries):

@@ -100,7 +100,7 @@ An app, router or blueprint is known by the class it is made from, imported from
 Each route has one method (one declared with several is several routes), its full path, its handler (the function's symbol id; `f.<locals>.g` for a function defined in another), the file and line it is declared at, and a confidence:
 
 - **exact:** every part of the path is a literal (a string, a name its module binds once to a string, or `+` and f-strings of those), the methods are literals, and the chain from the route up to an app is known;
-- **heuristic:** some part is computed (a setting, a call), or the object a route is declared on, or where a router is included, is not known, or (Django) no literal `ROOT_URLCONF` names the root URLconf. What could not be worked out is `{?}` in the path, and `unresolved` says what and where. A heuristic route is listed, but is never to be used for a strong finding.
+- **heuristic:** some part is computed (a setting, a call), or the object a route is declared on, or where a router is included, is not known, or (Django) no literal `ROOT_URLCONF` names the root URLconf, or the one it names cannot be read. What could not be worked out is `{?}` in the path, and `unresolved` says what and where. A heuristic route is listed, but is never to be used for a strong finding.
 
 `routes.diff(base, head)` compares two lists: routes added, removed, and changed (a route removed and one added with the same handler: its method or path changed). Not read: routes added by calls (`add_url_rule`, `add_api_route`), class-based routers such as Django REST framework's, and routes built in loops.
 
