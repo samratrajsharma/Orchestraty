@@ -7,6 +7,8 @@ files differ from the base commit, keeps those that belong to the session, parse
 Python files as they are on disk and as they were at the base (parses are cached by content),
 and lets the engine's ``diff`` say which functions and classes were added, removed, moved or
 modified; ``contracts.classify`` rates each signature change and says which calls it breaks.
+A session's HTTP routes are compared with its base commit's on demand (``routes``), once the
+base commit's index is ready, since a route's prefix can come from another file.
 
 Which files belong to a session:
 * a file named by one of its edit events is always its own;
@@ -28,6 +30,7 @@ from orch_engine.track import diff, file_fingerprint
 
 from orchestraty import adapters, gitio
 from orchestraty.livemap import changes as git_changes
+from orchestraty.livemap import routes as route_changes
 from orchestraty.livemap.contracts import ANY, BREAKING, COMPATIBLE, NONE, REVIEW, classify, worst
 from orchestraty.livemap.index import BaseIndexes, ParseCache, blob_id, view
 
@@ -147,6 +150,7 @@ class LiveMap:
         self.pending = set()
         self._base_blobs = {}                          # (commit, path) -> blob id or None
         self._graphs = {}                              # session id -> (view key, CodeGraph)
+        self._routes = {}                              # session id -> (view key, RouteView)
         self.cloud = {}                                # session id -> (shadow git dir, tip): cloud branches
 
     # sessions
@@ -190,7 +194,8 @@ class LiveMap:
             self.pending.add(sid)
 
     def forget(self, sid):
-        for table in (self.sessions, self.views, self.edits, self.dirty_at_start, self._graphs, self.cloud):
+        for table in (self.sessions, self.views, self.edits, self.dirty_at_start, self._graphs, self._routes,
+                      self.cloud):
             table.pop(sid, None)
         self.pending.discard(sid)
 
@@ -358,6 +363,23 @@ class LiveMap:
         g = view(idx, v.head)
         self._graphs[sid] = (key, g)
         return g
+
+    def routes(self, sid):
+        """The session's route changes (``livemap.routes.RouteView``) against its base commit, or
+        None while that commit's index is being built."""
+        v = self.views.get(sid)
+        if v is None:
+            return None
+        idx = self.indexes.get(v.repo_key, v.base, v.source)
+        if idx is None:
+            return None
+        key = (v.base, tuple(sorted(v.head_blobs.items(), key=lambda kv: kv[0])))
+        cached = self._routes.get(sid)
+        if cached and cached[0] == key:
+            return cached[1]
+        found = route_changes.compare(*route_changes.session_routes(idx, v.head))
+        self._routes[sid] = (key, found)
+        return found
 
     def base_graph(self, sid):
         """The code graph of the session's base commit, or None while it is being built."""

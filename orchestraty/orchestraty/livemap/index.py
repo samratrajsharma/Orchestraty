@@ -8,7 +8,7 @@
   A commit read from a bare repository (the shadow of cloud branches) goes through the same
   engine readers, ``index_from_objects``.
 * ``view``: a session's code graph, the base commit's parsed files with the session's changed
-  files put in, for finding who calls what in that session's copy of the code.
+  files put in (``overlay``), for finding who calls what in that session's copy of the code.
 """
 import hashlib
 import logging
@@ -163,8 +163,8 @@ class BaseIndexes:
                           len(idx.parsed_files))
 
 
-def view(base_index, changed):
-    """A session's code graph: the base commit's parsed files, with each changed path
+def overlay(base_index, changed):
+    """A session's copy of the code: the base commit's parsed files, with each changed path
     replaced by its ParsedFile (or removed, for None)."""
     files = {pf.file: pf for pf in base_index.parsed_files}
     for path, pf in changed.items():
@@ -172,4 +172,9 @@ def view(base_index, changed):
             files.pop(path, None)
         else:
             files[path] = pf
-    return build_graph(list(files.values()))
+    return list(files.values())
+
+
+def view(base_index, changed):
+    """A session's code graph, built over its copy of the code (overlay)."""
+    return build_graph(overlay(base_index, changed))
