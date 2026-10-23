@@ -1,0 +1,106 @@
+{
+  "name": "orchestraty",
+  "displayName": "Orchestraty",
+  "description": "The other coding-agent sessions on this repository and how their changes overlap with yours, as Orchestraty sees them.",
+  "version": "0.0.1",
+  "publisher": "orchestraty",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/samratrajsharma/Orchestraty"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/src/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "orchestraty.showStatus",
+        "title": "Show status",
+        "category": "Orchestraty"
+      },
+      {
+        "command": "orchestraty.steerOn",
+        "title": "Steer on",
+        "category": "Orchestraty"
+      },
+      {
+        "command": "orchestraty.steerOff",
+        "title": "Steer off",
+        "category": "Orchestraty"
+      },
+      {
+        "command": "orchestraty.wakeOn",
+        "title": "Wake on",
+        "category": "Orchestraty"
+      },
+      {
+        "command": "orchestraty.wakeOff",
+        "title": "Wake off",
+        "category": "Orchestraty"
+      },
+      {
+        "command": "orchestraty.openOverlap",
+        "title": "Open file at overlap",
+        "category": "Orchestraty"
+      },
+      {
+        "command": "orchestraty.refresh",
+        "title": "Refresh",
+        "category": "Orchestraty",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "orchestraty",
+          "title": "Orchestraty",
+          "icon": "media/orchestraty.svg"
+        }
+      ]
+    },
+    "views": {
+      "orchestraty": [
+        {
+          "id": "orchestraty.status",
+          "name": "Sessions and overlaps"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "orchestraty.status",
+        "contents": "No repository of this workspace is watched by Orchestraty. Run orch init, or orch watch, in it.",
+        "when": "!orchestraty.watched"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "orchestraty.refresh",
+          "when": "view == orchestraty.status",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test out/test/view.test.js out/test/state.test.js out/test/repository.test.js out/test/extension.test.js",
+    "package": "tsc -p tsconfig.json && vsce package --no-dependencies --skip-license --out orchestraty.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "@types/vscode": "1.90.0",
+    "@vscode/vsce": "4.0.0",
+    "typescript": "5.9.3"
+  }
+}

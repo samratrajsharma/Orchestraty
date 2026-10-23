@@ -1,0 +1,6 @@
+# Only the compiled extension, its manifest, README and icon go into the .vsix.
+**
+!package.json
+!README.md
+!media/orchestraty.svg
+!out/src/*.js

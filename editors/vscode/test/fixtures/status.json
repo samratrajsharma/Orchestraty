@@ -1,0 +1,277 @@
+{
+  "schema": 1,
+  "coordinator": {
+    "running": true,
+    "pid": 418,
+    "since": "2026-10-23T13:00:13Z",
+    "version": "0.0.1.dev0"
+  },
+  "repositories": [
+    {
+      "name": "repo",
+      "common_dir": "/work/repo/.git",
+      "sessions": [
+        {
+          "id": "smoke-a",
+          "agent": "claude",
+          "hears": [
+            "edit",
+            "next",
+            "stop",
+            "wake"
+          ],
+          "worktree": "/work/wt-a",
+          "branch": "smoke-a",
+          "base_commit": "4a3a78c52962337c51a173a4e075fc4302af48de",
+          "base_guessed": false,
+          "state": "live",
+          "turn": "working",
+          "note": "",
+          "started": "2026-10-23T13:00:13Z",
+          "last_event": "2026-10-23T13:00:13Z",
+          "seconds_since_last_event": 1,
+          "changes": {
+            "files": {
+              "a.py": "M",
+              "b.py": "M"
+            },
+            "unattributed": [],
+            "symbols": [
+              {
+                "file": "a.py",
+                "heuristic": false,
+                "language": "python",
+                "lines": [
+                  1,
+                  2
+                ],
+                "moved_from": "",
+                "reasons": [
+                  "parameter currency can no longer be passed by position"
+                ],
+                "symbol": "a.py::charge",
+                "kind": "modified",
+                "change": "signature",
+                "contract": "breaking"
+              },
+              {
+                "file": "b.py",
+                "heuristic": false,
+                "language": "python",
+                "lines": [
+                  4,
+                  5
+                ],
+                "moved_from": "",
+                "reasons": [],
+                "symbol": "b.py::pay",
+                "kind": "modified",
+                "change": "body",
+                "contract": "none"
+              }
+            ]
+          },
+          "declared": [],
+          "claims": [
+            {
+              "id": 1,
+              "kind": "file",
+              "target": "a.py",
+              "file": "",
+              "hard": false,
+              "since": "2026-10-23T13:00:13Z",
+              "until": "2026-10-23T15:00:13Z"
+            }
+          ]
+        },
+        {
+          "id": "smoke-b",
+          "agent": "claude",
+          "hears": [
+            "edit",
+            "next",
+            "stop",
+            "wake"
+          ],
+          "worktree": "/work/wt-b",
+          "branch": "smoke-b",
+          "base_commit": "4a3a78c52962337c51a173a4e075fc4302af48de",
+          "base_guessed": false,
+          "state": "live",
+          "turn": "working",
+          "note": "",
+          "started": "2026-10-23T13:00:13Z",
+          "last_event": "2026-10-23T13:00:13Z",
+          "seconds_since_last_event": 1,
+          "changes": {
+            "files": {
+              "b.py": "M"
+            },
+            "unattributed": [],
+            "symbols": [
+              {
+                "file": "b.py",
+                "heuristic": false,
+                "language": "python",
+                "lines": [
+                  4,
+                  5
+                ],
+                "moved_from": "",
+                "reasons": [],
+                "symbol": "b.py::pay",
+                "kind": "modified",
+                "change": "body",
+                "contract": "none"
+              }
+            ]
+          },
+          "declared": [
+            {
+              "paths": [
+                "b.py"
+              ],
+              "symbols": [
+                "b.py::pay"
+              ],
+              "task": "pass currency by name",
+              "since": "2026-10-23T13:00:14Z",
+              "until": "2026-10-23T15:00:14Z"
+            }
+          ],
+          "claims": []
+        }
+      ],
+      "overlaps": [
+        {
+          "key": "O3|a.py::charge|smoke-a|smoke-b|b.py",
+          "rule": "O3",
+          "strength": "strong",
+          "symbol": "a.py::charge",
+          "file": "b.py",
+          "changer": "smoke-a",
+          "receiver": "smoke-b",
+          "sessions": [
+            "smoke-a",
+            "smoke-b"
+          ],
+          "detail": {
+            "kind": "modified",
+            "latent": false,
+            "moved_to": "",
+            "reasons": [
+              "parameter currency can no longer be passed by position"
+            ],
+            "symbol": "a.py::charge",
+            "uses": [
+              {
+                "lines": [
+                  5
+                ],
+                "symbol": "b.py::pay"
+              }
+            ]
+          }
+        },
+        {
+          "key": "O6|a.py::charge|smoke-a",
+          "rule": "O6",
+          "strength": "strong",
+          "symbol": "a.py::charge",
+          "file": "a.py",
+          "changer": "smoke-a",
+          "receiver": "",
+          "sessions": [
+            "smoke-a"
+          ],
+          "detail": {
+            "kind": "modified",
+            "left": [
+              {
+                "file": "b.py",
+                "lines": [
+                  5
+                ],
+                "symbol": "b.py::pay"
+              }
+            ],
+            "reasons": [
+              "parameter currency can no longer be passed by position"
+            ],
+            "symbol": "a.py::charge"
+          }
+        },
+        {
+          "key": "O2|b.py::pay|smoke-a|smoke-b",
+          "rule": "O2",
+          "strength": "medium",
+          "symbol": "b.py::pay",
+          "file": "b.py",
+          "changer": "",
+          "receiver": "",
+          "sessions": [
+            "smoke-a",
+            "smoke-b"
+          ],
+          "detail": {
+            "symbol": "b.py::pay",
+            "kinds": {
+              "smoke-a": "modified",
+              "smoke-b": "modified"
+            }
+          }
+        },
+        {
+          "key": "O1|b.py|smoke-a|smoke-b",
+          "rule": "O1",
+          "strength": "weak",
+          "symbol": "",
+          "file": "b.py",
+          "changer": "",
+          "receiver": "",
+          "sessions": [
+            "smoke-a",
+            "smoke-b"
+          ],
+          "detail": {
+            "file": "b.py"
+          }
+        }
+      ],
+      "merge_order": [
+        {
+          "sessions": [
+            "smoke-a",
+            "smoke-b"
+          ],
+          "first": "smoke-a",
+          "symbols": [
+            "a.py::charge"
+          ],
+          "line": "merge smoke-a first: smoke-b uses charge in a.py, which smoke-a changed."
+        }
+      ],
+      "together": {
+        "on": false,
+        "command": "",
+        "timeout": 120,
+        "results": []
+      },
+      "typescript": {
+        "on": false,
+        "timeout": 300,
+        "runs": []
+      },
+      "cloud": {
+        "on": false,
+        "remote": "origin",
+        "patterns": [
+          "claude/*"
+        ],
+        "agents_told": false,
+        "fetch": null,
+        "branches": []
+      }
+    }
+  ]
+}
