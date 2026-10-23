@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "about": "Where each agent Orchestraty connects to stands. The agents table in README.md is generated from this file by scripts/agents_table.py, and a test checks that the two agree. An agent is called supported only when its capture test with the real agent passed (result: pass); until then it is built, and not yet tested with the real agent. Agents without hooks are followed through git alone: basic support (git only).",
+  "agents": [
+    {
+      "agent": "Claude Code",
+      "adapter": "claude",
+      "connects": "hooks",
+      "result": "pass",
+      "version_tested": "2.1.283",
+      "platform": "Windows",
+      "test_date": "2026-09-27"
+    },
+    {
+      "agent": "Codex",
+      "adapter": "codex",
+      "connects": "hooks",
+      "result": "pending",
+      "version_tested": null,
+      "platform": null,
+      "test_date": null
+    },
+    {
+      "agent": "Antigravity",
+      "adapter": "antigravity",
+      "connects": "hooks",
+      "result": "pending",
+      "version_tested": null,
+      "platform": null,
+      "test_date": null
+    },
+    {
+      "agent": "Any other agent, editor or person",
+      "adapter": null,
+      "connects": "git",
+      "result": "not run",
+      "version_tested": null,
+      "platform": null,
+      "test_date": null
+    }
+  ]
+}

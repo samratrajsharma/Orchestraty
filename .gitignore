@@ -33,10 +33,13 @@ build/
 !.env.example
 
 # ───────────── Docs — kept local, not committed (per request) ─────────────
-# Except the architecture decision records in docs/decisions/, which are tracked.
-# "/docs/*" (not "/docs/") so git still looks inside docs/ and the "!" rule can apply.
+# Except the architecture decision records in docs/decisions/, and the public rules page and
+# the agents' test results, which are tracked.
+# "/docs/*" (not "/docs/") so git still looks inside docs/ and the "!" rules can apply.
 /docs/*
 !/docs/decisions/
+!/docs/rules.md
+!/docs/agents.json
 /*.docx
 /*.pptx
 /*.xlsx

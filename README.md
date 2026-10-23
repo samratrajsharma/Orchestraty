@@ -75,7 +75,16 @@ Each agent connects at the deepest level it supports. No agent has to change, an
 | 2. Hooks | A hook before and after a tool call, and at the end of a turn | Notes arrive automatically, before edits and at the end of a turn |
 | 3. Rich interface | A Claude Code mod, or an editor extension | A pane of every session, a band for strong overlaps, holding an edit to ask you |
 
-Many agents document hooks today: Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI, OpenCode, Cline and OpenClaw. An agent is called supported only after its own capture test passes. The main package's [Agents](orchestraty/README.md#agents) table says where each one Orchestraty connects to stands.
+An agent is called supported only after its capture test with the real agent passes: its hooks record every event of real sessions, with none lost, without slowing it down. The table is generated from [`docs/agents.json`](docs/agents.json); the main package's [Agents](orchestraty/README.md#agents) section says what each agent can be told.
+
+<!-- agents table: generated from docs/agents.json by scripts/agents_table.py; do not edit by hand -->
+| Agent | Connects through | Status | Capture test with the real agent |
+| --- | --- | --- | --- |
+| Claude Code | Hooks (level 2) | Supported | Passed with Claude Code 2.1.283 on Windows, 27 September 2026 |
+| Codex | Hooks (level 2) | Built; not yet tested with the real agent | Pending |
+| Antigravity | Hooks (level 2) | Built; not yet tested with the real agent | Pending |
+| Any other agent, editor or person | Plain git (level 0) | Basic support (git only) | None needed: its changes are read from git |
+<!-- end of agents table -->
 
 ### How strong an overlap is
 
