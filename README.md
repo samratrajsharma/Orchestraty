@@ -210,6 +210,8 @@ orch doctor                        # checks what Orchestraty needs, with a fix f
 
 Once it is published, `pipx install orchestraty` and `uv tool install orchestraty` will do the same.
 
+`orch uninstall` takes out everything Orchestraty added, puts back the settings files `orch init` backed up where nothing is lost, and asks before removing its state folder; then `pipx uninstall orchestraty` (or `uv tool uninstall orchestraty`) removes the command. To try it and tell us how it went, see the [guide for trying Orchestraty](orchestraty/docs/beta.md).
+
 With Claude Code you can install Orchestraty's plugin as well, which holds the hooks instead of your settings file and brings the mod, the MCP server and a skill. The repository is its marketplace; in Claude Code:
 
 ```text
