@@ -2,11 +2,13 @@
 # nothing is built per operating system; CI only checks that the same code runs everywhere.
 #
 # - Every push and pull request: the quick check, on Windows and Linux with Python 3.12; the
-#   TypeScript helper's tests (helpers/typescript) with Node 20 on both; and the TypeScript
+#   TypeScript helper's tests (helpers/typescript) with Node 20 on both; the TypeScript
 #   contract tests that run the compiler, with the TypeScript that orchestraty/tests/fixtures/ts
-#   pins, on both.
+#   pins, on both; and the one distribution, its sdist and wheel built on Linux, with the
+#   smoke test of that wheel in a clean virtual environment on Windows and Linux.
 # - Weekly, on manual runs and on release tags (v*): the full matrix, which adds Python 3.9
-#   to 3.11, macOS and the older-Python runs of the experiments.
+#   to 3.11, macOS (the smoke test too) and the older-Python runs of the experiments.
+#   Releases themselves are release.yml's.
 #
 # The quick and full jobs run all three suites (the main package, the engine and the experiments);
 # every job fails if the tests leave any file behind. pytest is the only Python dependency.
@@ -75,7 +77,7 @@ jobs:
       - name: Check that the tests left no files behind
         shell: bash
         run: |
-          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes)"
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes scripts)"
           if [ -n "$leftovers" ]; then
             echo "The tests left files in the working copy:"
             echo "$leftovers"
@@ -185,6 +187,91 @@ jobs:
             exit 1
           fi
 
+  # The one distribution: the sdist and the py3-none-any wheel, built once on Linux, and a check
+  # of what they hold. The smoke jobs install this wheel.
+  package:
+    name: package (sdist and wheel)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install the build front end and pytest
+        run: python -m pip install "build>=1.2" "pytest>=8,<10"
+
+      - name: Build the sdist and the wheel
+        run: python -m build
+
+      - name: Check what they hold
+        working-directory: orchestraty
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          ORCH_PACKAGE_REQUIRED: "1"
+        run: ORCH_WHEEL="$(ls ../dist/*.whl)" ORCH_SDIST="$(ls ../dist/*.tar.gz)" python -m pytest tests/test_package.py
+
+      - name: Keep them for the smoke test
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # The built wheel in a clean virtual environment (scripts/smoke.py): orch --version, orch
+  # init --print, two scripted sessions through the installed hook script reaching a note, and
+  # orch doctor. No real agent and no network. macOS joins in the full run.
+  smoke:
+    name: smoke (${{ matrix.os }}, the built wheel)
+    needs: package
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) && '["windows-latest", "ubuntu-24.04", "macos-latest"]' || '["windows-latest", "ubuntu-24.04"]') }}
+    steps:
+      - name: Check out the repository (for scripts/smoke.py)
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Fetch the built files
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - name: Run the smoke test on the wheel
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/smoke.py dist/*.whl
+
+      # The smoke test works in a temporary folder; dist/ is ignored.
+      - name: Check that the smoke test left no files behind
+        shell: bash
+        run: |
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes scripts)"
+          if [ -n "$leftovers" ]; then
+            echo "The smoke test left files in the working copy:"
+            echo "$leftovers"
+            exit 1
+          fi
+
   full:
     name: full (${{ matrix.os }}, Python ${{ matrix.python-version }})
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
@@ -246,7 +333,7 @@ jobs:
       - name: Check that the tests left no files behind
         shell: bash
         run: |
-          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes)"
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes scripts)"
           if [ -n "$leftovers" ]; then
             echo "The tests left files in the working copy:"
             echo "$leftovers"
