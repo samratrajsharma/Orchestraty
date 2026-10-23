@@ -1,6 +1,7 @@
-"""Orchestraty's Claude Code plugin (plugins/claude-code): its files, and its hook commands run the
-way Claude Code runs them (through sh, or Git Bash on Windows). Claude Code's record of installed
-plugins is written by the tests, in the isolated config folder; no real agent runs."""
+"""Orchestraty's Claude Code plugin (plugins/claude-code): its files, its hook commands run the way
+Claude Code runs them (through sh, or Git Bash on Windows), and orch init, orch restore, orch
+config wake and orch doctor with the plugin installed. Claude Code's record of installed plugins
+is written by the tests, in the isolated config folder; no real agent runs."""
 import importlib.util
 import json
 import os
@@ -15,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from helpers import run_hook, spool_lines
-from orchestraty import __version__, cli, paths, plugin
+from orchestraty import __version__, cli, doctor, paths, plugin
 from orchestraty.adapters import claude
 from orchestraty.mcp import register, tools
 from orchestraty.paths import State
@@ -314,3 +315,161 @@ def test_installed_counts_user_installs_and_this_folders_and_not_a_disabled_one(
     assert plugin.installed({}, project=str(tmp_path / "proj"))[0] == PID
     assert plugin.installed({}, project=str(tmp_path / "other")) is None
     assert plugin.installed({}, environ={"CLAUDE_CODE_PLUGIN_CACHE_DIR": str(tmp_path / "none")}) is None
+
+
+# --------------------------------------------------------------------------------------- #
+# orch init, orch restore, orch config wake, orch doctor
+# --------------------------------------------------------------------------------------- #
+def run_doctor():
+    """orch doctor's agent lines, as it prints them (its other checks start the coordinator,
+    which would take in the spool lines these tests count)."""
+    from orchestraty import config
+    checks = doctor.agent_checks(State(), config.load(State()))
+    out = "".join(f"{c.kind:<5} {c.text}\n" + (f"      -> {c.fix}\n" if c.kind == "fix" else "") for c in checks)
+    return (1 if any(c.kind == "fix" for c in checks) else 0), out
+
+
+def test_orch_init_with_the_plugin_adds_no_settings_hooks_and_says_so(tmp_path, state_root, capsys):
+    settings = mark_installed(tmp_path)
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
+    out = capsys.readouterr().out
+    assert f"Claude Code's Orchestraty plugin is installed ({PID})" in out
+    assert f"so orch init adds no hooks to {settings}" in out and "The plugin's hooks are on." in out
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    assert "hooks" not in data and claude.PLUGIN_DIRS not in data.get("env", {})
+    state = State()
+    assert plugin.read_switch(state) == (sys.executable, False)
+    assert os.path.isfile(state.hook_script)          # the script the command points at exists after install
+    assert os.path.join("$s", "hooks", "hook.py").replace(os.sep, "/") in plugin.command("Stop")
+    play()
+    assert len(spool_lines(state_root / "spool")) == 1
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
+    assert "The plugin's hooks are already on; nothing changed." in capsys.readouterr().out
+
+
+def test_no_double_hooks_when_the_plugin_and_settings_entries_are_both_present(tmp_path, state_root, capsys):
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0         # the settings setup, with the mod
+    settings = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "settings.json"
+    assert len(our_entries(settings)) == len(claude.EVENTS)
+    mark_installed(tmp_path)                                           # the plugin installed afterwards
+    play()
+    assert len(spool_lines(state_root / "spool")) == 1                 # its hooks stay off: recorded once
+    code, out = run_doctor()
+    assert "ok    Claude Code: hooks in" in out
+    assert (f"note  Claude Code: the plugin {PID} is installed too; its hooks stay off while the hooks are in "
+            f"{settings}, and the mod orch init loads from") in out
+    capsys.readouterr()
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0         # moves the hooks and the mod to the plugin
+    out = capsys.readouterr().out
+    assert "take out of" in out and "Took the earlier hooks out of" in out
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    assert our_entries(settings) == [] and claude.PLUGIN_DIRS not in data.get("env", {})
+    assert data["enabledPlugins"] == {PID: True}                       # the rest of the file is kept
+    play()
+    assert len(spool_lines(state_root / "spool")) == 2                 # once again
+    # the plugin uninstalled: orch init puts the settings hooks back and turns the plugin's off
+    (tmp_path / "claude-config" / "plugins" / "installed_plugins.json").unlink()
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
+    assert plugin.read_switch(State()) is None and len(our_entries(settings)) == len(claude.EVENTS)
+    play()
+    assert len(spool_lines(state_root / "spool")) == 3
+
+
+def test_orch_doctor_reports_which_setup_is_active(tmp_path):
+    settings = mark_installed(tmp_path)
+    code, out = run_doctor()
+    assert f"fix   Claude Code: the plugin {PID} is installed, but its hooks are off\n      -> run orch init" in out
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
+    code, out = run_doctor()
+    assert (f"ok    Claude Code: hooks from the plugin {PID} {__version__} (turned on in "
+            f"{plugin.switch_path(State())})") in out
+    assert "no agent has Orchestraty's hooks" not in out and "Claude Code: hooks in" not in out
+    if os.name == "nt" and not plugin.git_bash():
+        assert "with Git Bash, and none was found" in out
+    # hooks in the settings file as well: each event would be recorded twice
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    data["hooks"] = claude.hook_block(sys.executable, State().hook_script)
+    settings.write_text(json.dumps(data), encoding="utf-8")
+    code, out = run_doctor()
+    assert code == 1 and "fix   Claude Code: hooks both in" in out and "would be recorded twice" in out
+    del data["hooks"]
+    settings.write_text(json.dumps(data), encoding="utf-8")
+    # an installed copy with another version's hooks, and a switch whose interpreter is gone
+    older = tmp_path / "older"
+    shutil.copytree(PLUGIN, older)
+    hooks_json = json.loads((older / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    del hooks_json["hooks"]["StopFailure"]
+    (older / "hooks" / "hooks.json").write_text(json.dumps(hooks_json), encoding="utf-8")
+    mark_installed(tmp_path, install_path=older)
+    plugin.write_switch(State(), str(tmp_path / "gone" / "python"), False)
+    code, out = run_doctor()
+    assert f"fix   Claude Code: the copy of {PID} installed has another version's hooks" in out
+    assert f"-> update it: claude plugin update {PID}" in out
+    assert "the plugin's hooks would run" in out and "which is not there" in out
+    # the switch on, the plugin gone
+    (tmp_path / "claude-config" / "plugins" / "installed_plugins.json").unlink()
+    code, out = run_doctor()
+    assert "turns on the plugin's hooks, but no Orchestraty plugin is installed" in out
+    assert "no agent has Orchestraty's hooks" in out
+
+
+def test_doctor_on_windows_needs_git_bash(tmp_path, state_root):
+    mark_installed(tmp_path)
+    switched_on(state_root)
+    current = json.loads((tmp_path / "claude-config" / "settings.json").read_text(encoding="utf-8"))
+    path = str(tmp_path / "claude-config" / "settings.json")
+    env = dict(os.environ, OS="Windows_NT", CLAUDE_CODE_GIT_BASH_PATH=str(tmp_path / "no-bash.exe"))
+    lines, on = doctor.claude_checks(State(), path, current, False, None, environ=env)
+    assert on == 1 and [line.text for line in lines if line.kind == "fix"] == [
+        "Claude Code: it runs a plugin's hooks with Git Bash, and none was found"]
+    bash = tmp_path / "bash.exe"
+    bash.write_bytes(b"")
+    env["CLAUDE_CODE_GIT_BASH_PATH"] = str(bash)
+    lines, _ = doctor.claude_checks(State(), path, current, False, None, environ=env)
+    assert [line.kind for line in lines] == ["ok"]
+
+
+def test_orch_restore_turns_the_plugins_hooks_off(tmp_path, state_root, capsys):
+    mark_installed(tmp_path)
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
+    capsys.readouterr()
+    assert cli.main(["restore", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "Turned off the hooks of Claude Code's Orchestraty plugin" in out
+    assert f"to remove it, run claude plugin uninstall {PID}." in out
+    assert plugin.read_switch(State()) is None
+    play()
+    assert not (state_root / "spool").exists()                          # the plugin's hooks do nothing now
+    assert cli.main(["restore", "--yes"]) == 0
+    assert "No Orchestraty hooks in" in capsys.readouterr().out
+
+
+def test_orch_restore_from_backup_turns_them_off_too(tmp_path, capsys):
+    settings = mark_installed(tmp_path)
+    before = settings.read_bytes()
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0          # nothing to back up: no settings change
+    assert cli.main(["restore", "--yes", "--from-backup"]) == 1
+    assert plugin.read_switch(State()) is not None                     # no backup: nothing changed at all
+    data = json.loads(before)
+    data["hooks"] = claude.hook_block(sys.executable, State().hook_script)
+    settings.write_text(json.dumps(data), encoding="utf-8")
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0          # takes them out, after a backup
+    capsys.readouterr()
+    assert cli.main(["restore", "--yes", "--from-backup"]) == 0
+    out = capsys.readouterr().out
+    assert "Put back" in out and "Turned off the hooks of Claude Code's Orchestraty plugin" in out
+    assert plugin.read_switch(State()) is None and our_entries(settings)
+
+
+def test_orch_config_wake_with_the_plugin_changes_its_switch_only(tmp_path, capsys):
+    settings = mark_installed(tmp_path)
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
+    before = settings.read_bytes()
+    assert cli.main(["config", "wake", "on"]) == 0
+    assert plugin.read_switch(State()) == (sys.executable, True)
+    assert settings.read_bytes() == before
+    assert "Updated the plugin's hooks" in capsys.readouterr().out
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0          # orch init keeps it
+    assert plugin.read_switch(State()) == (sys.executable, True)
+    assert cli.main(["config", "wake", "off"]) == 0
+    assert plugin.read_switch(State()) == (sys.executable, False)

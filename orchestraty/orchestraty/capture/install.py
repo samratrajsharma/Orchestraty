@@ -6,7 +6,9 @@ does the file work for every agent: the hook script copied into the state folder
 folder, the file copied to the state folder's ``backups`` before every change, written whole
 (never edited in place), and a config file that is not valid JSON, or that is a link, refused and
 left alone. Claude Code's entries (``adapters/claude``) are installed by ``install``; its names
-are kept here too, where the rest of Orchestraty finds them.
+are kept here too, where the rest of Orchestraty finds them. With Claude Code's Orchestraty
+plugin installed, the plugin holds those hooks: ``install_for_plugin`` turns them on
+(``orchestraty/plugin``) and adds none to the settings file.
 """
 import json
 import os
@@ -14,6 +16,7 @@ import shutil
 import sys
 import time
 
+from orchestraty import plugin
 from orchestraty.adapters.claude import (AGENT, EDIT_MATCHER, EVENTS, MATCHERS, MOD_SOURCE, PLUGIN_DIRS,  # noqa: F401
                                          TIMEOUT_SECONDS, WAKE_TIMEOUT_SECONDS, hook_block, hook_entry,
                                          install_mod, merged_settings, mod_in, settings_path, wake_entry,
@@ -167,21 +170,44 @@ def write_launch(state, python=None):
 
 def install(state, path, python, wake=False, mod=False):
     """Install the hook script and merge our entries into the settings file at `path` (with
-    the wake entry when `wake`, and our Claude Code mod when `mod`). Returns (changed, backup
-    folder or None)."""
+    the wake entry when `wake`, and our Claude Code mod when `mod`); the plugin's hooks are
+    turned off first, so the two never both run. Returns (changed, backup folder or None)."""
     check_python(python)
     check_settings_file(path)
     current = load_settings(path)
     script = install_script(state)
     write_launch(state)
+    switched = plugin.remove_switch(state)
     wanted = merged_settings(current, python, script, wake)
     wanted = with_mod(wanted, install_mod(state)) if mod else without_mod(wanted, state.mod)
     if os.path.exists(path) and wanted == current:
-        return False, None
+        return switched, None
     saved = backup(state, path, "install")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     _write_atomic(path, _dump(wanted))
     return True, saved
+
+
+def install_for_plugin(state, path, python, wake=False):
+    """With Claude Code's Orchestraty plugin installed, which holds the hooks and the mod:
+    install the hook script, take our entries and our mod out of the settings file at `path`
+    (an earlier orch init's), then turn the plugin's hooks on, with `python` and the wake
+    waiter when `wake`. Returns (changed, backup folder or None)."""
+    check_python(python)
+    check_settings_file(path)
+    current = load_settings(path)
+    install_script(state)
+    write_launch(state)
+    wanted = without_mod(without_ours(current, state.hook_script), state.mod)
+    changed, saved = False, None
+    if wanted != current:
+        saved = backup(state, path, "install")
+        _write_atomic(path, _dump(wanted))
+        changed = True
+    if plugin.read_switch(state) != (python, bool(wake)):
+        plugin.write_switch(state, python, wake)
+        changed = True
+    return changed, saved
 
 
 def uninstall(state, path):

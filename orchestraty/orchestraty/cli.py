@@ -5,7 +5,7 @@ import os
 import sys
 import time
 
-from orchestraty import __version__
+from orchestraty import __version__, plugin
 from orchestraty.capture import install as hooks
 from orchestraty.paths import State
 
@@ -61,9 +61,12 @@ def cmd_init(args):
     try:
         hooks.check_python(python)
         hooks.check_settings_file(path)
-        hooks.load_settings(path)
+        current = hooks.load_settings(path)
     except hooks.Refused as exc:
         return _refuse("init", exc)
+    found = plugin.installed(current, claude_config=args.claude_config, project=os.getcwd() if args.project else None)
+    if found:
+        return _init_for_plugin(args, state, path, python, wake, current, found[0])
     mod = not args.no_mod
     print("orch init will:")
     print(f"  - copy the hook script to {state.hook_script}")
@@ -81,15 +84,60 @@ def cmd_init(args):
         changed, saved = hooks.install(state, path, python, wake, mod)
     except hooks.Refused as exc:
         return _refuse("init", exc)
-    cfg = config.load(state)
-    if cfg["settings"] != path:
-        cfg["settings"] = path
-        config.save(state, cfg)
+    _remember_settings(state, path)
     if not changed:
         print(f"Already installed in {path}; nothing changed.")
     else:
         print(f"Installed in {path}." + (f" Backup: {saved}" if saved else ""))
         print("Sessions started from now on are seen; restart running sessions to include them.")
+    return _init_rest(args, state, python)
+
+
+def _remember_settings(state, path):
+    from orchestraty import config
+    cfg = config.load(state)
+    if cfg["settings"] != path:
+        cfg["settings"] = path
+        config.save(state, cfg)
+
+
+def _init_for_plugin(args, state, path, python, wake, current, plugin_id):
+    """orch init with Claude Code's Orchestraty plugin installed: the plugin holds the hooks and
+    the mod, so none go into the settings file; orch init installs the hook script and turns
+    the plugin's hooks on."""
+    earlier = hooks.without_mod(hooks.without_ours(current, state.hook_script), state.mod) != current
+    print(f"Claude Code's Orchestraty plugin is installed ({plugin_id}). It holds the hooks for "
+          f"{len(hooks.EVENTS)} Claude Code events and the mod, so orch init adds no hooks to {path}.")
+    print("orch init will:")
+    print(f"  - copy the hook script to {state.hook_script}")
+    print(f"  - turn the plugin's hooks on: {plugin.switch_path(state)} names the interpreter they run")
+    if earlier:
+        print(f"  - take out of {path} the hooks and the mod an earlier orch init added, so nothing runs twice")
+        print(f"    (the current file is copied to {state.backups} first)")
+    if args.no_mod:
+        print("    (--no-mod changes nothing here: the mod comes with the plugin)")
+    if os.name == "nt" and not plugin.git_bash():
+        print("Claude Code runs a plugin's hooks with Git Bash, and none was found: install Git for Windows, or "
+              "set CLAUDE_CODE_GIT_BASH_PATH. orch doctor checks it.")
+    print(_scope_line(args) + " " + PRIVACY)
+    if not confirm("Go ahead?", args.yes):
+        print("Nothing changed.")
+        return 1
+    try:
+        changed, saved = hooks.install_for_plugin(state, path, python, wake)
+    except hooks.Refused as exc:
+        return _refuse("init", exc)
+    _remember_settings(state, path)
+    if not changed:
+        print("The plugin's hooks are already on; nothing changed.")
+    else:
+        print("The plugin's hooks are on."
+              + (f" Took the earlier hooks out of {path}. Backup: {saved}" if saved else ""))
+        print("Sessions started from now on are seen; restart running sessions to include them.")
+    return _init_rest(args, state, python)
+
+
+def _init_rest(args, state, python):
     code = _watch_here(state, os.getcwd(), quiet_outside=True)
     if code == 0 and not args.no_git_hooks:
         _git_chain_here(state, python, args.yes)
@@ -304,6 +352,11 @@ def cmd_config(args):
     config.save(state, cfg)
     print(f"{args.name}: {args.value}")
     if args.name == "wake":
+        switch = plugin.read_switch(state)
+        if switch is not None:                   # the plugin runs the hooks: its switch carries wake
+            plugin.write_switch(state, switch[0], cfg["wake"])
+            print("Updated the plugin's hooks; sessions started from now on use it.")
+            return 0
         path = cfg["settings"]
         if not path:
             print("Run orch init to install the hooks; the wake hook comes with them.")
@@ -882,34 +935,49 @@ def cmd_restore(args):
         return _restore_agent(args)
     state = State()
     path = _settings_target(args)
-    if args.from_backup:
-        question = f"Put back {path} as it was before the last orch init?"
-    else:
-        question = f"Remove Orchestraty's hooks from {path}?"
     try:
         hooks.check_settings_file(path)
-        hooks.load_settings(path)
+        current = hooks.load_settings(path)
     except hooks.Refused as exc:
         return _refuse("restore", exc)
+    found = plugin.installed(current, claude_config=args.claude_config, project=os.getcwd() if args.project else None)
+    off = " and turn off the hooks of Claude Code's Orchestraty plugin" if plugin.read_switch(state) else ""
+    if args.from_backup:
+        question = f"Put back {path} as it was before the last orch init{off}?"
+    else:
+        question = f"Remove Orchestraty's hooks from {path}{off}?"
     if not confirm(question, args.yes):
         print("Nothing changed.")
         return 1
     try:
         if args.from_backup:
-            folder = hooks.restore_backup(state, path)
-            if folder is None:
+            if hooks.latest_backup(state, path) is None:
                 print(f"No backup of {path} from before an install; run orch restore without --from-backup.")
                 return 1
+            switched = plugin.remove_switch(state)
+            folder = hooks.restore_backup(state, path)
             print(f"Put back {path} from {folder}.")
+            _plugin_left(switched, found)
             return 0
+        switched = plugin.remove_switch(state)
         changed, saved = hooks.uninstall(state, path)
     except hooks.Refused as exc:
         return _refuse("restore", exc)
     if changed:
         print(f"Removed Orchestraty's hooks from {path}. Backup: {saved}")
-    else:
+    elif not switched:
         print(f"No Orchestraty hooks in {path}; nothing changed.")
+    _plugin_left(switched, found)
     return 0
+
+
+def _plugin_left(switched, found):
+    """What orch restore says about Claude Code's Orchestraty plugin, which it cannot uninstall."""
+    if switched:
+        print("Turned off the hooks of Claude Code's Orchestraty plugin: they do nothing until orch init runs again.")
+    if found:
+        print(f"The plugin itself stays installed, and its mod, MCP server and skill still load; to remove it, run "
+              f"claude plugin uninstall {found[0]}.")
 
 
 def _restore_agent(args):

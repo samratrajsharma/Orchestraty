@@ -9,7 +9,10 @@ line) or ``note`` (worth knowing, not a problem). The checks, in order:
   (SQLite) and the spools would be copied half-written;
 * the hook script in the state folder: there, and the one this version installs;
 * each agent's hooks (Claude Code, Codex, Antigravity), in the file orch init writes them to:
-  the entries this installation writes, or none (a note); no agent with them is a problem;
+  the entries this installation writes, or none (a note); no agent with them is a problem. For
+  Claude Code, which setup runs them: that file's entries, or Orchestraty's Claude Code plugin
+  (``orchestraty/plugin``), never both, and what the plugin needs (its switch's interpreter, the
+  hooks this version writes, Git Bash on Windows);
 * the coordinator: that it starts with what a hook starts it with, the interpreter and import
   path in ``hooks/launch.txt`` (one that is running already counts); one that doctor starts is
   stopped again;
@@ -30,7 +33,8 @@ import tempfile
 import time
 from collections import namedtuple
 
-from orchestraty import config
+from orchestraty import config, plugin
+from orchestraty.adapters import claude
 from orchestraty.capture import hook
 from orchestraty.capture import install as hooks
 from orchestraty.coordinator.lock import Lock, touch
@@ -154,8 +158,20 @@ def _canonical(value):
     return value
 
 
+def _settings_line(title, path, how, current, wanted):
+    try:
+        same = _canonical(wanted(current)) == _canonical(current)
+    except ValueError:
+        same = False
+    if same:
+        return ok(f"{title}: hooks in {path}")
+    return problem(f"{title}: the hooks in {path} are not the ones this installation writes "
+                   "(another interpreter, or events missing)", f"run {how} again")
+
+
 def agent_checks(state, cfg):
-    """One line for each agent, and a problem when none has Orchestraty's hooks."""
+    """One line for each agent (for Claude Code, which setup runs its hooks), and a problem when
+    none has Orchestraty's hooks."""
     out, installed = [], 0
     for title, path, how, without, wanted in _agents(state, cfg):
         try:
@@ -163,23 +179,79 @@ def agent_checks(state, cfg):
         except hooks.Refused as exc:
             out.append(problem(f"{title}: {exc}", f"fix the file, then run {how} again"))
             continue
-        if without(current, state.hook_script) == current:
+        ours = without(current, state.hook_script) != current
+        if title == claude.TITLE:
+            lines, on = claude_checks(state, path, current, ours,
+                                      lambda: _settings_line(title, path, how, current, wanted))
+            out += lines
+            installed += on
+        elif not ours:
             out.append(note(f"{title}: no Orchestraty hooks in {path} ({how} installs them)"))
-            continue
-        installed += 1
-        try:
-            same = _canonical(wanted(current)) == _canonical(current)
-        except ValueError:
-            same = False
-        if same:
-            out.append(ok(f"{title}: hooks in {path}"))
         else:
-            out.append(problem(f"{title}: the hooks in {path} are not the ones this installation writes "
-                               "(another interpreter, or events missing)", f"run {how} again"))
+            out.append(_settings_line(title, path, how, current, wanted))
+            installed += 1
     if not installed:
         out.append(problem("no agent has Orchestraty's hooks, so no session is seen",
                            "run orch init (Claude Code), or orch init --agent codex|antigravity"))
     return out
+
+
+def _claude_target(path):
+    """(Claude Code config folder, project folder) of the settings file orch init wrote."""
+    if os.path.basename(path) == "settings.local.json":
+        return None, os.path.dirname(os.path.dirname(path))
+    return os.path.dirname(path), None
+
+
+def claude_checks(state, path, current, ours, settings_line, environ=None):
+    """Which setup runs Claude Code's hooks, the settings file's entries (``settings_line()``
+    checks them) or Orchestraty's plugin (``orchestraty/plugin``), and what stands in its way.
+    Returns (lines, 1 when hooks are installed by either, else 0)."""
+    claude_config, project = _claude_target(path)
+    found = plugin.installed(current, claude_config=claude_config, project=project, environ=environ)
+    switch = plugin.read_switch(state)
+    shadow = claude.mod_in(current, state.mod)
+    if switch is None:                               # the settings setup, or none
+        if not ours:
+            if found:
+                return [problem(f"Claude Code: the plugin {found[0]} is installed, but its hooks are off",
+                                "run orch init")], 0
+            return [note(f"Claude Code: no Orchestraty hooks in {path} (orch init installs them)")], 0
+        lines = [settings_line()]
+        if found:
+            unused = (f", and the mod orch init loads from {state.mod} has its name, so Claude Code loads that in its "
+                      "place, without its MCP server and skill" if shadow else "")
+            lines.append(note(f"Claude Code: the plugin {found[0]} is installed too; its hooks stay off while the "
+                              f"hooks are in {path}{unused}. orch init moves them to the plugin"))
+        return lines, 1
+    if ours:
+        return [problem(f"Claude Code: hooks both in {path} and from the plugin, so each event would be recorded twice",
+                        "run orch init again")], 1
+    if not found:
+        return [problem(f"Claude Code: {plugin.switch_path(state)} turns on the plugin's hooks, but no Orchestraty "
+                        f"plugin is installed for {path}, so no hooks run",
+                        f"install it ({plugin.INSTALL} in Claude Code), or run orch init to add the hooks to "
+                        f"{path}")], 0
+    pid, record = found
+    version = f" {record['version']}" if isinstance(record.get("version"), str) else ""
+    lines = [ok(f"Claude Code: hooks from the plugin {pid}{version} (turned on in {plugin.switch_path(state)}"
+                + (", wake on)" if switch[1] else ")"))]
+    if not os.path.isabs(switch[0]) or not os.path.isfile(switch[0]):
+        lines.append(problem(f"Claude Code: the plugin's hooks would run {switch[0]}, which is not there",
+                             "run orch init again"))
+    copy = plugin.installed_hooks(record)
+    if copy is not None and copy.get("hooks") != plugin.hooks_file([])["hooks"]:
+        lines.append(problem(f"Claude Code: the copy of {pid} installed has another version's hooks",
+                             f"update it: claude plugin update {pid}"))
+    if shadow:
+        lines.append(problem(f"Claude Code: the mod orch init loads from {state.mod} has the plugin's name, so "
+                             f"Claude Code loads it in place of {pid}, whose hooks then do not run",
+                             "run orch init again"))
+    windows = os.name == "nt" if environ is None else environ.get("OS") == "Windows_NT"
+    if windows and not plugin.git_bash(environ):
+        lines.append(problem("Claude Code: it runs a plugin's hooks with Git Bash, and none was found",
+                             "install Git for Windows, or set CLAUDE_CODE_GIT_BASH_PATH to its bash.exe"))
+    return lines, 1
 
 
 # ------------------------------------------------------------------------------ the coordinator
