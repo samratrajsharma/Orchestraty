@@ -13,6 +13,7 @@ installed. The core needs only the standard library.
 | `pipeline` | `build_index()`: ingest, parse and build the graph, with an HMAC-signed cache. `build_index_at()` does the same for any commit, straight from git's objects |
 | `impact` | Blast radius of a symbol or a file |
 | `insights` | Entry points, hub files, routes and data models |
+| `routes` | HTTP routes from the syntax tree: FastAPI, Flask and Django, with the prefixes they are mounted under (see Routes) |
 | `techdebt` | Import cycles, complexity hotspots, dead code and near-duplicates |
 | `coverage` | Which symbols the tests reference |
 | `config_map` | The configuration surface |
@@ -83,6 +84,25 @@ These calls are kept per file in `graph.unresolved`, as (caller, name, line, why
 A name that maps to two different files is skipped and counted in `graph.resolution`, never guessed, and so is every name under it. So is a script-folder module that another root would resolve to a different file. A variable that a package's `__init__.py` assigns shadows the submodule of the same name.
 
 **JS/TS** binds through relative imports only, with extensions and index files; a TypeScript import of `./x.js` also finds `x.ts`. tsconfig `paths` and `baseUrl`, and workspace packages, are not followed; "Not analysed" says so for a repository that uses them. A call on a call result (`a.b().c()`, `user?.save()`) is not a plain call. The JS/TS parser has no scope analysis, so a local name that shadows a function of the same file can link to that function.
+
+## Routes
+
+`routes.resolve(parsed_files)` (and `routes.for_index(idx)`, kept in the index's memo) lists the HTTP routes Python files declare, read from the syntax tree: nothing is imported or run. Each file's parse keeps its route facts (`ParsedFile.routes`); resolving links them across files, following an import to the module it names and the re-exports there, as the call resolver does. `insights.api_map` and the MCP tool `routes_touched` list these routes; JS/TS routes are still matched by pattern.
+
+| Framework | What is read |
+| --- | --- |
+| FastAPI | `FastAPI()` and `APIRouter(prefix=...)`; `@x.get/post/put/patch/delete/head/options/trace(path)`, `@x.api_route(path, methods=[...])`, `@x.route(...)` and `@x.websocket(path)`; `x.include_router(router, prefix=...)`, routers included in routers, and `x.mount(path, app)` |
+| Flask | `Flask()` and `Blueprint(..., url_prefix=...)`; `@x.route(rule, methods=[...])` and the shortcuts `@x.get/post/put/patch/delete(rule)`; `x.register_blueprint(bp, url_prefix=...)`, whose prefix replaces the blueprint's own, and blueprints in blueprints |
+| Django | `urlpatterns` (a list, also built with `+` and `+=`) of `path()`, `re_path()` and the older `url()`; `include()` of a module by its dotted name, of an imported module, of a list, or of a module-level list of patterns. The root URLconf is the module a literal `ROOT_URLCONF` names. A Django route serves every method: `ANY` |
+
+An app, router or blueprint is known by the class it is made from, imported from `fastapi` or `flask`, assigned to a name bound once in its scope: the module, or a function such as an app factory (whose own imports count).
+
+Each route has one method (one declared with several is several routes), its full path, its handler (the function's symbol id; `f.<locals>.g` for a function defined in another), the file and line it is declared at, and a confidence:
+
+- **exact:** every part of the path is a literal (a string, a name its module binds once to a string, or `+` and f-strings of those), the methods are literals, and the chain from the route up to an app is known;
+- **heuristic:** some part is computed (a setting, a call), or the object a route is declared on, or where a router is included, is not known, or (Django) no literal `ROOT_URLCONF` names the root URLconf. What could not be worked out is `{?}` in the path, and `unresolved` says what and where. A heuristic route is listed, but is never to be used for a strong finding.
+
+`routes.diff(base, head)` compares two lists: routes added, removed, and changed (a route removed and one added with the same handler: its method or path changed). Not read: routes added by calls (`add_url_rule`, `add_api_route`), class-based routers such as Django REST framework's, and routes built in loops.
 
 ## Fingerprints
 

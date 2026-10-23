@@ -5,7 +5,7 @@ from typing import Optional
 # The version of what the engine computes: parsed files, fingerprints and edges. It is part of
 # every cache key and cache file name, so an entry written by another version is never
 # served. Bump it whenever parse output, fingerprints or edges change.
-ENGINE_SCHEMA = 3
+ENGINE_SCHEMA = 4
 
 
 @dataclass
@@ -51,6 +51,7 @@ class ParsedFile:
     reexports: dict = field(default_factory=dict)     # JS/TS: export { a } from ... -> binding
     star_reexports: list[str] = field(default_factory=list)  # JS/TS: export * from ...
     default_export: str = ""                          # JS/TS: the name exported as default
+    routes: dict = field(default_factory=dict)        # Python: HTTP route facts (see routes.file_facts)
 
 
 @dataclass

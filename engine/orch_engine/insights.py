@@ -2,6 +2,8 @@
 from __future__ import annotations
 import ast
 
+from . import routes as _routes
+
 
 _ENTRY_NAMES = {"main.py", "manage.py", "wsgi.py", "asgi.py"}
 # decorators that do NOT imply external invocation - everything else (route decorators,
@@ -138,12 +140,8 @@ def file_summary(idx, file_rel):
 import re as _re
 from collections import defaultdict as _dd
 
-# Python decorators: @app.get("/x") / @router.route("/x", methods=[...])
-_PY_ROUTE = _re.compile(r'@(\w+)\.(get|post|put|delete|patch|route)\(\s*["\']([^"\']+)["\']([^)]*)', _re.I)
 # JS/TS method calls (Express/Koa/Fastify/Nest): app.get("/x", ...) - no decorator, needs a string path
 _JS_ROUTE = _re.compile(r'\b(\w+)\.(get|post|put|delete|patch|all|use)\(\s*["\'`]([^"\'`]+)', _re.I)
-_METHODS = _re.compile(r'methods\s*=\s*[\[(]([^\])]*)', _re.I)
-_QUOTED_WORD = _re.compile(r'["\']([A-Za-z]+)["\']')
 _TABLE = _re.compile(r'__tablename__\s*=\s*["\']([^"\']+)')
 _DB_BASES = {"base", "model", "declarativebase", "sqlmodel"}
 _ORM_MARKERS = ("import sqlalchemy", "from sqlalchemy", "django.db", "sqlmodel",
@@ -151,8 +149,6 @@ _ORM_MARKERS = ("import sqlalchemy", "from sqlalchemy", "django.db", "sqlmodel",
 # Receivers that are HTTP CLIENTS, not servers: `axios.get('/x')` defines no route (QA audit).
 _JS_CLIENT_RECV = {"axios", "fetch", "http", "https", "got", "ky", "request", "superagent",
                    "xhr", "instance", "client", "api"}
-# Decorator receivers that aren't web routers: `@cache.get("k")` is not a route.
-_PY_NON_ROUTE_RECV = {"cache", "lru_cache", "functools", "memoize", "redis"}
 _PY_COMMENT = _re.compile(r"#[^\n]*")
 
 
@@ -178,24 +174,15 @@ def language_breakdown(idx):
 
 
 def api_map(idx):
-    """HTTP routes for the frameworks we claim to support (QA #11): FastAPI/Flask
-    decorators (with Flask methods= parsed) and Express/Koa/Nest method calls."""
-    out = []
+    """HTTP routes. Python's come from the syntax tree (``routes``: FastAPI, Flask and Django,
+    with the prefixes they are mounted under, each with its handler, line and confidence);
+    JS/TS ones are Express/Koa/Nest method calls, matched by pattern."""
+    out = [{"method": r["method"], "path": r["path"], "file": r["file"], "line": r["line"],
+            "handler": r["handler"], "framework": r["framework"], "confidence": r["confidence"]}
+           for r in _routes.for_index(idx)]
     for p in idx.parsed_files:
         txt = p.text or ""
-        if p.language == "python":
-            for m in _PY_ROUTE.finditer(txt):
-                if m.group(1).lower() in _PY_NON_ROUTE_RECV:
-                    continue                            # @cache.get(...) etc., not a route
-                verb, path, rest = m.group(2).lower(), m.group(3), (m.group(4) or "")
-                if verb == "route":
-                    mm = _METHODS.search(rest)
-                    verbs = [v.upper() for v in _QUOTED_WORD.findall(mm.group(1))] if mm else []
-                    for v in (verbs or ["GET"]):        # Flask defaults to GET
-                        out.append({"method": v, "path": path, "file": p.file})
-                else:
-                    out.append({"method": verb.upper(), "path": path, "file": p.file})
-        elif p.language in ("javascript", "typescript"):
+        if p.language in ("javascript", "typescript"):
             for m in _JS_ROUTE.finditer(txt):
                 if m.group(1).lower() in _JS_CLIENT_RECV:
                     continue                            # axios.get(...) is a client call, not a route

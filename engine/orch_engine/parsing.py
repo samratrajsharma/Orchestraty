@@ -795,6 +795,8 @@ def parse_python(rel_path, source):
 
     mscope = _module_scope(tree, pkg)
     pf.bindings = mscope["bindings"]
+    from .routes import file_facts              # here, not at the top: routes reads this module's helpers
+    pf.routes = file_facts(tree, mscope, pkg)
     pf.star_imports = list(mscope["stars"])
     pf.assigned = sorted(mscope["assigned"])
     module_types = _known_classes(_assigned_kinds(tree.body), mscope["stores"])  # `_MODEL = Detector()`
