@@ -1,0 +1,9 @@
+{
+  "name": "orchestraty-ts-fixtures",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The pinned TypeScript compiler the TypeScript contract tests run, installed with npm ci.",
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
