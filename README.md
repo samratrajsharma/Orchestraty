@@ -175,9 +175,11 @@ Experiment code lives in `spikes/` and will be deleted when the experiments end 
 │   ├── scan/               Read-only agent-setup scanner
 │   ├── capture/            Capture shim, git-hook chaining, latency harness
 │   └── _shared/            Code shared by the experiments
-├── scripts/                The smoke test of the built wheel, and the install-to-first-note timing
+├── plugins/claude-code/    The Claude Code plugin: the hooks, the mod, the MCP server and a skill
+├── scripts/                The smoke test of the built wheel, the install-to-first-note timing, the plugin's build
 ├── docs/decisions/         Architecture decision records
 ├── pyproject.toml          The one distribution, orchestraty: both packages in one wheel
+├── .claude-plugin/         The marketplace file that lists the Claude Code plugin
 └── .github/workflows/      Continuous integration and releases
 ```
 
@@ -206,6 +208,15 @@ orch doctor                        # checks what Orchestraty needs, with a fix f
 ```
 
 Once it is published, `pipx install orchestraty` and `uv tool install orchestraty` will do the same.
+
+With Claude Code you can install Orchestraty's plugin as well, which holds the hooks instead of your settings file and brings the mod, the MCP server and a skill. The repository is its marketplace; in Claude Code:
+
+```text
+/plugin marketplace add samratrajsharma/Orchestraty
+/plugin install orchestraty@orchestraty
+```
+
+Then `orch init` turns the plugin's hooks on and adds none to the settings file. The plugin is built and passes `claude plugin validate --strict`; it has not been installed in a real Claude Code session yet. See [the plugin](orchestraty/README.md#the-claude-code-plugin).
 
 ### Run the tests
 
