@@ -21,6 +21,7 @@ The main package: the `orch` command, the hook shims, the coordinator, the live 
 | `orch init` | Copies the hook script into the state folder and adds hook entries for Claude Code's events to your user settings (`~/.claude/settings.json`, or the folder `CLAUDE_CONFIG_DIR` names), so every session and worktree is seen; then watches the repository it runs in and offers the push line (a pre-push hook chained in front of the repository's own hooks). Shows what will change and asks first; `--yes` skips the questions, `--no-git-hooks` the push line, `--project` uses this folder's `.claude/settings.local.json`, `--claude-config DIR` another config folder, `--print` only prints the entries. The settings file is backed up before every change. `--agent codex` or `--agent antigravity` installs into that agent instead (see [Agents](#agents)). |
 | `orch restore` | Removes Orchestraty's hook entries and leaves everything else. `--from-backup` puts back the settings file as it was before the last `orch init`. `--agent` as for `orch init`. |
 | `orch watch [PATH]`, `orch unwatch [PATH]` | Start or stop comparing the sessions of the repository holding PATH (default: here). `orch init` watches the repository it runs in. Sessions in other repositories are dropped unread: nothing about them is recorded. |
+| `orch doctor [--no-index]` | Checks what Orchestraty needs and prints a fix for each problem: the Python (3.10 or later), the state folder (writable, and not in a folder OneDrive, Dropbox, Google Drive or iCloud Drive syncs), the hook script, each agent's hooks, that the coordinator starts with what a hook starts it with, the interpreter and import path in `hooks/launch.txt` (one doctor starts is stopped again), git (2.38 or later for the together check) and that the engine imports; in a repository it also times the first index, the engine reading every file at HEAD with no cache, which comes before the first note. The exit code is 1 when there is a problem. `--no-index` skips the timing. |
 | `orch status` | The coordinator and the live sessions on each watched repository: agent, worktree, branch, base commit, last event, working or idle, what each has changed (files, and the functions whose contract changed), declared and claimed, the overlaps between them, strongest first, and merge-order advice. `--json` for other tools (the `schema` field versions it; every field is in [docs/status-json.md](docs/status-json.md)), `--all` to include ended sessions and latent overlaps. |
 | `orch findings` | The findings seen in the last days, the latest first: rule, strength, what it is about, the sessions involved, first and last seen, open or resolved, and your label. Each has a short number that `orch label` takes for 24 hours (kept in the state folder's `finding-numbers.json`). `--all` adds the resolved and latent ones, `--days N` (default 7), `--json` for other tools. Reads the record without changing it. |
 | `orch label <number\|key> real\|harmless\|false [--why "..."]` | Your verdict on a finding: real, harmless or false, with your reason if you give one. |
@@ -220,7 +221,11 @@ python -m pytest
 
 ## Install for development
 
+The distribution is `orchestraty`, one pure-Python wheel that holds this package and the engine (`orch_engine`); its `pyproject.toml` is at the repository's top. From there:
+
 ```bash
-pip install -e ./engine -e ./orchestraty
+pip install -e .
 orch --version
 ```
+
+Both packages are then imported from where they are. From the repository's top folder, run `orch` rather than `python -m orchestraty`: there, Python finds the folder `orchestraty/` before the package. `scripts/smoke.py` tests a built wheel end to end, and `scripts/first_note_timing.py` times install to first note; the root README says more.

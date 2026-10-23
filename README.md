@@ -175,8 +175,10 @@ Experiment code lives in `spikes/` and will be deleted when the experiments end 
 │   ├── scan/               Read-only agent-setup scanner
 │   ├── capture/            Capture shim, git-hook chaining, latency harness
 │   └── _shared/            Code shared by the experiments
+├── scripts/                The smoke test of the built wheel, and the install-to-first-note timing
 ├── docs/decisions/         Architecture decision records
-└── .github/workflows/      Continuous integration
+├── pyproject.toml          The one distribution, orchestraty: both packages in one wheel
+└── .github/workflows/      Continuous integration and releases
 ```
 
 ## Getting started
@@ -189,6 +191,21 @@ Experiment code lives in `spikes/` and will be deleted when the experiments end 
 | Python 3.9 or later | The experiments. The scanner must also run on older systems. |
 | git | Everything |
 | pytest 8 or 9 | The test suites. It is the only dependency. |
+
+### Install
+
+Orchestraty is one pure-Python package for every operating system, `orchestraty`: the `orch` command and the engine, with no dependencies. It is not on PyPI yet. Build the wheel, or take it from a draft release, and install it as a command of its own with pipx or uv:
+
+```bash
+python -m pip install build
+python -m build                    # dist/: the sdist and orchestraty-<version>-py3-none-any.whl
+pipx install dist/orchestraty-<version>-py3-none-any.whl
+# or: uv tool install dist/orchestraty-<version>-py3-none-any.whl
+orch init                          # in the repository the agents work on
+orch doctor                        # checks what Orchestraty needs, with a fix for each problem
+```
+
+Once it is published, `pipx install orchestraty` and `uv tool install orchestraty` will do the same.
 
 ### Run the tests
 
@@ -217,20 +234,19 @@ On Debian and Ubuntu, including the default WSL2 distribution, `venv` needs the 
 ### Try what exists
 
 ```bash
-pip install -e ./engine -e ./orchestraty
+pip install -e .                   # both packages, from where they are, for development
 orch --version
+orch doctor
 
 # Structural regression check of the current branch against main
 python -m orch_engine.check --repo . --base main
 
-# Read-only graph tools for coding agents, over MCP
-pip install -e "./engine[mcp]"
+# Read-only graph tools for coding agents, over MCP (a development tool: the mcp package is not a dependency)
+pip install "mcp>=1.2,<2"
 python -m orch_engine.mcp_server --repo .
 ```
 
-The engine's optional extras add features but aren't needed for the tests:
-- `treesitter` parses more languages: Go, Java, Rust, C#, Ruby, PHP, C and C++;
-- `mcp` adds the MCP server.
+`pip install -e ".[treesitter]"` adds the optional extra that lets the engine parse more languages: Go, Java, Rust, C#, Ruby, PHP, C and C++. It isn't needed for the tests. Run `orch` rather than `python -m orchestraty` from the repository's top folder: there, Python finds the folder `orchestraty/` before the package.
 
 Engine settings (`ORCH_DATA_DIR`, `ORCH_USE_CACHE`) and modules are described in [`engine/README.md`](engine/README.md).
 
@@ -258,14 +274,21 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ### Continuous integration
 
-Orchestraty is pure Python and standard library only, so there is one codebase for every operating system and nothing to build per platform. CI checks that the same code runs everywhere.
+Orchestraty is pure Python and standard library only, so there is one codebase for every operating system and one wheel for all of them. CI checks that the same code runs everywhere.
 
 | Run | Platforms and Python | When |
 | --- | --- | --- |
 | Quick | Windows 3.12; Linux 3.12 | Every push and pull request |
-| Full | Adds Linux 3.9, 3.10 and 3.11, and macOS 3.12 | Weekly on Mondays, on manual runs, and on release tags (`v*`) |
+| Package and smoke | The sdist and the wheel built on Linux; the smoke test of that wheel on Windows and Linux 3.12 | Every push and pull request |
+| Full | Adds Linux 3.9, 3.10 and 3.11, and macOS 3.12, and the smoke test on macOS | Weekly on Mondays, on manual runs, and on release tags (`v*`) |
 
-Every job runs the main package, engine and experiment tests, and fails if the tests leave any file behind. Python 3.9 runs only the experiments, because the scanner must work on older systems. A branch is merged once the quick run is green.
+The quick and full runs run the main package, engine and experiment tests; Python 3.9 runs only the experiments, because the scanner must work on older systems. The smoke test (`scripts/smoke.py`) installs the built wheel in a clean virtual environment and runs `orch --version`, `orch init --print`, two scripted sessions through the installed hook script that reach a note, and `orch doctor`, with no real agent and no network. Two more jobs test the TypeScript helper and the TypeScript contracts with Node. Every job fails if it leaves any file behind. A branch is merged once CI is green on it.
+
+### Releases
+
+`.github/workflows/release.yml` runs on a tag `v<version>`, the version kept in `orchestraty/orchestraty/__init__.py` (the one place it is kept). It builds the sdist and the wheel, runs the smoke test on Windows, macOS and Linux, and attaches the files to a draft GitHub release, which stays a draft until it is published by hand. Publishing to PyPI is a job of its own, off until the legal check: it runs only when the workflow is started by hand on the tag with `publish-to-pypi` ticked, and uses trusted publishing (the `pypi` environment), so no token or secret is kept anywhere.
+
+`scripts/first_note_timing.py` times the plan's pass check, install to first note on a 10,000-file repository: in a temporary folder it installs the built wheel in a fresh virtual environment, generates (or clones, with `--repo`) the repository, runs `orch init --yes` with its own agent config, plays the two scripted sessions and prints each step's time.
 
 ### Conventions
 

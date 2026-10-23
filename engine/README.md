@@ -30,7 +30,7 @@ cd engine
 python -m pytest -q
 ```
 
-Only pytest is needed. `pip install -e ".[treesitter]"` adds the other languages.
+Only pytest is needed. The engine ships in the `orchestraty` distribution (its `pyproject.toml` is at the repository's top); from there, `pip install -e ".[treesitter]"` adds the other languages.
 
 ## Settings
 
