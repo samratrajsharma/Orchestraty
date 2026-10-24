@@ -39,7 +39,7 @@ These are the rules Orchestraty is built by: what it does, what it will not beco
 | A standalone code-graph MCP server | The code graph exists to work out what one session's change does to another, not as a general code-search service. (The engine keeps a read-only graph server for development; it is not an `orch` command, and needs a package Orchestraty does not install.) |
 | Codebase chat or RAG | Orchestraty answers one question, what a change does to the other sessions, from facts, not by searching text. |
 | A replacement for pull requests or review bots | It works before the merge, while the agents are still working. Review stays review. |
-| A desktop app or a local web server | The agent, the terminal and the editor are where you already look. A server would be one more thing listening on your machine. |
+| A desktop app, or a server other machines can reach | The agent, the terminal and the editor are where you already look. The one page Orchestraty serves, `orch ui`, is for trying it out: it listens only on 127.0.0.1, for this computer, behind a link that works once, and it shows without deciding anything. |
 | Individual performance scoring | Counting who collided invites blame and gaming, and makes people turn the tool off. |
 | Telemetry by default, or uploading prompts or transcripts | Local-first: what you share, you export yourself, and you see it first. |
 
