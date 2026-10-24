@@ -442,6 +442,10 @@ class Record:
         self.db.execute("UPDATE notes SET state = 'pending', written = NULL WHERE slot = ? AND state = 'written'",
                         (slot,))
 
+    def set_note_text(self, note_id, text):
+        """A note not yet written, with its finding's text as it is now."""
+        self.db.execute("UPDATE notes SET text = ? WHERE id = ? AND state = 'pending'", (text, note_id))
+
     # the user's word on the findings (schema 2): kept here only, never put into a note
     def has_table(self, name):
         return self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone() is not None

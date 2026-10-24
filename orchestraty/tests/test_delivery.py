@@ -268,6 +268,50 @@ def test_the_push_line_follows_callers_left_behind(state, two):
     assert not push.exists()
 
 
+LEFT = "from a import charge\n\n\ndef bill():\n    return charge(3, 'EUR')\n"
+UPDATED = "from a import charge\n\n\ndef pay():\n    return charge(1)\n"
+
+
+def two_callers(state, repo, git, tmp_path):
+    (repo / "d.py").write_text(LEFT, encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "a second caller")
+    return make_two(state, repo, git, tmp_path)
+
+
+def test_a_waiting_note_follows_its_finding(state, repo, git, tmp_path):
+    # A's note about callers left behind waits for the end of its turn; meanwhile B updates
+    # one of them. The note A takes names only the caller still left behind.
+    c, wa, wb = two_callers(state, repo, git, tmp_path)
+    try:
+        edit(state, c, "A", wa, "a.py", BROKEN)
+        stop = slots.stop_slot(state, "A")
+        before = read_slot(stop)["hookSpecificOutput"]["additionalContext"]
+        assert "b.py" in before and "d.py" in before
+        edit(state, c, "B", wb, "b.py", UPDATED)
+        after = read_slot(stop)["hookSpecificOutput"]["additionalContext"]
+        assert "d.py" in after and "b.py" not in after
+        [note] = [n for n in c.record.notes(session_id="A") if n["kind"] == "stop"]
+        assert note["state"] == "written" and note["text"] == after
+    finally:
+        c.close()
+
+
+def test_a_note_already_taken_is_not_given_again_when_its_finding_changes(state, repo, git, tmp_path):
+    from orchestraty.capture.hook import take_slot
+    c, wa, wb = two_callers(state, repo, git, tmp_path)
+    try:
+        edit(state, c, "A", wa, "a.py", BROKEN)
+        assert take_slot(slots.stop_slot(state, "A"))
+        c.step()
+        edit(state, c, "B", wb, "b.py", UPDATED)
+        assert not slots.waiting(slots.stop_slot(state, "A"))
+        [note] = [n for n in c.record.notes(session_id="A") if n["kind"] == "stop"]
+        assert note["state"] == "delivered" and "b.py" in note["text"]
+    finally:
+        c.close()
+
+
 def test_a_finished_sessions_change_keeps_its_push_line(state, two):
     # People push after the agent has gone: the worktree it left is followed as plain git.
     c, wa, wb = two

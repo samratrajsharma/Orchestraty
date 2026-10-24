@@ -62,3 +62,4 @@ Phase 1, on top of the coordination core already in place (the hook script and i
 ### Changed
 
 - Steer stops an edit only for a strong finding's note; every other note only informs, in steer mode too.
+- A note still waiting for its agent follows its finding: when another session updates a caller, the note about callers left behind names only the ones still left.

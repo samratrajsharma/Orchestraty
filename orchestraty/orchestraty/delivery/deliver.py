@@ -210,14 +210,33 @@ class Deliverer:
                 self.withdraw(key)
 
     def add(self, finding, sessions, trigger_ns, wake=False):
-        """Make the notes a newly seen finding calls for (not again for one already made)."""
+        """Make the notes a newly seen finding calls for (not again for one already made); a
+        note still waiting for its agent is brought up to date with the finding."""
         made = 0
         for sid, kind, slot, text in self.plan(finding, sessions, wake):
             if self._told_already(finding, sid, kind) or self._heard(finding["key"], sid):
                 continue
             if self.record.add_note(finding["key"], sid, kind, _rel(self.state, slot), text, self.now_ns(), trigger_ns):
                 made += 1
+            else:
+                self._refresh(finding["key"], sid, kind, text)
         return made
+
+    def _refresh(self, finding_key, sid, kind, text):
+        """The finding still holds but what its note says changed while the note waits (a caller
+        another session updated, a use that moved): the note takes the new text, and a slot
+        already written is taken back, so the next fill writes it again."""
+        for note in self.record.notes(finding_key=finding_key, session_id=sid, states=("pending", "written")):
+            if note["kind"] != kind or note["text"] == text:
+                continue
+            if note["state"] == "written":
+                if self._settle(note["slot"]):
+                    continue                              # taken meanwhile: told as it was
+                if not slots.withdraw(_abs(self.state, note["slot"])):
+                    self._delivered(note["slot"], self.now_ns())
+                    continue
+                self.record.unwrite_slot(note["slot"])    # the slot's other notes wait for that write too
+            self.record.set_note_text(note["id"], text)
 
     @staticmethod
     def _topic(key, sid):
