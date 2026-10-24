@@ -15,14 +15,16 @@ Exactly once, with no locks: the coordinator writes a slot only when its path is
 never overwrites one (``write`` returns False when the slot is still waiting); the hook takes a
 slot by renaming it to a name of its own, then reads and deletes it. A slot whose notes the
 record says were written and which is no longer on disk was taken. ``withdraw`` is a rename
-too: when it fails the hook was first, and the note was delivered.
+too: when the file is gone the hook was first, and the note was delivered.
 
 ``file_key`` must give the same key as the hook script's copy of it (a test checks).
 """
 import os
 import sys
+import time
 
 TAIL = 24                   # characters of the path kept readable in a key
+WITHDRAW_TRIES = 5          # renames a held slot gets in withdraw, 0.2 s apart at most in all
 _SAFE = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-."
 
 
@@ -109,12 +111,21 @@ def write(path, data):
 
 
 def withdraw(path):
-    """Take a waiting slot back. True when withdrawn; False when the hook took it first."""
+    """Take a waiting slot back. True when withdrawn; False when the hook took it first. On
+    Windows a file another process holds open cannot be renamed: the hook taking it, which
+    deletes it a moment later, or a scanner reading a new file; so a held file is tried again,
+    WITHDRAW_TRIES times in all, and only a file gone counts as taken."""
     gone = "%s.%d.withdrawn" % (path, os.getpid())
-    try:
-        os.rename(path, gone)
-    except (FileNotFoundError, PermissionError):  # taken, or being taken (Windows: held open by the hook)
-        return False
+    for attempt in range(WITHDRAW_TRIES):
+        try:
+            os.rename(path, gone)
+            break
+        except FileNotFoundError:                  # taken
+            return False
+        except PermissionError:                    # held open (Windows): being taken, or being scanned
+            if attempt == WITHDRAW_TRIES - 1:
+                return False
+            time.sleep(0.02 * (attempt + 1))
     os.remove(gone)
     return True
 

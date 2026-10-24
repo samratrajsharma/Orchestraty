@@ -138,6 +138,22 @@ def test_withdraw_wins_or_loses_against_the_hook(state):
     assert not slots.withdraw(path)                     # already gone: the hook took it
 
 
+def test_a_slot_held_open_for_a_moment_is_still_withdrawn(state, monkeypatch):
+    # On Windows a scanner can hold a new file open for a moment, and a rename then fails: that is
+    # not the hook taking it, so withdraw tries again.
+    path = slots.stop_slot(state, "S1")
+    slots.write(path, b"x")
+    rename, calls = os.rename, []
+
+    def held_once(src, dst):
+        calls.append(src)
+        if len(calls) == 1:
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        return rename(src, dst)
+    monkeypatch.setattr(slots.os, "rename", held_once)
+    assert slots.withdraw(path) and not slots.waiting(path) and len(calls) == 2
+
+
 def test_edit_slots_are_keyed_by_the_file(state, tmp_path):
     a = slots.edit_slot(state, "S1", str(tmp_path / "pkg" / "a.py"))
     assert slots.edit_slot(state, "S1", str(tmp_path / "pkg" / "." / "a.py")) == a
