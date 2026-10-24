@@ -1,7 +1,7 @@
 """Delivery: turns findings into notes for the sessions that must hear, keeps the slots
 filled, and learns which notes reached their agent.
 
-Who hears what (Draft 4 §5.5):
+Who hears what:
 
 | Rule   | Note                                   | To                               | Slot      |
 |--------|----------------------------------------|----------------------------------|-----------|
