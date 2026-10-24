@@ -375,7 +375,15 @@ def index_check(cwd, say=None):
             return problem(f"first index of {info['top']}: failed ({type(exc).__name__}: {str(exc)[:200]})",
                            "run git status there; orch status says more once a session works in it")
         seconds = time.monotonic() - started
-    return ok(f"first index of {info['top']}: {len(idx.parsed_files)} files in {seconds:.1f} s")
+    line = f"first index of {info['top']}: {len(idx.parsed_files)} files in {seconds:.1f} s"
+    capped = next((e["reason"] for e in idx.not_analysed if e.get("reason", "").startswith("file cap")), "")
+    if capped:                                # the engine stops at a number of files, in path order
+        cap = re.search(r"\((\d+)\)", capped)
+        last = max((pf.file for pf in idx.parsed_files), default="")
+        return note(f"{line}. The engine reads at most {cap.group(1) if cap else 'so many'} files of a commit, and "
+                    f"this one has more: files after {last} in path order are not analysed, so changes and uses "
+                    "there give no notes")
+    return ok(line)
 
 
 # ------------------------------------------------------------------------------ all of it

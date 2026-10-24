@@ -130,3 +130,15 @@ def test_an_engine_that_does_not_import(monkeypatch):
 def test_not_in_a_repository(tmp_path):
     check = doctor.index_check(str(tmp_path))
     assert check == doctor.note("first index: not in a git repository; run orch doctor in one to time its first index")
+
+
+def test_a_repository_over_the_file_cap_says_what_is_not_analysed(repo, monkeypatch):
+    # The engine reads at most 20,000 files of a commit; here, with the cap at one, b.py is past it.
+    from orch_engine import ingest
+    commit_files = ingest.commit_files
+    monkeypatch.setattr(ingest, "commit_files", lambda path, sha, max_bytes=ingest.MAX_BLOB_BYTES, max_files=20000:
+                        commit_files(path, sha, max_bytes=max_bytes, max_files=1))
+    check = doctor.index_check(str(repo))
+    assert check.kind == "note" and ": 1 files in " in check.text
+    assert "reads at most 1 files of a commit, and this one has more: files after a.py in path order are not " \
+           "analysed" in check.text
