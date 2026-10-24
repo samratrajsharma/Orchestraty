@@ -223,16 +223,19 @@ def test_antigravity_gets_its_answer_even_when_the_hook_cannot_write(hook_script
 OVERHEAD_RUNS = 20
 
 
-def _median_ms(argv, data, runs=OVERHEAD_RUNS, warmup=3):
-    times = []
+def _medians_ms(commands, data, runs=OVERHEAD_RUNS, warmup=3):
+    """Each command's median time in ms. The commands take turns, run by run, so the load on a
+    shared CI machine falls on all of them alike, not on whichever was measured later."""
+    times = [[] for _ in commands]
     for i in range(warmup + runs):
-        started = time.perf_counter()
-        proc = subprocess.run(argv, input=data, capture_output=True, timeout=60)
-        took = (time.perf_counter() - started) * 1000
-        assert proc.returncode == 0
-        if i >= warmup:
-            times.append(took)
-    return statistics.median(times)
+        for argv, out in zip(commands, times):
+            started = time.perf_counter()
+            proc = subprocess.run(argv, input=data, capture_output=True, timeout=60)
+            took = (time.perf_counter() - started) * 1000
+            assert proc.returncode == 0
+            if i >= warmup:
+                out.append(took)
+    return [statistics.median(t) for t in times]
 
 
 @pytest.mark.parametrize("agent,event,raw", [
@@ -250,7 +253,7 @@ def test_the_hooks_overhead_for_each_agent(hook_script, agent, event, raw):
     # The way the latency harness measures it: the hook's time over a Python that does
     # nothing, both started the same way. The hook adds a few milliseconds to the
     # interpreter's start; the bound only catches gross slowness on a shared CI machine.
-    baseline = _median_ms([sys.executable, "-S", "-I", "-c", "pass"], raw)
-    took = _median_ms([sys.executable, "-S", "-I", str(hook_script), agent, event], raw)
+    baseline, took = _medians_ms([[sys.executable, "-S", "-I", "-c", "pass"],
+                                  [sys.executable, "-S", "-I", str(hook_script), agent, event]], raw)
     added = took - baseline
     assert added < max(20.0, baseline), f"{agent}: the hook took {took:.1f} ms, a no-op {baseline:.1f} ms"

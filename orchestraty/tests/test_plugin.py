@@ -272,16 +272,19 @@ def test_the_command_finds_the_state_folder_as_orchestraty_does(tmp_path, where)
     assert [line["event"] for _, line in spool_lines(root / "spool")] == ["PostToolUse"]
 
 
-def _median_ms(argv, data, runs=20, warmup=3):
-    times = []
+def _medians_ms(commands, data, runs=20, warmup=3):
+    """Each command's median time in ms. The commands take turns, run by run, so the load on a
+    shared CI machine falls on all of them alike, not on whichever was measured later."""
+    times = [[] for _ in commands]
     for i in range(warmup + runs):
-        started = time.perf_counter()
-        proc = subprocess.run(argv, input=data, capture_output=True, timeout=60)
-        took = (time.perf_counter() - started) * 1000
-        assert proc.returncode == 0
-        if i >= warmup:
-            times.append(took)
-    return statistics.median(times)
+        for argv, out in zip(commands, times):
+            started = time.perf_counter()
+            proc = subprocess.run(argv, input=data, capture_output=True, timeout=60)
+            took = (time.perf_counter() - started) * 1000
+            assert proc.returncode == 0
+            if i >= warmup:
+                out.append(took)
+    return [statistics.median(t) for t in times]
 
 
 def test_the_plugin_hooks_overhead(state_root):
@@ -296,21 +299,21 @@ def test_the_plugin_hooks_overhead(state_root):
     in the log as a warning."""
     switched_on(state_root)
     data = raw()
-    baseline = _median_ms([sys.executable, "-S", "-I", "-c", "pass"], data)
-    took = _median_ms([shell(), "-c", plugin.command("PostToolUse")], data)
-    added = took - baseline
+    nothing_py = [sys.executable, "-S", "-I", "-c", "pass"]
+    hook_cmd = [shell(), "-c", plugin.command("PostToolUse")]
     if os.name != "nt":
+        baseline, took = _medians_ms([nothing_py, hook_cmd], data)
+        added = took - baseline
         assert added < max(30.0, baseline), f"the plugin's hook took {took:.1f} ms, a no-op {baseline:.1f} ms"
         return
-    bash = _median_ms([shell(), "-c", "exit 0"], data)
-    direct = _median_ms([sys.executable, "-S", "-I", str(State(str(state_root)).hook_script), "claude", "PostToolUse"],
-                        data)
+    baseline, took, bash, direct = _medians_ms(
+        [nothing_py, hook_cmd, [shell(), "-c", "exit 0"],
+         [sys.executable, "-S", "-I", str(State(str(state_root)).hook_script), "claude", "PostToolUse"]], data)
     times = (f"through {shell()}: the plugin's hook {took:.1f} ms, a hook that does nothing {bash:.1f} ms; "
              f"a Python that does nothing {baseline:.1f} ms, the settings hook {direct:.1f} ms")
     inner = os.path.join(os.path.dirname(os.path.dirname(shell())), "usr", "bin", "bash.exe")
     if os.path.isfile(inner):                    # Git Bash's own bash, without the launcher in front of it
-        hook, nothing = (_median_ms([inner, "-c", plugin.command("PostToolUse")], data),
-                         _median_ms([inner, "-c", "exit 0"], data))
+        hook, nothing = _medians_ms([[inner, "-c", plugin.command("PostToolUse")], [inner, "-c", "exit 0"]], data)
         times += f"; through {inner}: the plugin's hook {hook:.1f} ms, a hook that does nothing {nothing:.1f} ms"
     warnings.warn(UserWarning("Windows timings, " + times))
     assert took - bash - baseline < max(30.0, baseline), times
