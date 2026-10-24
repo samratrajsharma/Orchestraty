@@ -2,7 +2,7 @@
 
 The main package: the `orch` command, the hook shims, the coordinator, the live map, the overlap rules and the notes that keep parallel coding-agent sessions aware of each other.
 
-**Status: in development.** The coordination core works end to end in tests: `orch init` installs the hooks and watches the repository it runs in; the coordinator, which the hooks start when needed, keeps a live map of what each session has changed, runs the overlap rules, and writes each note in advance for the session that must hear it; the hooks hand the notes to the agents. A real run with two Claude Code sessions, and the measurements, are next. Codex and Antigravity are built; not yet tested with the real agents (see [Agents](#agents)). See the repository [README](../README.md) for the design, and [docs/beta.md](docs/beta.md) for a short guide to trying it.
+**Status: Phase 1, early access.** The coordination core works end to end: `orch init` installs the hooks and watches the repository it runs in; the coordinator, which the hooks start when needed, keeps a live map of what each session has changed, runs the overlap rules, and writes each note in advance for the session that must hear it; the hooks hand the notes to the agents. With two real Claude Code sessions, every note reaches its agent, ready within a second of the change. Codex and Antigravity are built; not yet tested with the real agents (see [Agents](#agents)). See the repository [README](../README.md) for an overview, and [docs/beta.md](docs/beta.md) for the guide for testers.
 
 | Subpackage | Job |
 | --- | --- |
@@ -89,7 +89,7 @@ The hook's own time is not counted: the hook would have to read the clock and wr
 
 `orch mcp` is an MCP server over stdio for agents that support MCP: an agent can ask who is changing a file or function before it edits, say what it is about to change, and claim what other sessions must leave to it. It depends on the model remembering to ask; with hooks (level 2) the notes come without asking.
 
-`orch mcp --config claude`, `codex` or `antigravity` prints how to register it with that agent (the `claude mcp add` or `codex mcp add` command, or the config snippet) and the line to add to your repository's AGENTS.md so the agent calls `check_before_edit` before it edits shared code. It writes nothing. **Built; not yet tested with the real agents:** the tests drive the server over stdin and stdout as an agent does.
+`orch mcp --config claude`, `codex` or `antigravity` prints how to register it with that agent (the `claude mcp add` or `codex mcp add` command, or the config snippet) and the line to add to your repository's AGENTS.md so the agent calls `check_before_edit` before it edits shared code. It writes nothing. **Tested with Claude Code,** whose agent called the server's tools in a real session; not yet with Codex or Antigravity. The tests drive the server over stdin and stdout as an agent does.
 
 | Tool | What it answers |
 | --- | --- |
@@ -228,7 +228,7 @@ Then run `orch init` as usual. If you registered the MCP server yourself (`orch 
 - **Speed.** `tests/test_plugin.py` measures the plugin's hook as the hook timing test measures the settings hooks, through the shell Claude Code runs it with. On Linux the sh command adds 0.6 ms to the hook: 10.5 ms in all over a Python that does nothing, against a budget of 30 ms. On Windows that shell is Git Bash, and its start puts the hook over the budget: 72.6 ms against 20.6 ms for a Python that does nothing, on a CI machine. No faster form fits a plugin there (only a hook that starts an interpreter named by its absolute path, as the settings hooks do, avoids a shell, and a plugin's files are the same on every machine), so on Windows the settings hooks are the faster setup: leave the plugin out, and `orch init` writes the hooks and the mod into the settings file, and `orch mcp --config claude` shows how to register the MCP server. `orch init` says so on Windows.
 - **Built files.** `hooks/register.js` is the mod's module, copied, because a plugin may not point outside its own folder; `hooks/hooks.json` and the manifest are generated from the package. `python scripts/build_plugin.py` writes them, and a test fails when they differ.
 
-Checked with `claude plugin validate --strict` (Claude Code 2.1.309). Built; not yet installed in a real Claude Code session, so whether its hooks, mod, MCP tools and skill load there is untested.
+Checked with `claude plugin validate --strict` (Claude Code 2.1.309). Installed from this repository's marketplace in a real Claude Code (2.1.292, in a profile of its own): its hooks delivered every note of a two-session test, and the agent used its MCP tools. Its mod and skill were not checked there, since the test ran without a screen.
 
 ## Where state lives
 
