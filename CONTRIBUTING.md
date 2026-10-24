@@ -14,7 +14,27 @@ python -m pip install "pytest>=8,<10"
 (cd spikes && python -m pytest)
 ```
 
-Set `PYTHONDONTWRITEBYTECODE=1` so the tests leave no bytecode caches. The TypeScript helper (`helpers/typescript`) and the editor extension (`editors/vscode`) are tested with Node: `npm ci && npm test` in each folder.
+Set `PYTHONDONTWRITEBYTECODE=1` so the tests leave no bytecode caches. On Windows, run the same from PowerShell, one folder at a time. The TypeScript helper (`helpers/typescript`) and the editor extension (`editors/vscode`) are tested with Node: `npm ci && npm test` in each folder.
+
+From the repository's top folder, run `orch` rather than `python -m orchestraty`: there, Python finds the folder `orchestraty/` before the package. `pip install -e ".[treesitter]"` adds the optional extra that lets the engine parse more languages (Go, Java, Rust, C#, Ruby, PHP, C and C++); the tests don't need it.
+
+## The repository
+
+```text
+.
+├── orchestraty/            The main package: the orch command, hooks, coordinator, live map, rules, notes, adapters
+├── engine/                 The contract engine (orch_engine): parsing, code graph, contracts
+├── plugins/claude-code/    The Claude Code plugin: the hooks, the mod, the MCP server and a skill
+├── editors/vscode/         The VS Code and Cursor extension
+├── helpers/typescript/     The two-call helper for homemade agents, in TypeScript
+├── examples/               A homemade agent that uses the Python helper
+├── scripts/                The smoke test of the built wheel, install-to-first-note timing, the plugin's build, the agents table
+├── spikes/                 Throwaway experiments from the validation stage, not part of the product
+├── docs/                   The rules, the agents' test results, and the decision records
+└── pyproject.toml          One distribution, orchestraty: both packages in one wheel
+```
+
+Everything runs on the user's machine. An agent's hook runs a small script that appends one line to a file and exits; the one thing it waits for is a note already written for it. One background process per user, started by the first hook that needs it, reads those lines and git, keeps a live map of what each session has changed since its base commit, runs the [contract engine](engine/) and the overlap rules, and writes each note in advance for the session that must hear it. `orch status`, the Claude Code mod, the editor extension and the MCP tools all show what that process found; none of them detects anything itself.
 
 ## The code
 
@@ -31,6 +51,21 @@ Set `PYTHONDONTWRITEBYTECODE=1` so the tests leave no bytecode caches. The TypeS
 - **Never touch the real user's state, settings or repositories.** The fixtures in `orchestraty/tests/conftest.py` give every test its own state folder and home (`ORCH_HOME`, `HOME`, `USERPROFILE`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) and keep the background process from starting; the `git` fixture runs git with an empty user and system config, in temporary repositories. Use them; never point a test at `~`, the real agent settings or a real repository.
 - **Leave nothing behind.** No `__pycache__`, no `.pytest_cache`, no output files in the working copy. CI fails any job whose tests leave a file behind.
 - A change that affects behaviour comes with a test that fails without it.
+
+### Continuous integration
+
+| Run | Platforms and Python | When |
+| --- | --- | --- |
+| Quick | Windows 3.12; Linux 3.12 | Every push and pull request |
+| Package and smoke | The sdist and the wheel built on Linux; the smoke test of that wheel on Windows and Linux 3.12 | Every push and pull request |
+| Node | The TypeScript helper, the TypeScript contracts and the editor extension (its `.vsix` kept as an artifact), on Windows and Linux | Every push and pull request |
+| Full | Adds Linux 3.9, 3.10 and 3.11, and macOS 3.12, and the smoke test on macOS | Weekly on Mondays, on manual runs, and on release tags (`v*`) |
+
+The smoke test (`scripts/smoke.py`) installs the built wheel in a clean virtual environment and runs `orch --version`, `orch init --print`, two scripted sessions through the installed hook script that reach a note, and `orch doctor`, with no real agent and no network. Python 3.9 runs only the experiments. Every job fails if its tests leave any file behind.
+
+### Releases
+
+`.github/workflows/release.yml` runs on a tag `v<version>`, the version kept in `orchestraty/orchestraty/__init__.py`. It builds the sdist and the wheel, runs the smoke test on Windows, macOS and Linux, and attaches the files to a draft GitHub release, which stays a draft until it is published by hand. Publishing to PyPI is a job of its own, off until it is turned on: it runs only when the workflow is started by hand on the tag with `publish-to-pypi` ticked, and uses trusted publishing, so no token is kept anywhere. `scripts/first_note_timing.py` times install to first note on a 10,000-file repository.
 
 ## Adding an agent adapter
 
@@ -65,3 +100,11 @@ The harness for it lives in [`spikes/capture/`](spikes/capture/README.md) (`capt
 - **Through a branch.** Work on a short-lived branch; it reaches `main` only after CI is green on it, fast-forward only, so history stays linear.
 - Name only the agents Orchestraty connects to, where the code supports them; don't name other products in the repository.
 - Anything that shapes the design is recorded as an ADR in [`docs/decisions/`](docs/decisions/), from the [template](docs/decisions/template.md).
+
+## Decision records
+
+| ADR | Decision |
+| --- | --- |
+| [0001](docs/decisions/0001-effect-engine-starts-from-earlier-core.md) | The effect engine starts from the core of an earlier product. |
+| [0002](docs/decisions/0002-throwaway-spikes-live-in-spikes.md) | Throwaway experiment code lives in `spikes/`. |
+| [0003](docs/decisions/0003-coordination-core-is-product-code-from-the-start.md) | The coordination core is product code from the start, in `orchestraty/`. |
