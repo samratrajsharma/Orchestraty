@@ -240,6 +240,21 @@ def test_antigravity_is_told_with_its_next_step_once_it_has_changed_what_is_clai
         c.close()
 
 
+def test_a_release_stamped_just_ahead_of_the_clock_still_takes_the_notes_back(state, repo, git, tmp_path):
+    # A coarse clock (Windows before Python 3.13) can stamp the release line a little past the
+    # coordinator's own reading; the claim must not count as holding when the notes are checked.
+    c, tops = start(state, repo, git, tmp_path)
+    try:
+        cl = claim(state, c, "a.py", cwd=tops["A"])
+        slot = slots.edit_slot(state, "B", str(tops["B"] / "a.py"))
+        assert slots.waiting(slot)
+        claims.append_release(state, str(repo / ".git"), claim_id=cl["id"], now=time.time() + 0.05)
+        settle(c)
+        assert not slots.waiting(slot) and [n["state"] for n in claim_notes(c, "B")] == ["withdrawn"]
+    finally:
+        c.close()
+
+
 def test_a_claim_that_ends_takes_back_its_notes(state, repo, git, tmp_path, hook_script, monkeypatch):
     c, tops = start(state, repo, git, tmp_path)
     try:

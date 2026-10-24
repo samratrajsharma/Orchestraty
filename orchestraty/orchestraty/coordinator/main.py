@@ -640,7 +640,9 @@ class Coordinator:
                     continue
                 named = c["id"] == item["id"] if "id" in item else c["target"] == item["target"]
                 if named and (not item["session_id"] or c["session_id"] == item["session_id"]):
-                    self.record.end_claim(c["id"], max(ts, c["ts"]), "released")
+                    # Made as a claim is: a release time just past this clock's reading must not
+                    # leave the claim holding in this pass, which takes its notes back.
+                    self.record.end_claim(c["id"], max(self._made(ts), c["ts"]), "released")
         self._dirty_repos.add(repo_id)
         self._status_dirty = True
 
