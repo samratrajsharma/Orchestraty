@@ -184,9 +184,38 @@ def _skip_import(toks, k):
     return j + 1
 
 
+def _substitutions(template, line):
+    """The tokens of a template literal's ${...} expressions, on the lines they are on."""
+    out, j, n = [], 1, len(template)
+    while j < n - 1:
+        c = template[j]
+        if c == "\\":
+            j += 2
+        elif c == "$" and template[j + 1] == "{":
+            end = dts._expression_end(template, j + 2)
+            first = line + template.count("\n", 0, j + 2)
+            out += [(kind, v, first + at - 1) for kind, v, at in dts.tokens(template[j + 2:end - 1], source=True)]
+            j = end
+        else:
+            j += 1
+    return out
+
+
+def _with_substitutions(toks):
+    """The tokens, each template literal followed by the tokens of its ${...} expressions."""
+    out = []
+    for tok in toks:
+        out.append(tok)
+        if tok[0] == "str" and tok[1].startswith("`") and "${" in tok[1]:
+            out += _with_substitutions(_substitutions(tok[1], tok[2]))
+    return out
+
+
 def local_uses(toks, local, member=None):
     """The lines where a local name is used (outside strings, comments and import or re-export
-    statements): `local`, or with `member`, `local.member`."""
+    statements, and inside a template literal's ${...} expressions): `local`, or with `member`,
+    `local.member`."""
+    toks = _with_substitutions(toks)
     lines, k, n = set(), 0, len(toks)
     while k < n:
         kind, v, line = toks[k]

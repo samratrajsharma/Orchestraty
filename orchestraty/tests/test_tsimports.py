@@ -76,6 +76,15 @@ def test_a_use_needs_import_evidence():
     assert imports.origin("src/index.ts", "other") == ("src/pay.ts", "other")           # through export *
 
 
+def test_a_use_inside_a_template_literal_counts():
+    files = {"src/price.ts": 'export function price(a: number, c: string = "EUR"): string { return `${a} ${c}` }\n',
+             "src/cart.ts": 'import { price } from "./price";\n\nexport const line = (n: string) => `${n}: ${price(1)}`;\n'
+                            'export const nested = `a ${`b ${price(2)}`}\n${\n  price(3)\n}`;\n'
+                            'export const text = `price(4) is only words here`;\n'}
+    _, imports = copy(files)
+    assert imports.uses("src/price.ts", "price") == {"src/cart.ts": [3, 4, 6]}
+
+
 def test_a_default_export_and_its_local_name():
     files = {"src/pay.ts": "export default function charge(a: number) { return a }\n",
              "src/use.ts": 'import pay from "./pay"\nexport const u = pay(1)\n'}
