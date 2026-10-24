@@ -6,7 +6,7 @@ Where it stands: Claude Code is tested with the real agent, and two real session
 
 ## Install
 
-You need Python 3.10 or later, git 2.38 or later, and a recent Claude Code (`claude update`; the status line and pane need 2.1.287 or later). During early access the repository is private: accept your invitation, and make sure git on your computer is signed in to that GitHub account. If the install asks for a password or says the repository isn't found, sign in (for example `gh auth login`, then `gh auth setup-git`) and run it again. Then install, and run `orch init` from a terminal in the repository your agents work on:
+You need Python 3.10 or later, git 2.38 or later, and a recent Claude Code (`claude update`; the status line and pane need 2.1.287 or later). Install, then run `orch init` from a terminal in the repository your agents work on:
 
 ```bash
 python -m pip install "git+https://github.com/samratrajsharma/Orchestraty.git"

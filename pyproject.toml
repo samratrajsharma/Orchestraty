@@ -5,7 +5,7 @@
 #   python -m build                  the sdist and the wheel, into dist/
 #   pip install -e .                 both packages, editable, for development
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -13,6 +13,8 @@ name = "orchestraty"
 dynamic = ["version"]
 description = "Keeps parallel coding-agent sessions on one repository aware of each other."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = []
 classifiers = [

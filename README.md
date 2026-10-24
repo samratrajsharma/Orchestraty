@@ -8,7 +8,7 @@
 ![Phase 1: early access](https://img.shields.io/badge/phase_1-early_access-CD1C18)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-9B1313)
 ![Platforms: Windows, macOS, Linux](https://img.shields.io/badge/platforms-Windows_%7C_macOS_%7C_Linux-38000A)
-![Licence: not chosen yet](https://img.shields.io/badge/licence-not_chosen_yet-lightgrey)
+[![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-38000A)](LICENSE)
 
 [What it does](#what-it-does) · [Quick start](#quick-start) · [What you'll see](#what-youll-see) · [Try it](#try-it-in-five-minutes) · [What's in Phase 1](#whats-in-phase-1) · [Feedback](#tell-us-how-it-goes) · [Privacy](#privacy)
 
@@ -59,8 +59,6 @@ Every note is filled in from a template with facts from git and the code. Orches
 ## Quick start
 
 You need Python 3.10 or later, git 2.38 or later, and a recent Claude Code (`claude update`; the status line and pane need 2.1.287 or later).
-
-During early access this repository is private. Accept your invitation, and make sure git on your computer is signed in to that GitHub account: if the install below asks for a password or says the repository isn't found, sign in (for example `gh auth login`, then `gh auth setup-git`) and run it again.
 
 **1. Install.**
 
@@ -218,4 +216,4 @@ python -m pip uninstall orchestraty
 
 ## Licence
 
-No licence has been chosen yet; until one is, all rights are reserved. Invited testers are welcome to install and use Orchestraty to try it out.
+Orchestraty is licensed under the [Apache License 2.0](LICENSE).
