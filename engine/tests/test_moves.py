@@ -202,8 +202,7 @@ def test_a_name_that_only_contains_test_is_not_a_test_path(path):
     assert not check.is_test_path(path)
 
 
-def test_the_engine_keeps_the_same_patterns_as_the_effects_module():
-    # The list mirrors spikes/_shared/effects_testfiles.py (the engine never imports spikes/).
+def test_the_test_file_patterns():
     assert [label for label, _ in check.TEST_FILE_PATTERNS] == [
         "test_*.py", "*_test.py", "conftest.py", "tests.py", "*.test.<js>", "*.spec.<js>"]
     assert [label for label, _ in check.TEST_FOLDER_PATTERNS] == ["__tests__/", "tests/", "test/"]

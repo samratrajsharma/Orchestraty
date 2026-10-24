@@ -1,6 +1,6 @@
 # ADR-0002: Throwaway experiment code lives in `spikes/`
 
-- Status: Accepted
+- Status: Accepted; carried out: `spikes/` was deleted on 2026-10-25, when the experiments ended (rule 7)
 - Date: 2026-09-24
 - Deciders: Samrat Raj Sharma
 

@@ -8,12 +8,11 @@
 #   .vsix packaged on Linux and kept as a build artifact (nothing is published); and the one
 #   distribution, its sdist and wheel built on Linux, with the smoke test of that wheel in a
 #   clean virtual environment on Windows and Linux.
-# - Weekly, on manual runs and on release tags (v*): the full matrix, which adds Python 3.9
-#   to 3.11, macOS (the smoke test too) and the older-Python runs of the experiments.
-#   Releases themselves are release.yml's.
+# - Weekly, on manual runs and on release tags (v*): the full matrix, which adds Python 3.10
+#   and 3.11, and macOS (the smoke test too). Releases themselves are release.yml's.
 #
-# The quick and full jobs run all three suites (the main package, the engine and the experiments);
-# every job fails if the tests leave any file behind. pytest is the only Python dependency.
+# The quick and full jobs run both suites (the main package and the engine); every job fails
+# if the tests leave any file behind. pytest is the only Python dependency.
 name: CI
 
 on:
@@ -68,18 +67,12 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -m pytest -p no:cacheprovider
 
-      - name: Run the experiment tests
-        working-directory: spikes
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m pytest
-
       # The tests must leave nothing in the working copy: no __pycache__, no .pytest_cache,
       # no output files. Runs from the repository root, in bash on every OS.
       - name: Check that the tests left no files behind
         shell: bash
         run: |
-          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes scripts plugins .claude-plugin)"
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine scripts plugins .claude-plugin)"
           if [ -n "$leftovers" ]; then
             echo "The tests left files in the working copy:"
             echo "$leftovers"
@@ -130,7 +123,7 @@ jobs:
         shell: bash
         working-directory: .
         run: |
-          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes; git status --porcelain -- helpers)"
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine; git status --porcelain -- helpers)"
           if [ -n "$leftovers" ]; then
             echo "The tests left files in the working copy:"
             echo "$leftovers"
@@ -195,7 +188,7 @@ jobs:
         shell: bash
         working-directory: .
         run: |
-          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes; git status --porcelain -- editors)"
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine; git status --porcelain -- editors)"
           if [ -n "$leftovers" ]; then
             echo "The tests left files in the working copy:"
             echo "$leftovers"
@@ -247,7 +240,7 @@ jobs:
       - name: Check that the tests left no files behind
         shell: bash
         run: |
-          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes | grep -vxF '!! orchestraty/tests/fixtures/ts/node_modules/' || true)"
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine | grep -vxF '!! orchestraty/tests/fixtures/ts/node_modules/' || true)"
           if [ -n "$leftovers" ]; then
             echo "The tests left files in the working copy:"
             echo "$leftovers"
@@ -332,7 +325,7 @@ jobs:
       - name: Check that the smoke test left no files behind
         shell: bash
         run: |
-          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes scripts plugins .claude-plugin)"
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine scripts plugins .claude-plugin)"
           if [ -n "$leftovers" ]; then
             echo "The smoke test left files in the working copy:"
             echo "$leftovers"
@@ -348,11 +341,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 3.9 runs only the experiments: the scanner must run on older Pythons (macOS ships
-          # 3.9), while the main package and the engine need 3.10 or later. No 3.9 build exists
-          # for the Ubuntu 26.04 image, so the Linux runs stay on ubuntu-24.04.
-          - os: ubuntu-24.04
-            python-version: "3.9"
           - os: ubuntu-24.04
             python-version: "3.10"
           - os: ubuntu-24.04
@@ -370,7 +358,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # On 3.9 this range resolves to pytest 8.x; pytest 9 needs 3.10 or later.
       - name: Install pytest
         run: python -m pip install "pytest>=8,<10"
 
@@ -378,29 +365,21 @@ jobs:
         run: git --version
 
       - name: Run the main package tests
-        if: matrix.python-version != '3.9'
         working-directory: orchestraty
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -m pytest
 
       - name: Run the engine tests
-        if: matrix.python-version != '3.9'
         working-directory: engine
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -m pytest -p no:cacheprovider
 
-      - name: Run the experiment tests
-        working-directory: spikes
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m pytest
-
       - name: Check that the tests left no files behind
         shell: bash
         run: |
-          leftovers="$(git status --porcelain --ignored -- orchestraty engine spikes scripts plugins .claude-plugin)"
+          leftovers="$(git status --porcelain --ignored -- orchestraty engine scripts plugins .claude-plugin)"
           if [ -n "$leftovers" ]; then
             echo "The tests left files in the working copy:"
             echo "$leftovers"

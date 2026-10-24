@@ -237,7 +237,7 @@ One folder per user and environment, never inside a repository: `%USERPROFILE%\.
 ## Rules
 
 - Python 3.10 or later, standard library only in the core.
-- May import the engine (`orch_engine`); never imports from `spikes/`. The engine never imports this package. `tests/test_layout.py` checks both.
+- May import the engine (`orch_engine`). The engine never imports this package. `tests/test_layout.py` checks it.
 - Tests leave nothing behind in the working copy.
 
 ## Run the tests

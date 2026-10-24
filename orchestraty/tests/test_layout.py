@@ -1,5 +1,5 @@
 """Checks the package's layout rules: every subpackage says what it is for, and imports
-only flow from this package to the engine, never to or from the experiments."""
+only flow from this package to the engine."""
 import ast
 import os
 from pathlib import Path
@@ -7,7 +7,6 @@ from pathlib import Path
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 SOURCE = PACKAGE_ROOT / "orchestraty"
 REPO = PACKAGE_ROOT.parent
-SPIKES = REPO / "spikes"
 ENGINE = REPO / "engine"
 
 
@@ -30,16 +29,6 @@ def _imported_top_levels(path):
     return names
 
 
-def _spike_module_names():
-    names = {"spikes"}
-    if SPIKES.is_dir():
-        for folder in SPIKES.iterdir():
-            if folder.is_dir() and not folder.name.startswith("."):
-                names.add(folder.name.replace("-", "_"))
-        names |= {p.stem for p in _python_files(SPIKES) if p.stem not in ("conftest", "__init__")}
-    return names
-
-
 def test_every_subpackage_has_a_docstring():
     subpackages = [p for p in SOURCE.iterdir() if p.is_dir() and (p / "__init__.py").is_file()]
     assert subpackages
@@ -47,13 +36,6 @@ def test_every_subpackage_has_a_docstring():
         init = package / "__init__.py"
         doc = ast.get_docstring(ast.parse(init.read_text(encoding="utf-8")))
         assert doc, f"{package.name} has no docstring saying what it is for"
-
-
-def test_the_package_never_imports_the_experiments():
-    spike_names = _spike_module_names()
-    offenders = {str(p.relative_to(PACKAGE_ROOT)): sorted(_imported_top_levels(p) & spike_names)
-                 for p in _python_files(SOURCE)}
-    assert not {k: v for k, v in offenders.items() if v}
 
 
 def test_the_engine_never_imports_this_package():
