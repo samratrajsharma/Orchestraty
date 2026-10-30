@@ -134,6 +134,49 @@ def test_the_page_drives_the_demo(git):
     assert not os.path.exists(d.root)
 
 
+def test_a_claim_and_a_label_from_the_page_are_recorded_in_the_demo(git):
+    d = sandbox.Demo()
+    s = ui_server.Server(d.state, 0)
+    s.demo = d
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    t.start()
+
+    def ask(method, path, body=None):
+        conn = http.client.HTTPConnection("127.0.0.1", s.port, timeout=120)
+        headers = {"Cookie": f"{s.cookie}={s.secret}"}
+        if method == "POST":
+            headers.update({"Content-Type": "application/json", "X-Orch-UI": "1", "Origin": f"http://127.0.0.1:{s.port}"})
+        try:
+            conn.request(method, path, body=json.dumps(body or {}).encode() if method == "POST" else None, headers=headers)
+            res = conn.getresponse()
+            return res.status, json.loads(res.read())
+        finally:
+            conn.close()
+    try:
+        for _ in range(3):
+            d.next_step()
+        _, status = ask("GET", "/api/status")
+        sid = status["repositories"][0]["sessions"][0]["id"]
+        code, out = ask("POST", "/api/claims", {"session": sid, "target": "a.py", "minutes": 30})
+        assert code == 200 and out["lines"][-1] == "The coordinator records it now."
+        _, status = ask("GET", "/api/status")
+        [claim] = [c for x in status["repositories"][0]["sessions"] if x["id"] == sid for c in x["claims"]]
+        assert (claim["kind"], claim["target"]) == ("file", "a.py")
+        _, found = ask("GET", "/api/findings?state=all")
+        key = found["findings"][0]["key"]
+        assert ask("POST", "/api/label", {"finding": key, "verdict": "real"})[0] == 200
+        _, found = ask("GET", "/api/findings?state=all")
+        assert [f["label"]["verdict"] for f in found["findings"] if f["key"] == key] == ["real"]
+        assert ask("POST", "/api/release", {"id": claim["id"]})[0] == 200
+        _, status = ask("GET", "/api/status")
+        assert not [c for x in status["repositories"][0]["sessions"] for c in x["claims"]]
+    finally:
+        s.shutdown()
+        s.server_close()
+        t.join(10)
+        d.close()
+
+
 def test_orch_ui_demo_removes_its_folder_when_it_stops(git, monkeypatch, capsys):
     seen = {}
 

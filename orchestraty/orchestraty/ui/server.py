@@ -380,7 +380,11 @@ class Handler(BaseHTTPRequestHandler):
         return 404, _err("no such endpoint")
 
     def _recorded(self):
+        """How soon the coordinator stores a spool line; in the demo, it is stepped here."""
         from orchestraty import cli
+        if self.server.demo is not None:
+            self.server.demo.catch_up()
+            return "The coordinator records it now."
         return cli._recorded_when(self.server.state)
 
     def _label(self, body):

@@ -310,6 +310,17 @@ class Demo:
                 ("What the hooks recorded", self._recorded(), True)]
 
     # ------------------------------------------------------------------ for the server
+    def catch_up(self):
+        """Let the coordinator record what the page just wrote to the spool (a label, a claim,
+        a release): in the demo nothing else steps it. While a step runs it does nothing; the
+        step records it anyway."""
+        if not self._busy.acquire(blocking=False):
+            return
+        try:
+            self.coordinator.step()
+        finally:
+            self._busy.release()
+
     def next_step(self):
         """Run the next step and return the payload. Raises Busy while a step runs and Finished
         after the last; DemoError (or another exception) when the step failed."""

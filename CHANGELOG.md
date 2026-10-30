@@ -34,7 +34,7 @@ Phase 1, on top of the coordination core already in place (the hook script and i
 **Seeing it**
 
 - `orch ui`, a dashboard in your browser for trying Orchestraty: served on 127.0.0.1 only, through a link that works once, read-only toward the record. `orch ui --demo` plays the whole loop with two scripted sessions in a temporary sandbox.
-- From `orch ui` you can label a finding real, harmless or false, claim a file, folder or function for a session and release a claim (each written to orch's spool, as the commands write them), and run `orch doctor`'s checks.
+- From `orch ui` you can label a finding real, harmless or false, claim a file, folder or function for a session and release a claim (each written to orch's spool, as the commands write them), and run `orch doctor`'s checks. In `orch ui --demo` these are recorded at once too.
 
 **Measuring and feedback**
 
