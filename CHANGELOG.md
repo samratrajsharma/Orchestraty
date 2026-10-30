@@ -68,3 +68,4 @@ Phase 1, on top of the coordination core already in place (the hook script and i
 - `orch doctor` says when a repository has more files than the engine reads (20,000 of a commit, in path order), and from which file on they are left out.
 - When two sessions change the function that handles an HTTP route they both changed, the agents hear once, through the route's finding, not twice.
 - `orch claim` run right after a session starts waits up to 3 seconds for the coordinator to record it, instead of saying no live session works there.
+- `orch doctor` says when the running coordinator is another version, one that started before an update, and how to restart it.

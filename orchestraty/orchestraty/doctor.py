@@ -14,8 +14,8 @@ line) or ``note`` (worth knowing, not a problem). The checks, in order:
   (``orchestraty/plugin``), never both, and what the plugin needs (its switch's interpreter, the
   hooks this version writes, Git Bash on Windows);
 * the coordinator: that it starts with what a hook starts it with, the interpreter and import
-  path in ``hooks/launch.txt`` (one that is running already counts); one that doctor starts is
-  stopped again;
+  path in ``hooks/launch.txt`` (one that is running already counts, unless it runs another
+  version: one that started before an update); one that doctor starts is stopped again;
 * git: on the PATH, and 2.38 or later, which the together check needs (``merge-tree
   --write-tree``);
 * the engine: that it imports;
@@ -33,7 +33,7 @@ import tempfile
 import time
 from collections import namedtuple
 
-from orchestraty import config, plugin
+from orchestraty import __version__, config, plugin
 from orchestraty.adapters import claude
 from orchestraty.capture import hook
 from orchestraty.capture import install as hooks
@@ -278,8 +278,22 @@ def _stop(state, seconds):
     return False
 
 
+def _running_version(state):
+    """The version the running coordinator wrote to its info file, or None."""
+    try:
+        with open(state.info, "r", encoding="utf-8") as fh:
+            version = json.load(fh).get("version")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return version if isinstance(version, str) else None
+
+
 def coordinator_check(state, seconds=START_SECONDS):
     if hook.coordinator_alive(state.root, time.time()):
+        running = _running_version(state)
+        if running and running != __version__:
+            return problem(f"coordinator: running version {running}, not this one ({__version__}): it started "
+                           "before the update", "run orch coordinator stop; the next hook starts this version")
         return ok("coordinator: running")
     lines = _launch(state)
     if not lines or not lines[0]:

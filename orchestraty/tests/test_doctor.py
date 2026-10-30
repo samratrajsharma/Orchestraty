@@ -92,6 +92,23 @@ def test_a_coordinator_that_does_not_start(state_root, tmp_path):
     assert not hook.coordinator_alive(str(state_root), time.time())
 
 
+def test_a_running_coordinator_of_another_version_is_a_problem(state_root):
+    state = State()
+    state_root.mkdir(parents=True, exist_ok=True)
+    (state_root / "coordinator.alive").write_text("", encoding="utf-8")             # its heartbeat is fresh
+    for version, kind in (("0.0.1", "fix"), (doctor.__version__, "ok")):
+        with open(state.info, "w", encoding="utf-8") as fh:
+            json.dump({"pid": 1, "started": time.time(), "version": version}, fh)
+        check = doctor.coordinator_check(state)
+        assert check.kind == kind, check
+    with open(state.info, "w", encoding="utf-8") as fh:
+        json.dump({"pid": 1, "started": time.time(), "version": "0.0.1"}, fh)
+    check = doctor.coordinator_check(state)
+    assert check.text == (f"coordinator: running version 0.0.1, not this one ({doctor.__version__}): it started "
+                          "before the update")
+    assert check.fix == "run orch coordinator stop; the next hook starts this version"
+
+
 def test_a_state_folder_in_a_synced_folder(tmp_path):
     windows_onedrive = {"OneDrive": os.path.join(str(tmp_path), "OneDrive - Contoso")}
     assert doctor.synced_folder(os.path.join(str(tmp_path), "OneDrive - Contoso", "state"), windows_onedrive) == "OneDrive"
