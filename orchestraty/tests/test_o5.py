@@ -104,6 +104,17 @@ def test_two_sessions_changing_one_route_both_hear(state, two):
     assert not findings(c, "O5")
 
 
+def test_both_changing_the_handler_of_one_route_hear_once(state, two):
+    c, wa, wb = two
+    edit(state, c, "A", wa, "app/users.py", "@router.get('/{uid}')", "@router.post('/{uid}')")
+    edit(state, c, "B", wb, "app/users.py", "@router.get('/{uid}')", "@router.put('/{uid}')")
+    [f] = findings(c, "O5")
+    assert f["symbol"] == "app/users.py::get_user"
+    assert not findings(c, "O2")                                           # the route's finding says it
+    for sid in ("A", "B"):
+        assert [n["finding_key"] for n in c.record.notes(session_id=sid)] == [f["key"]]
+
+
 def test_different_routes_make_no_o5(state, two):
     c, wa, wb = two
     edit(state, c, "A", wa, "app/users.py", "@router.get('/{uid}')", "@router.post('/{uid}')")

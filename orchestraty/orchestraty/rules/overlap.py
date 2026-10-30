@@ -42,7 +42,8 @@ O5 compares the routes of each session's copy of the code with its base commit's
 (``livemap.routes``: FastAPI, Flask and Django routes, from the engine). A route whose method or
 path changed counts under both its old and its new one. Only a route the engine is sure of
 (``exact``: every part of its path a literal, and its chain up to an app known) counts, on both
-sides: a heuristic route never makes this strong finding.
+sides: a heuristic route never makes this strong finding. When both sessions changed the function
+that handles a route O5 is about, O2 stays silent on that function: the O5 finding says it.
 
 O7 compares what each session said it will change, not what it changed: a declared path, a
 claimed file or folder (a path covers the files below it), and a declared or claimed function
@@ -316,9 +317,10 @@ def evaluate(views, graphs, base_graphs, hooked=None, planned=None, routes=None,
             shared = one_folder(a, b, views)
             found = list(same_file(a, b, views))
             if not shared:
-                found += same_function(a, b, views)
-                if routes is not None:
-                    found += same_route(a, b, routes)
+                by_route = list(same_route(a, b, routes)) if routes is not None else []
+                handlers = {c["handler"] for f in by_route for c in f.detail["changes"].values()}
+                found += [f for f in same_function(a, b, views) if f.symbol not in handlers]   # O5 says it
+                found += by_route
             elif hooked is not None and a in hooked and b in hooked:
                 found += same_folder(a, b, views)
             if planned:
