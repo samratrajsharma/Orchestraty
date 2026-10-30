@@ -1,8 +1,8 @@
 # Changelog
 
-Notable changes to Orchestraty. Nothing has been released yet; the version in the package is `0.0.1.dev0`.
+Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestraty`.
 
-## Unreleased
+## 0.1.0 (to be released)
 
 Phase 1, on top of the coordination core already in place (the hook script and its installer, the background coordinator and its record, the live map, the overlap rules O1 to O4 and O6, notes written in advance, the push line, steer and wake, `orch status` and the Claude Code mod).
 
