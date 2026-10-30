@@ -110,8 +110,14 @@ def test_a_claim_right_after_a_session_starts_waits_for_its_first_event(state, t
     (wc / "pkg").mkdir()
     (wc / "pkg" / "billing.py").write_text(BILLING, encoding="utf-8")
     spool_event(state.root, "C", "SessionStart", wc)              # in the spool, not yet in the record
-    waits = []
-    monkeypatch.setattr(cli.time, "sleep", lambda s: (waits.append(s), c.step()))   # the coordinator catches up
+    waits, real_sleep = [], time.sleep
+
+    def sleep(seconds):                                           # orch claim's wait: the coordinator catches up
+        if seconds != 0.25:
+            return real_sleep(seconds)                            # any other wait (a lock's) is left alone
+        waits.append(seconds)
+        c.step()
+    monkeypatch.setattr(cli.time, "sleep", sleep)
     monkeypatch.chdir(wc / "pkg")
     assert cli.main(["claim", "billing.py"]) == 0
     assert "Claimed pkg/billing.py for session C (claude)" in capsys.readouterr().out
