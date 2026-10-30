@@ -194,6 +194,113 @@ def test_wake_goes_through_orch_config_and_its_hooks(srv, state):
     assert [e["hooks"][0]["args"][-1] for e in stop] == ["Stop"]       # the wake hook came out
 
 
+def act(s, path, payload):
+    """(status, decoded body) for one change the page sends to `path`."""
+    code, _, body = ask(s, "POST", path, {"Content-Type": "application/json", "X-Orch-UI": "1",
+                                          "Origin": f"http://127.0.0.1:{s.port}"}, json.dumps(payload).encode())
+    return code, json.loads(body)
+
+
+def spooled(state, event):
+    """The lines of orch's own spool with this event, oldest first."""
+    out = []
+    for path in sorted((Path(state.spool) / "orch").glob("*.jsonl")):
+        out += [line for line in map(json.loads, path.read_text(encoding="utf-8").splitlines()) if line["event"] == event]
+    return out
+
+
+def live_session(state, repo, git, tmp_path, sid="A"):
+    """Session `sid` live in a worktree of the watched `repo`, as the coordinator records it."""
+    common = str(repo / ".git")
+    config.watch(state, common)
+    wt = tmp_path / ("wt-" + sid.lower())
+    git(repo, "worktree", "add", "-q", "-b", "feat-" + sid.lower(), str(wt))
+    rec = Record(state.record)
+    with rec.transaction():
+        rid = rec.repo_id(common)
+        rec.put_session({"id": sid, "agent": "claude", "repo_id": rid, "cwd": str(wt), "worktree": str(wt),
+                         "branch": "feat-" + sid.lower(), "base_commit": "abc", "base_guessed": 0, "started": 1 * S,
+                         "last_seen": 2 * S, "state": "live", "turn": "working", "note": ""})
+    rec.close()
+    return rid, common
+
+
+def test_a_label_from_the_page_is_spooled_as_orch_label_spools_it(srv, state, tmp_path):
+    fill(state, tmp_path)
+    key = "O3|a.py::charge|A|B|c.py"
+    code, out = act(srv, "/api/label", {"finding": key, "verdict": "harmless", "why": "tests cover it"})
+    assert code == 200 and out["verdict"] == "harmless" and out["lines"][0] == "Labelled harmless."
+    [line] = spooled(state, "label")
+    assert (line["finding"], line["verdict"], line["why"]) == (key, "harmless", "tests cover it")
+    for bad in ({"finding": key, "verdict": "maybe"}, {"finding": key}, {"finding": "", "verdict": "real"},
+                {"finding": key, "verdict": "real", "why": 3}, {"finding": key, "verdict": "real", "x": 1}):
+        assert act(srv, "/api/label", bad)[0] == 400, bad
+    assert act(srv, "/api/label", {"finding": "O1|nope|A|B", "verdict": "real"})[0] == 404
+    assert len(spooled(state, "label")) == 1                           # nothing else got through
+    rec = Record(state.record)
+    with rec.transaction():
+        rec.add_label(key, "harmless", "tests cover it", 4 * S)
+    rec.close()
+    code, _, body = ask(srv, "GET", "/api/findings")
+    [f] = json.loads(body)["findings"]
+    assert f["label"] == {"verdict": "harmless", "why": "tests cover it", "at": data.iso(4 * S)}
+
+
+def test_a_claim_from_the_page_resolves_its_target_in_the_session_s_worktree(srv, state, repo, git, tmp_path):
+    live_session(state, repo, git, tmp_path)
+    code, out = act(srv, "/api/claims", {"session": "A", "target": "a.py::charge", "minutes": 30})
+    assert code == 200 and out["claimed"]["what"] == "charge in a.py" and out["lines"][0] == (
+        "Claimed charge in a.py for 30 minutes.")
+    code, out = act(srv, "/api/claims", {"session": "A", "target": "b.py", "hard": True})
+    assert code == 200 and out["claimed"]["minutes"] == config.DEFAULTS["claim_minutes"]
+    lines = spooled(state, "claim")
+    assert [(x["session_id"], x["kind"], x["target"], x["file"], x["hard"], x["minutes"]) for x in lines] == [
+        ("A", "symbol", "a.py::charge", "a.py", False, 30),
+        ("A", "file", "b.py", "", True, config.DEFAULTS["claim_minutes"])]
+    assert all(x["repo"] == str(repo / ".git") for x in lines)
+    code, out = act(srv, "/api/claims", {"session": "A", "target": "missing.py"})
+    assert code == 400 and out["error"]
+    for bad in ({"session": "A"}, {"session": "A", "target": "a.py", "minutes": 0},
+                {"session": "A", "target": "a.py", "minutes": True}, {"session": "A", "target": "a.py", "hard": "yes"}):
+        assert act(srv, "/api/claims", bad)[0] == 400, bad
+    assert act(srv, "/api/claims", {"session": "Z", "target": "a.py"})[0] == 404
+    assert len(spooled(state, "claim")) == 2
+
+
+def test_a_release_from_the_page_ends_the_claim_with_that_number(srv, state, repo, git, tmp_path):
+    rid, common = live_session(state, repo, git, tmp_path)
+    rec = Record(state.record)
+    with rec.transaction():
+        now = int(__import__("time").time() * S)
+        cid = rec.add_claim(rid, "A", "file", "a.py", "", False, now, now + 3600 * S)
+    rec.close()
+    code, out = act(srv, "/api/release", {"id": cid})
+    assert code == 200 and out["released"] == cid and out["lines"][0] == "Released a.py."
+    [line] = spooled(state, "release")
+    assert (line["id"], line["repo"]) == (cid, common)
+    assert act(srv, "/api/release", {"id": cid + 1})[0] == 404
+    for bad in ({}, {"id": "1"}, {"id": True}, {"id": 0}, {"id": 1, "x": 2}):
+        assert act(srv, "/api/release", bad)[0] == 400, bad
+
+
+def test_the_page_runs_doctor_s_checks_but_not_in_the_demo(srv, monkeypatch):
+    from orchestraty import doctor
+    seen = []
+
+    def checks(state, cwd, index=True, say=None):
+        seen.append(index)
+        yield doctor.ok("Python 3.13")
+        yield doctor.problem("coordinator: exited with 3", "see the log")
+    monkeypatch.setattr(doctor, "checks", checks)
+    code, out = act(srv, "/api/doctor", {})
+    assert code == 200 and seen == [False] and out["problems"] == 1
+    assert out["checks"] == [{"kind": "ok", "text": "Python 3.13", "fix": ""},
+                             {"kind": "fix", "text": "coordinator: exited with 3", "fix": "see the log"}]
+    srv.demo = object()
+    code, out = act(srv, "/api/doctor", {})
+    assert code == 200 and out["checks"] == [] and out["lines"] == [ui_server.DEMO_DOCTOR] and seen == [False]
+
+
 # --------------------------------------------------------------------------------------- #
 # What it answers
 # --------------------------------------------------------------------------------------- #

@@ -112,14 +112,22 @@ def _note(n, findings, heard):
     return out
 
 
-def _finding(f, repos, notes, findings, heard):
+def _labels(record):
+    """{finding key: {verdict, why, at}}: the user's latest word on each finding (orch label)."""
+    out = {}
+    for row in record.labels():                        # oldest first: the latest wins
+        out[row["finding_key"]] = {"verdict": row["verdict"], "why": row["why"], "at": iso(row["ts"])}
+    return out
+
+
+def _finding(f, repos, notes, findings, heard, labels=None):
     repo = repos.get(f["repo_id"]) or {}
     return {"key": f["key"], "rule": f["rule"], "strength": f["strength"], "symbol": f["symbol"], "file": f["file"],
             "changer": f["changer"], "receiver": f["receiver"], "sessions": f["sessions"], "detail": f["detail"],
             "latent": bool(f["detail"].get("latent")), "state": f["state"], "first_seen": iso(f["first_seen"]),
             "last_seen": iso(f["last_seen"]), "resolved": iso(f["resolved"]),
             "repository": {"name": repo.get("name", ""), "common_dir": repo.get("common_dir", "")},
-            "notes": [_note(n, findings, heard) for n in notes]}
+            "label": (labels or {}).get(f["key"]), "notes": [_note(n, findings, heard) for n in notes]}
 
 
 def _caused_by(f, session_id):
@@ -189,7 +197,7 @@ def session_payload(state, session_id, now=None):
 
 def findings_payload(state, which="open"):
     """The findings in one state ("open", "resolved" or "all"), strongest first, each with its
-    detail and the notes made for it."""
+    detail, the notes made for it and the user's latest label (None when there is none)."""
     with _record(state) as record:
         if record is None:
             return {"schema": SCHEMA, "state": which, "findings": [], "sessions": {}}
@@ -197,13 +205,15 @@ def findings_payload(state, which="open"):
         notes = record.notes()
         repos = {r["id"]: r for r in record.repos()}
         sessions = record.sessions()
+        labels = _labels(record)
     heard = _heard_with(notes)
     by_key = {}
     for n in notes:
         by_key.setdefault(n["finding_key"], []).append(n)
     known = {f["key"]: f for f in found}
     return {"schema": SCHEMA, "state": which,
-            "findings": [_finding(f, repos, by_key.get(f["key"], []), known, heard) for f in sorted(found, key=_order)],
+            "findings": [_finding(f, repos, by_key.get(f["key"], []), known, heard, labels)
+                         for f in sorted(found, key=_order)],
             "sessions": {s["id"]: _who(s) for s in sessions}}
 
 
@@ -217,7 +227,8 @@ def finding_payload(state, key):
         repos = {r["id"]: r for r in record.repos()}
         named = set(f["sessions"]) | {f["changer"], f["receiver"]} | {n["session_id"] for n in notes}
         sessions = {s["id"]: _who(s) for s in record.sessions() if s["id"] in named}
-    return {"schema": SCHEMA, "finding": _finding(f, repos, notes, {key: f}, _heard_with(notes)),
+        labels = _labels(record)
+    return {"schema": SCHEMA, "finding": _finding(f, repos, notes, {key: f}, _heard_with(notes), labels),
             "sessions": sessions}
 
 

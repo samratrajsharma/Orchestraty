@@ -22,10 +22,14 @@ The API answers in JSON, always with a ``schema`` number:
 | GET /api/push                                | the push lines, with their worktree and session            |
 | GET /api/health                              | the coordinator, the record and the state folder           |
 | GET /api/config, POST /api/config            | the switches and watched repositories; set steer or wake   |
+| POST /api/label                              | the user's verdict on a finding, as orch label gives it    |
+| POST /api/claims, POST /api/release          | claim a file, folder or function for a session; end a claim|
+| POST /api/doctor                             | orch doctor's checks, without timing a first index          |
 | GET /api/demo, POST /api/demo/next           | the sandbox's steps; run the next (orch ui --demo only)    |
 
 It reads the state folder through ``ui.data`` (the record read-only, per request); the
-switches go through the same code as orch config. JSON comes with an ETag, and an unchanged
+switches go through the same code as orch config, and labels, claims and releases are lines in
+orch's spool for the coordinator to store, as orch label, orch claim and orch release write them. JSON comes with an ETag, and an unchanged
 answer gets a 304. The ETag leaves out the seconds since each session's last event, which the
 page works out from the time of that event, so a status that only grew older is not sent
 again.
@@ -72,6 +76,7 @@ WRONG = "Forbidden: this is not the link orch ui printed. Open the one in your t
 USED = ("Forbidden: this link was used already. To open the dashboard in another browser, stop orch ui "
         "(Ctrl+C) and run it again (with --no-browser to open the new link yourself).")
 DEMO_WAKE = "In the demo this changes only the demo's own state folder; no Claude Code settings are touched."
+DEMO_DOCTOR = "The demo runs in a sandbox: run orch doctor in a terminal to check this computer."
 
 
 def _dump(payload):
@@ -362,9 +367,91 @@ class Handler(BaseHTTPRequestHandler):
         """(status, payload) for one POST under /api/."""
         if path == "/api/config":
             return self._set_switch(body)
+        if path == "/api/label":
+            return self._label(body)
+        if path == "/api/claims":
+            return self._claim(body)
+        if path == "/api/release":
+            return self._release(body)
+        if path == "/api/doctor":
+            return self._doctor()
         if path == "/api/demo/next":
             return self._demo_next()
         return 404, _err("no such endpoint")
+
+    def _recorded(self):
+        from orchestraty import cli
+        return cli._recorded_when(self.server.state)
+
+    def _label(self, body):
+        """{"finding": key, "verdict": "real"|"harmless"|"false", "why": text}, as orch label takes it."""
+        from orchestraty import feedback
+        key, verdict, why = body.get("finding"), body.get("verdict"), body.get("why", "")
+        if not isinstance(key, str) or not key or len(key) > 2000 or verdict not in feedback.VERDICTS                 or not isinstance(why, str) or set(body) - {"finding", "verdict", "why"}:
+            raise BadRequest('send {"finding": <key>, "verdict": "real", "harmless" or "false", "why": <text>}')
+        with data._record(self.server.state) as record:
+            if record is None or record.finding(key) is None:
+                return 404, _err("no such finding")
+        feedback.label(self.server.state, key, verdict, why)
+        return 200, {"schema": data.SCHEMA, "finding": key, "verdict": verdict,
+                     "lines": [f"Labelled {verdict}.", self._recorded()]}
+
+    def _claim(self, body):
+        """{"session": id, "target": path or function, "minutes": n, "hard": bool}, as orch claim
+        resolves and records it: the target is read from the session's worktree."""
+        from orchestraty import claims, config
+        sid, target = body.get("session"), body.get("target")
+        minutes, hard = body.get("minutes"), body.get("hard", False)
+        if not isinstance(sid, str) or not sid or not isinstance(target, str) or not target.strip()                 or len(target) > 300 or not isinstance(hard, bool)                 or (minutes is not None and (isinstance(minutes, bool) or not isinstance(minutes, int)
+                                             or not 1 <= minutes <= 1440))                 or set(body) - {"session", "target", "minutes", "hard"}:
+            raise BadRequest('send {"session": <id>, "target": <file, folder or function>, "minutes": 1 to 1440, '
+                             '"hard": true or false}')
+        state = self.server.state
+        with data._record(state) as record:
+            s = record.session(sid) if record else None
+            repos = {r["id"]: r["common_dir"] for r in record.repos()} if record else {}
+        if s is None or s["state"] != "live" or s["agent"] == "cloud":
+            return 404, _err("no live session has this id")
+        top, common_dir = s["worktree"], repos.get(s["repo_id"], "")
+        cfg = config.load(state)
+        if not top or not common_dir or not config.is_watched(cfg, common_dir):
+            raise BadRequest("this session's repository is not watched: run orch watch in it first")
+        try:
+            kind, resolved, file = claims.resolve(top, top, target.strip())
+        except claims.Refused as exc:
+            raise BadRequest(str(exc)) from None
+        minutes = minutes or claims.default_minutes(cfg)
+        claims.append_claim(state, sid, common_dir, kind, resolved, file, hard, minutes)
+        what = claims.describe({"kind": kind, "target": resolved, "file": file})
+        return 200, {"schema": data.SCHEMA, "claimed": {"session": sid, "kind": kind, "target": resolved, "file": file,
+                                                         "hard": hard, "minutes": minutes, "what": what},
+                     "lines": [f"Claimed {what} for {minutes} minutes" + (", hard." if hard else "."), self._recorded()]}
+
+    def _release(self, body):
+        """{"id": n}: end the claim with that number, as orch release #n does."""
+        from orchestraty import claims, cli
+        cid = body.get("id")
+        if isinstance(cid, bool) or not isinstance(cid, int) or cid < 1 or set(body) - {"id"}:
+            raise BadRequest('send {"id": <the number of the claim>}')
+        chosen = [(r, c) for r, _, c in cli._claims_now(self.server.state)[1] if c["id"] == cid]
+        if not chosen:
+            return 404, _err(f"no claim {cid} holds")
+        repo, claim = chosen[0]
+        claims.append_release(self.server.state, repo["common_dir"], claim_id=cid)
+        return 200, {"schema": data.SCHEMA, "released": cid,
+                     "lines": [f"Released {claims.describe(claim)}.", self._recorded()]}
+
+    def _doctor(self):
+        """orch doctor's checks for this state folder, without timing a first index. In the demo
+        they would mix the sandbox with this computer's agents, so it says to run orch doctor."""
+        from orchestraty import doctor
+        if self.server.demo is not None:
+            return 200, {"schema": data.SCHEMA, "checks": [], "problems": 0, "lines": [DEMO_DOCTOR]}
+        found = [{"kind": c.kind, "text": c.text, "fix": c.fix}
+                 for c in doctor.checks(self.server.state, os.getcwd(), index=False)]
+        problems = sum(1 for c in found if c["kind"] == "fix")
+        return 200, {"schema": data.SCHEMA, "checks": found, "problems": problems,
+                     "lines": ["No problems found." if not problems else f"{problems} problem(s): each says its fix."]}
 
     def _demo_next(self):
         from orchestraty.ui import demo
