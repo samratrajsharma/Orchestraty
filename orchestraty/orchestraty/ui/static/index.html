@@ -10,34 +10,32 @@
 </head>
 <body>
 <a class="skip" href="#main">Skip to the content</a>
-<header class="band">
-  <div class="bar">
-    <a class="brand" href="#/">
-      <svg class="mark" viewBox="0 0 96 96" aria-hidden="true" focusable="false"><path d="M19 18 L50.2 36 M19 78 L50.2 60" fill="none" stroke="#FFF3F0" stroke-width="10" stroke-linecap="round"/><circle cx="71" cy="48" r="11" fill="#FFA896"/></svg>
-      <span class="wordmark">orchestraty</span>
-    </a>
-    <span class="badge-demo" id="demo-badge" hidden>DEMO</span>
-    <nav class="tabs" aria-label="Views">
-      <span class="tab-ind" aria-hidden="true"></span>
-      <a href="#/" data-route="overview">Overview</a>
-      <a href="#/notes" data-route="notes">Notes</a>
-      <a href="#/settings" data-route="settings">Settings</a>
-    </nav>
-    <div class="status" id="coord">
-      <span class="dot" aria-hidden="true"></span>
-      <span class="status-lines"><span id="coord-text">Reading the state folder…</span><span id="updated"></span></span>
-    </div>
-    <div class="theme" role="group" aria-label="Theme">
-      <button type="button" data-theme-choice="light" aria-pressed="false" aria-label="Light" title="Light"></button>
-      <button type="button" data-theme-choice="dark" aria-pressed="false" aria-label="Dark" title="Dark"></button>
-      <button type="button" data-theme-choice="system" aria-pressed="true" aria-label="System" title="System"></button>
-    </div>
-  </div>
+<header class="top">
+  <a class="brand" href="#/" aria-label="orchestraty, home">
+    <svg class="mark" viewBox="0 0 96 96" aria-hidden="true" focusable="false"><path class="mark-arms" d="M19 18 L50.2 36 M19 78 L50.2 60"/><circle class="mark-dot" cx="71" cy="48" r="11"/></svg>
+    <span class="wordmark">orchestraty</span>
+  </a>
+  <span class="badge-demo" id="demo-badge" hidden>Demo</span>
+  <div class="repo-pick" id="repo-pick"></div>
+  <div class="top-fill"></div>
+  <button type="button" class="pill" id="pill" aria-expanded="false" aria-controls="pop">
+    <span class="pill-dot" aria-hidden="true"></span><span id="pill-text">Reading…</span>
+  </button>
+  <button type="button" class="search" id="search-btn" aria-keyshortcuts="Control+K">
+    <span class="search-label"><span class="ic-slot" data-icon="search"></span><span>Search or run…</span></span>
+    <kbd class="kbd" id="search-kbd">Ctrl K</kbd>
+  </button>
+  <button type="button" class="icon-btn" id="theme-btn" aria-label="Switch theme" title="Switch theme"><span class="ic-slot" data-icon="moon"></span></button>
+  <button type="button" class="icon-btn" id="help-btn" aria-label="Help and shortcuts" title="Help and shortcuts (?)" aria-keyshortcuts="?"><span class="ic-slot" data-icon="help"></span></button>
 </header>
-<main id="main" tabindex="-1"></main>
-<aside class="sheet" id="sheet" aria-labelledby="sheet-title" hidden></aside>
-<div class="dock" id="demo" role="region" aria-label="Sandbox demo" hidden></div>
+<div class="frame">
+  <nav class="side" id="side" aria-label="Sections"></nav>
+  <main id="main" tabindex="-1"></main>
+</div>
+<aside class="tour" id="tour" aria-label="Demo tour" hidden></aside>
+<div class="pop" id="pop" role="dialog" aria-label="Status" hidden></div>
+<div class="scrim" id="scrim" hidden></div>
+<div class="toast" id="toast" role="status" hidden></div>
 <p class="sr-only" id="announce" aria-live="polite"></p>
-<footer class="foot"><p>Local only · 127.0.0.1 · nothing leaves this machine</p></footer>
 </body>
 </html>

@@ -448,7 +448,8 @@ def test_the_page_makes_no_request_elsewhere():
     assert set(re.findall(r"""['"](/api/[a-z/]+)""", js)) <= {"/api/status?ended=", "/api/demo", "/api/push",
                                                             "/api/sessions/", "/api/findings/", "/api/notes?",
                                                             "/api/config", "/api/health", "/api/demo/next"} | {
-        "/api/status", "/api/sessions", "/api/findings", "/api/notes"}
+        "/api/status", "/api/sessions", "/api/findings", "/api/notes", "/api/label", "/api/claims", "/api/release",
+        "/api/doctor"}
 
 
 def test_the_mark_and_the_favicon_are_the_brand_s():
