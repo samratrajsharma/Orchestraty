@@ -67,3 +67,4 @@ Phase 1, on top of the coordination core already in place (the hook script and i
 - TypeScript contracts count a use inside a template literal's `${...}`, such as `` `${price(amount)}` ``.
 - `orch doctor` says when a repository has more files than the engine reads (20,000 of a commit, in path order), and from which file on they are left out.
 - When two sessions change the function that handles an HTTP route they both changed, the agents hear once, through the route's finding, not twice.
+- `orch claim` run right after a session starts waits up to 3 seconds for the coordinator to record it, instead of saying no live session works there.

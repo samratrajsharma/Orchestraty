@@ -465,24 +465,66 @@ def _pick_session(sessions, top):
     raise ValueError("no session picked; nothing claimed")
 
 
+CLAIM_CATCH_UP = 3.0        # seconds orch claim waits for the record to show a session that just started
+
+
+def _live_sessions(state):
+    """([live session], {repository id: git common folder}) from the record, read without changing it."""
+    from orchestraty.coordinator.record import Record
+    if not os.path.exists(state.record):
+        return [], {}
+    record = Record(state.record, readonly=True)
+    try:
+        return ([s for s in record.sessions(states=("live",)) if s["agent"] != "cloud"],
+                {r["id"]: r["common_dir"] for r in record.repos()})
+    finally:
+        record.close()
+
+
+def _spool_recent(state, seconds=5):
+    """Whether a hook wrote to the spool in the last `seconds`: then the record may not show that
+    event yet, because the coordinator records it within about a second."""
+    now = time.time()
+    try:
+        for agent in os.scandir(state.spool):
+            if agent.is_dir(follow_symlinks=False):
+                for entry in os.scandir(agent.path):
+                    if entry.name.endswith(".jsonl") and now - entry.stat().st_mtime < seconds:
+                        return True
+    except OSError:
+        pass
+    return False
+
+
 def _claim_session(state, ref):
     """(session, git common folder, worktree top, folder that relative targets start from) for
     orch claim: the live session `ref` names (its id or first characters), else the one working
     in this worktree, a session with hooks before a plain-git one. Asks which when several work
     here. Reads the record without changing it."""
     from orchestraty import claims, config, gitio
-    from orchestraty.coordinator.record import Record
     cwd = os.getcwd()
-    sessions, repos = [], {}
-    if os.path.exists(state.record):
-        record = Record(state.record, readonly=True)
+    info = None
+    if not ref:
         try:
-            sessions = [s for s in record.sessions(states=("live",)) if s["agent"] != "cloud"]
-            repos = {r["id"]: r["common_dir"] for r in record.repos()}
-        finally:
-            record.close()
+            info = gitio.worktree_info(cwd)
+        except gitio.UntrustedRepositoryError as exc:
+            raise ValueError(str(exc)) from None
+        if info is None:
+            raise ValueError(f"{cwd} is not inside a git worktree: run it in the session's worktree, or pass --session")
+
+    def matching(sessions):
+        if ref:
+            return [s for s in sessions if s["id"] == ref] or [s for s in sessions if s["id"].startswith(ref)]
+        here = [s for s in sessions if _same_folder(s["worktree"], info["top"])]
+        return [s for s in here if s["agent"] != "git"] or here
+
+    sessions, repos = _live_sessions(state)
+    deadline = time.monotonic() + CLAIM_CATCH_UP
+    while not matching(sessions) and time.monotonic() < deadline and _spool_recent(state):
+        time.sleep(0.25)                    # a session that just started: its first event is not recorded yet
+        sessions, repos = _live_sessions(state)
+    found = matching(sessions)
     if ref:
-        found = [s for s in sessions if s["id"] == ref] or [s for s in sessions if s["id"].startswith(ref)]
         if len(found) > 1:
             raise ValueError(f"{ref} is the start of {len(found)} live sessions' ids: give more of it")
         if not found:
@@ -491,18 +533,10 @@ def _claim_session(state, ref):
         top, common_dir = session["worktree"], repos.get(session["repo_id"], "")
         base = cwd if claims.inside(cwd, top) else top
     else:
-        try:
-            info = gitio.worktree_info(cwd)
-        except gitio.UntrustedRepositoryError as exc:
-            raise ValueError(str(exc)) from None
-        if info is None:
-            raise ValueError(f"{cwd} is not inside a git worktree: run it in the session's worktree, or pass --session")
-        here = [s for s in sessions if _same_folder(s["worktree"], info["top"])]
-        hooked = [s for s in here if s["agent"] != "git"] or here
-        if not hooked:
+        if not found:
             raise ValueError(f"no live session works in {info['top']}. A session with hooks shows from its first "
                              "event, one without (plain git) once its worktree has changes; or pass --session")
-        session = hooked[0] if len(hooked) == 1 else _pick_session(hooked, info["top"])
+        session = found[0] if len(found) == 1 else _pick_session(found, info["top"])
         top, common_dir, base = info["top"], info["common_dir"], cwd
     if not common_dir or not config.is_watched(config.load(state), common_dir):
         raise ValueError(f"{os.path.basename(top) or top} is not watched: run orch watch in it first")

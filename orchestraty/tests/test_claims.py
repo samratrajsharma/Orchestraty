@@ -102,6 +102,22 @@ def test_times_and_spool_lines_are_checked():
         assert claims.parse_line(dict(release, **change)) is None, change
 
 
+def test_a_claim_right_after_a_session_starts_waits_for_its_first_event(state, two, git, repo, tmp_path, capsys,
+                                                                          monkeypatch):
+    c, clock, wa, wb = two
+    wc = tmp_path / "wt-c"
+    git(repo, "worktree", "add", "-q", "-b", "feat-c", str(wc))
+    (wc / "pkg").mkdir()
+    (wc / "pkg" / "billing.py").write_text(BILLING, encoding="utf-8")
+    spool_event(state.root, "C", "SessionStart", wc)              # in the spool, not yet in the record
+    waits = []
+    monkeypatch.setattr(cli.time, "sleep", lambda s: (waits.append(s), c.step()))   # the coordinator catches up
+    monkeypatch.chdir(wc / "pkg")
+    assert cli.main(["claim", "billing.py"]) == 0
+    assert "Claimed pkg/billing.py for session C (claude)" in capsys.readouterr().out
+    assert waits == [0.25]
+
+
 def test_claim_release_and_expiry_through_the_coordinator(state, two, capsys, monkeypatch):
     c, clock, wa, wb = two
     monkeypatch.chdir(wa / "pkg")
