@@ -9,13 +9,13 @@ Where it stands: Claude Code is tested with the real agent, and two real session
 You need Python 3.10 or later, git 2.38 or later, and a recent Claude Code (`claude update`; the status line and pane need 2.1.287 or later). Install, then run `orch init` from a terminal in the repository your agents work on:
 
 ```bash
-python -m pip install "git+https://github.com/samratrajsharma/Orchestraty.git"
+python -m pip install orchestraty
 cd path/to/your/repository
 orch init          # shows what it will change and asks first
 orch doctor        # checks everything it needs, with a fix for each problem
 ```
 
-`pipx install` or `uv tool install` with the same address work too, and so does a wheel you were given (`pipx install orchestraty-<version>-py3-none-any.whl`). If `orch` isn't found, type `python -m orchestraty` in its place. To see the whole loop before your own sessions, run `orch ui --demo`: two pretend sessions in a sandbox, in your browser.
+`pipx install orchestraty` or `uv tool install orchestraty` work too, and so does a wheel you were given (`pipx install orchestraty-<version>-py3-none-any.whl`). For the newest work on `main` before it is released: `python -m pip install "git+https://github.com/samratrajsharma/Orchestraty.git"`. If `orch` isn't found, type `python -m orchestraty` in its place. To see the whole loop before your own sessions, run `orch ui --demo`: two pretend sessions in a sandbox, in your browser.
 
 `orch init` adds hook entries to Claude Code's user settings (backed up first), with the status line and pane, watches the repository, and offers the push line: a git pre-push hook, chained in front of your own, that adds one line to `git push` when callers of a function you changed are still on the old form. For the other agents, run `orch init --agent codex` or `orch init --agent antigravity` as well. Codex runs a new hook only once you have trusted it: open Codex and run `/hooks`.
 
@@ -113,10 +113,10 @@ For anything else, a bug, a confusing note or an idea, open an issue on the repo
 
 ## Upgrade
 
-To take a newer build during early access:
+To take a newer release:
 
 ```bash
-python -m pip install --force-reinstall "git+https://github.com/samratrajsharma/Orchestraty.git"
+python -m pip install --upgrade orchestraty    # or: pipx upgrade orchestraty, uv tool upgrade orchestraty
 orch init                   # puts the new hook script in place
 orch coordinator stop       # the next session starts the new version
 ```

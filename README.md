@@ -8,7 +8,7 @@
 ![Phase 1: early access](https://img.shields.io/badge/phase_1-early_access-CD1C18)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-9B1313)
 ![Platforms: Windows, macOS, Linux](https://img.shields.io/badge/platforms-Windows_%7C_macOS_%7C_Linux-38000A)
-[![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-38000A)](LICENSE)
+[![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-38000A)](https://github.com/samratrajsharma/Orchestraty/blob/main/LICENSE)
 
 [What it does](#what-it-does) · [Quick start](#quick-start) · [What you'll see](#what-youll-see) · [Try it](#try-it-in-five-minutes) · [What's in Phase 1](#whats-in-phase-1) · [Feedback](#tell-us-how-it-goes) · [Privacy](#privacy)
 
@@ -63,10 +63,10 @@ You need Python 3.10 or later, git 2.38 or later, and a recent Claude Code (`cla
 **1. Install.**
 
 ```bash
-python -m pip install "git+https://github.com/samratrajsharma/Orchestraty.git"
+python -m pip install orchestraty
 ```
 
-`pipx install` or `uv tool install` with the same address work too. If your terminal can't find `orch` afterwards, type `python -m orchestraty` in its place.
+`pipx install orchestraty` or `uv tool install orchestraty` work too. If your terminal can't find `orch` afterwards, type `python -m orchestraty` in its place. To try the newest work on `main` before it is released, install from the repository instead: `python -m pip install "git+https://github.com/samratrajsharma/Orchestraty.git"`.
 
 **2. Switch it on**, from a terminal (not from inside an agent session), in a repository your agents work on:
 
@@ -111,7 +111,7 @@ Mostly nothing. Notes go to the agents, not to you, and only when one session's 
 4. In `two`, ask for work in a file that calls that function the old way. Before the agent edits that file, it gets a note and adapts.
 5. Run `orch status` to see both sessions and the overlap. If `one` ends its turn with callers still on the old form, its agent hears which. To see the push line without pushing anything, run `git push --dry-run origin try-one` in `one`.
 
-[The guide for testers](orchestraty/docs/beta.md) has a step for every feature.
+[The guide for testers](https://github.com/samratrajsharma/Orchestraty/blob/main/orchestraty/docs/beta.md) has a step for every feature.
 
 ## What it notices
 
@@ -126,7 +126,7 @@ Mostly nothing. Notes go to the agents, not to you, and only when one session's 
 | Two sessions working in one folder instead of separate worktrees | Medium | Both agents, once: use a worktree |
 | Two sessions that claimed the same file or function, with `orch claim` or by an agent asking through MCP | Medium | Both agents, once, with their next step |
 
-Each session hears about a finding once, and a weak overlap never interrupts anyone: see [the silence rule](docs/rules.md#the-silence-rule).
+Each session hears about a finding once, and a weak overlap never interrupts anyone: see [the silence rule](https://github.com/samratrajsharma/Orchestraty/blob/main/docs/rules.md#the-silence-rule).
 
 ## What's in Phase 1
 
@@ -145,7 +145,7 @@ Each session hears about a finding once, and a weak overlap never interrupts any
 | `orch findings`, `orch label`, `orch missed`, `orch stats`, `orch feedback` | Tell us how it went |
 | `orch restore`, `orch uninstall` | Take the hooks out, or everything |
 
-Every command is described in [the main package's README](orchestraty/README.md).
+Every command is described in [the main package's README](https://github.com/samratrajsharma/Orchestraty/blob/main/orchestraty/README.md).
 
 ## Agents
 
@@ -160,7 +160,7 @@ An agent is called supported only once its hooks have been tested with the real 
 | Any other agent, editor or person | Plain git (level 0) | Basic support (git only) | None needed: its changes are read from git |
 <!-- end of agents table -->
 
-Level 2 means the agent's own hooks hand it its notes; level 0, that only its changes in git are seen. What each agent can be told is in [the main package's README](orchestraty/README.md#agents).
+Level 2 means the agent's own hooks hand it its notes; level 0, that only its changes in git are seen. What each agent can be told is in [the main package's README](https://github.com/samratrajsharma/Orchestraty/blob/main/orchestraty/README.md#agents).
 
 ## Tell us how it goes
 
@@ -178,7 +178,7 @@ Your verdicts decide what gets built next.
 - **No AI model, and no text from other sessions,** in any note: one session cannot give another instructions through Orchestraty.
 - **It asks before it changes anything,** and backs up every settings file first.
 
-What Orchestraty reads and writes, and how to report a security problem privately, are in [SECURITY.md](SECURITY.md).
+What Orchestraty reads and writes, and how to report a security problem privately, are in [SECURITY.md](https://github.com/samratrajsharma/Orchestraty/blob/main/SECURITY.md).
 
 ## Limits
 
@@ -189,14 +189,14 @@ What Orchestraty reads and writes, and how to report a security problem privatel
 - Codex and Antigravity are built, but less tested than Claude Code.
 - No note means Orchestraty found nothing, not that nothing is wrong.
 
-What Orchestraty will and will not do is set out in [the rules](docs/rules.md).
+What Orchestraty will and will not do is set out in [the rules](https://github.com/samratrajsharma/Orchestraty/blob/main/docs/rules.md).
 
 ## Upgrade, or take it out
 
-To take a newer build during early access:
+To take a newer release:
 
 ```bash
-python -m pip install --force-reinstall "git+https://github.com/samratrajsharma/Orchestraty.git"
+python -m pip install --upgrade orchestraty    # or: pipx upgrade orchestraty, uv tool upgrade orchestraty
 orch init                   # puts the new hook script in place
 orch coordinator stop       # the next session starts the new version
 ```
@@ -212,8 +212,8 @@ python -m pip uninstall orchestraty
 
 ## Contributing
 
-[CONTRIBUTING.md](CONTRIBUTING.md) covers setting up, the tests, CI and releases. [CHANGELOG.md](CHANGELOG.md) says what changed.
+[CONTRIBUTING.md](https://github.com/samratrajsharma/Orchestraty/blob/main/CONTRIBUTING.md) covers setting up, the tests, CI and releases. [CHANGELOG.md](https://github.com/samratrajsharma/Orchestraty/blob/main/CHANGELOG.md) says what changed.
 
 ## Licence
 
-Orchestraty is licensed under the [Apache License 2.0](LICENSE).
+Orchestraty is licensed under the [Apache License 2.0](https://github.com/samratrajsharma/Orchestraty/blob/main/LICENSE).
