@@ -63,6 +63,7 @@ Phase 1, on top of the coordination core already in place (the hook script and i
 ### Changed
 
 - `orch ui` is redesigned around what needs you: a home page with the strong overlaps first, overlaps and activity in plain words with the note each agent read, sessions, claims, merge order, settings grouped with an explanation each, a search-and-run palette (Ctrl+K), neutral light and dark themes, and the demo as a side tour that leaves the page visible.
+- `orch ui` follows the Orchestraty design system: the Paper and Wine themes, Doppio One in one weight (shipped with the page, under the SIL Open Font License), the Inbound logo, commands as pills with a Copy button that says Copied, and machine output on a terminal ground. One primary button a screen.
 - Orchestraty is licensed under the Apache License 2.0.
 - Steer stops an edit only for a strong finding's note; every other note only informs, in steer mode too.
 - A note still waiting for its agent follows its finding: when another session updates a caller, the note about callers left behind names only the ones still left.

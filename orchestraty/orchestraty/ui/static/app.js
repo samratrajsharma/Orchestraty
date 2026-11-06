@@ -8,7 +8,7 @@ const THEME_KEY = 'orch-ui-theme'
 const ALL_KEY = 'orch-ui-all'
 const REPO_KEY = 'orch-ui-repo'
 const TOUR_KEY = 'orch-ui-tour-min'
-const EASE = 'cubic-bezier(.22, .8, .24, 1)'
+const EASE = 'cubic-bezier(.16, 1, .3, 1)'
 const AGENTS = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity', git: 'plain git', cloud: 'cloud branch' }
 const STRENGTHS = ['strong', 'medium', 'weak']
 const STRENGTH_WORDS = {
@@ -21,7 +21,7 @@ const RULE_NAMES = {
   O5: 'same HTTP route', O6: 'callers left behind', O7: 'declared or claimed work overlaps', W1: 'same folder'
 }
 const VERDICTS = [['real', 'Real'], ['harmless', 'Harmless'], ['false', 'False alarm']]
-const PALETTE = ['#8EA6FF', '#C3A3FF', '#6FD3DD', '#F2A7D8', '#E3C79A', '#A7B4C8', '#9DD6B0', '#F0B98C']
+const PALETTE = ['#A9BCD3', '#E3B7AF', '#FBEFEC']
 const PAGES = [
   ['home', 'Home', 'home', 'h'], ['sessions', 'Sessions', 'users', 's'], ['overlaps', 'Overlaps', 'overlap', 'o'],
   ['activity', 'Activity', 'activity', 'a'], ['claims', 'Claims', 'lock', 'c'], ['merge', 'Merge order', 'merge', 'm']
@@ -108,6 +108,7 @@ function icon (name, cls) {
 }
 const $ = (id) => document.getElementById(id)
 const code = (text) => h('code', {}, text)
+const arrowHead = (cls) => svg('svg', { class: cls, viewBox: '0 0 14 14', 'aria-hidden': 'true', focusable: 'false' }, svg('path', { d: 'M3 2.5 L10 7 L3 11.5' }))
 const chip = (text, cls, dot) => h('span', { class: 'chip' + (cls ? ' ' + cls : '') }, dot ? h('span', { class: 'dot' }) : null, text)
 const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many)
 
@@ -180,8 +181,8 @@ function settle (box) {
     if (seen.has(el.dataset.anim)) continue
     seen.add(el.dataset.anim)
     if (!still) {
-      el.animate([{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }],
-        { duration: 420, delay: Math.min(i++ * 35, 420), easing: EASE, fill: 'backwards' })
+      el.animate([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 320, delay: Math.min(i++ * 35, 420), easing: EASE, fill: 'backwards' })
     }
   }
 }
@@ -561,18 +562,35 @@ function noteHeadline (n) {
 }
 
 // ------------------------------------------------------------------------------- shared pieces
-function copyText (text) {
-  const done = () => toast('Copied: ' + text)
+function copyText (text, copied) {
+  const done = copied || (() => toast('Copied: ' + text))
   try {
     navigator.clipboard.writeText(text).then(done, () => toast('Press Ctrl+C to copy: ' + text))
   } catch {
     toast('Copy it by hand: ' + text)
   }
 }
+const justCopied = new Map()       // command -> the timer that puts its button back to Copy
+function copyButtons (text) {
+  return [...document.querySelectorAll('.cmd-copy')].filter((b) => b.dataset.key === 'copy:' + text)
+}
+function markCopied (text) {
+  clearTimeout(justCopied.get(text))
+  for (const b of copyButtons(text)) b.textContent = 'Copied'
+  announce('Copied')
+  justCopied.set(text, setTimeout(() => {
+    justCopied.delete(text)
+    for (const b of copyButtons(text)) b.textContent = 'Copy'
+  }, 1500))
+}
 function command (text) {
-  return h('div', { class: 'cmd' }, code(text),
-    h('button', { type: 'button', class: 'icon-btn sm', 'aria-label': 'Copy ' + text, title: 'Copy', 'data-key': 'copy:' + text,
-      onclick: () => copyText(text) }, icon('copy', 'sm')))
+  return h('div', { class: 'cmd' }, arrowHead('cmd-prompt'), h('code', { title: text }, text),
+    h('button', { type: 'button', class: 'cmd-copy', 'aria-label': 'Copy ' + text, 'data-key': 'copy:' + text,
+      onclick: () => copyText(text, () => markCopied(text)) }, justCopied.has(text) ? 'Copied' : 'Copy'))
+}
+// One primary button a screen: while the demo tour offers its next step, that is the one.
+function tourLeads () {
+  return demoOn() && !!ui.demo && ui.demo.next !== null
 }
 function empty (heading, body, extra) {
   return h('div', { class: 'card empty' }, h('h3', {}, heading), h('p', {}, body), extra || null)
@@ -629,7 +647,7 @@ function homeView () {
     feed.length ? h('div', { class: 'card feed' }, feed.map((it) => feedRow(it, false))) : empty('Nothing yet', 'Notes, push lines and sessions show here as they happen.')))
   return [pageHead(greeting(), lead), h('div', { class: 'grid-home' }, h('div', { class: 'stack', style: null }, left), glance(live))]
 }
-function needCard (f) {
+function needCard (f, i) {
   const [told, cls] = toldOf(f)
   const label = ui.labels[f.key] || (f.label && f.label.verdict)
   const secondary = f.rule === 'O6'
@@ -642,7 +660,7 @@ function needCard (f) {
         h('span', { class: 'faint' }, since(f.first_seen))),
       h('h3', {}, overlapTitle(f)), h('p', { class: 'meta' }, overlapWhere(f))),
     h('div', { class: 'actions' }, secondary,
-      h('a', { class: 'btn sm primary', href: '#/overlap/' + encodeURIComponent(f.key), 'data-key': 'review:' + f.key }, 'Review')))
+      h('a', { class: 'btn sm' + (i === 0 && !tourLeads() ? ' primary' : ''), href: '#/overlap/' + encodeURIComponent(f.key), 'data-key': 'review:' + f.key }, 'Review', arrowHead('btn-arrow'))))
 }
 function strongestFor (id) {
   let best = null
@@ -938,7 +956,7 @@ function claimsView () {
   const rows = repos().flatMap((r) => r.sessions.flatMap((s) => (s.claims || []).map((c) => [c, s])))
   const live = liveSessions().filter((s) => s.agent !== 'cloud' && s.agent !== 'git')
   const out = [pageHead('Claims', 'Files, folders and functions reserved for one session. The others hear before they edit them.',
-    h('button', { type: 'button', class: 'btn primary', 'data-key': 'new-claim', onclick: () => { ui.claimOpen = !ui.claimOpen; render() } }, 'New claim'))]
+    h('button', { type: 'button', class: 'btn' + (ui.claimOpen || tourLeads() ? '' : ' primary'), 'data-key': 'new-claim', onclick: () => { ui.claimOpen = !ui.claimOpen; render() } }, 'New claim', arrowHead('btn-arrow')))]
   if (ui.claimOpen) {
     const pick = params.get('session')
     const sel = h('select', { id: 'claim-session', 'data-key': 'claim-session', 'data-keep': '' },
@@ -960,7 +978,7 @@ function claimsView () {
         h('label', { class: 'field', for: 'claim-minutes' }, 'For', minutes)),
       h('label', { class: 'check', for: 'claim-hard' }, hard, 'Hard: another session’s edit there waits for its user’s answer (Claude Code)'),
       ui.claimResult ? h('p', { class: 'result' + (ui.claimResult.bad ? ' bad' : '') }, ui.claimResult.text) : null,
-      h('div', { class: 'row-flex' }, h('button', { type: 'submit', class: 'btn primary', 'aria-disabled': ui.busy ? 'true' : null }, 'Claim it'),
+      h('div', { class: 'row-flex' }, h('button', { type: 'submit', class: 'btn' + (tourLeads() ? '' : ' primary'), 'aria-disabled': ui.busy ? 'true' : null }, 'Claim it', arrowHead('btn-arrow')),
         h('button', { type: 'button', class: 'btn quiet', onclick: () => { ui.claimOpen = false; ui.claimResult = null; render() } }, 'Cancel')))
       : empty('No live session to claim for', 'A claim belongs to a session with hooks. Start an agent in a watched repository first.'))
   }
@@ -1194,7 +1212,7 @@ function drawPop () {
     h('div', { class: 'line' }, h('span', { class: 'dot' + (needs ? ' strong' : '') }), h('span', {}, needs ? plural(needs, 'strong overlap needs', 'strong overlaps need') + ' a look' : 'Nothing needs you')),
     ui.lost ? h('div', { class: 'line' }, h('span', { class: 'dot off' }), h('span', {}, 'This page can’t reach orch ui' + (ui.lastOk ? ' since ' + clock(ui.lastOk.toISOString()) : ''))) : null,
     h('p', { class: 'faint' }, ui.lastOk ? 'Updated ' + stamp(ui.lastOk.toISOString()) : ''),
-    needs ? h('button', { type: 'button', class: 'btn sm primary', onclick: () => { closeLayers(); go('#/') } }, 'Show them') : null].filter(Boolean))
+    needs ? h('button', { type: 'button', class: 'btn sm', onclick: () => { closeLayers(); go('#/') } }, 'Show them') : null].filter(Boolean))
 }
 function togglePop () {
   const pop = $('pop')
@@ -1338,7 +1356,7 @@ function drawTour () {
       h('span', { class: 'n', 'aria-hidden': 'true' }, s.done ? icon('check', 'sm') : String(s.n)), h('span', {}, h('span', { class: 'sr-only' }, 'Step ' + s.n + (s.done ? ', done: ' : ': ')), s.text)))),
     h('p', { class: 'faint' }, 'In ' + middle(d.folder, 48) + ', removed when orch ui stops.'))
   const nextBtn = nextStepInfo ? h('button', { type: 'button', class: 'btn primary', id: 'demo-next', 'data-key': 'demo-next', 'aria-disabled': ui.demoBusy ? 'true' : null, onclick: nextStep },
-    ui.demoBusy ? 'Running…' : 'Next step', icon('next', 'sm')) : null
+    ui.demoBusy ? 'Running…' : 'Next step', arrowHead('btn-arrow')) : null
   const foot = h('div', { class: 'tour-foot' },
     h('span', { class: 'grow' }, ui.demoError || (nextStepInfo ? 'Next: ' + nextStepInfo.text : 'Done. Ctrl+C in the terminal stops orch ui and removes the sandbox.')), nextBtn)
   swap(tour, [head, body, foot])

@@ -63,7 +63,9 @@ STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
           "/app.css": ("app.css", "text/css; charset=utf-8"),
           "/app.js": ("app.js", "text/javascript; charset=utf-8"),
           "/mark.svg": ("mark.svg", "image/svg+xml"),
-          "/favicon.svg": ("favicon.svg", "image/svg+xml")}
+          "/favicon.svg": ("favicon.svg", "image/svg+xml"),
+          "/DoppioOne-Regular.woff2": ("DoppioOne-Regular.woff2", "font/woff2"),
+          "/DoppioOne-OFL.txt": ("DoppioOne-OFL.txt", "text/plain; charset=utf-8")}
 JSON_TYPE = "application/json; charset=utf-8"
 TEXT_TYPE = "text/plain; charset=utf-8"
 MAX_BODY = 4096

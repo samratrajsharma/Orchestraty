@@ -305,7 +305,8 @@ def test_the_page_runs_doctor_s_checks_but_not_in_the_demo(srv, monkeypatch):
 # What it answers
 # --------------------------------------------------------------------------------------- #
 @pytest.mark.parametrize("path,ctype", [("/", "text/html"), ("/app.css", "text/css"), ("/app.js", "text/javascript"),
-                                        ("/mark.svg", "image/svg+xml"), ("/favicon.svg", "image/svg+xml")])
+                                        ("/mark.svg", "image/svg+xml"), ("/favicon.svg", "image/svg+xml"),
+                                        ("/DoppioOne-Regular.woff2", "font/woff2"), ("/DoppioOne-OFL.txt", "text/plain")])
 def test_static_files_come_with_the_security_headers(srv, path, ctype):
     code, headers, body = ask(srv, "GET", path)
     assert code == 200 and headers["content-type"].startswith(ctype)
@@ -442,7 +443,8 @@ def test_the_page_makes_no_request_elsewhere():
         text = (STATIC / name).read_text(encoding="utf-8")
         urls = re.findall(r"(?:https?:)?//[A-Za-z0-9.-]+\.[A-Za-z]{2,}[^\s'\")]*", text)
         assert set(urls) <= {"http://www.w3.org/2000/svg"}, (name, urls)        # an XML namespace, never fetched
-        assert "@import" not in text and "url(" not in text.replace("data:", "")
+        assert "@import" not in text
+        assert "url(" not in text.replace("data:", "").replace('url("/DoppioOne-Regular.woff2")', "")
     js = (STATIC / "app.js").read_text(encoding="utf-8")
     assert "innerHTML" not in js.split("\n", 3)[3] and "insertAdjacentHTML" not in js and "eval(" not in js
     assert set(re.findall(r"""['"](/api/[a-z/]+)""", js)) <= {"/api/status?ended=", "/api/demo", "/api/push",
@@ -454,12 +456,24 @@ def test_the_page_makes_no_request_elsewhere():
 
 def test_the_mark_and_the_favicon_are_the_brand_s():
     mark = (STATIC / "mark.svg").read_text(encoding="utf-8")
-    assert 'viewBox="0 0 96 96"' in mark and 'd="M19 18 L50.2 36 M19 78 L50.2 60"' in mark
-    assert 'stroke="#38000A" stroke-width="10"' in mark and 'cx="71" cy="48" r="11" fill="#CD1C18"' in mark
+    assert 'viewBox="0 0 96 96"' in mark and 'd="M21.5 24.01 L29 37 L14 37"' in mark and 'd="M74.5 71.99 L67 59 L82 59"' in mark
+    assert mark.count('stroke="#38000A"') == 4 and 'fill="#CD1C18" cx="48" cy="48" r="9"' in mark
     favicon = (STATIC / "favicon.svg").read_text(encoding="utf-8")
-    assert favicon.startswith('<svg xmlns="http://www.w3.org/2000/svg" viewBox="10 10 76 76">')
+    assert favicon.startswith('<svg xmlns="http://www.w3.org/2000/svg" viewBox="14 18 68 60">')
     assert "@media (prefers-color-scheme:dark){.i{stroke:#FFF3F0}.a{fill:#FFA896}}" in favicon
     assert hashlib.sha256(mark.encode()).hexdigest() != hashlib.sha256(favicon.encode()).hexdigest()
+    page = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert "M19 18 L50.2 36" not in mark + favicon + page            # the earlier mark never sits beside the new name
+    assert page.count('class="go ') == 4 and 'class="logo logo-mark"' in page
+
+
+def test_the_page_is_set_in_its_own_typeface_in_one_weight():
+    css = (STATIC / "app.css").read_text(encoding="utf-8")
+    assert "@font-face" in css and 'font-family: "Doppio One"' in css and "font-synthesis: none" in css
+    assert "b, strong, h1, h2, h3, th, dt { font-weight: 400; }" in css
+    assert set(re.findall(r"font-weight: *(\w+)", css)) <= {"400", "500"}   # 500 is the command type, in the mono face
+    assert (STATIC / "DoppioOne-Regular.woff2").read_bytes()[:4] == b"wOF2"
+    assert "SIL OPEN FONT LICENSE" in (STATIC / "DoppioOne-OFL.txt").read_text(encoding="utf-8").upper()
 
 
 # --------------------------------------------------------------------------------------- #
