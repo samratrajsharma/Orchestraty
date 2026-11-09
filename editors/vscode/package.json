@@ -102,5 +102,10 @@
     "@types/vscode": "1.90.0",
     "@vscode/vsce": "4.0.0",
     "typescript": "5.9.3"
+  },
+  "overrides": {
+    "@vscode/vsce": {
+      "minimatch": "^11.0.1"
+    }
   }
 }
