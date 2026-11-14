@@ -48,7 +48,7 @@ These are the rules Orchestraty is built by: what it does, what it will not beco
 A note that isn't needed costs the agent tokens and teaches everyone to ignore notes. So:
 
 - **One note per finding per session.** A session hears about each finding once. When it takes one of its notes about a finding, whether before an edit, with its next step or by being woken, the others are taken back. A finding that comes back is not told again, and the same change found again under another session is not told twice. A note whose finding stops holding before the agent takes it is withdrawn.
-- **A length limit.** A note is at most 1,200 characters; each name in it is cut to 120 characters, and each list to 6 items.
+- **A length limit.** A note is at most 1,200 characters; each name in it is cut to 120 characters, and each list to 6 items. One hook hands over at most 9,000 characters of notes: whole notes only; the rest come with the next one, and the last line says how many wait.
 - **Nothing for weak overlaps.** Two sessions changing the same file is a weak overlap: nobody is told, and it shows only in `orch status`. A use of a changed function in a file the other session is not changing waits until that session first edits the file.
 
 `orch stats` shows how this works out: notes per session per day, and how many were held back.

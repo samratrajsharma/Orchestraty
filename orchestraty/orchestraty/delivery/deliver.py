@@ -48,9 +48,11 @@ session: a plain-git session that took over a finished session's worktree, or tw
 that broke the same function (one note per session, kind, rule, function and file). A note
 whose finding stops holding before it was taken is withdrawn.
 
-Slots hold every note waiting for them when they are written and are never overwritten (see
-``slots``): when a slot that had notes written to it is gone from disk, the hook took it, and
-those notes are delivered; then the next notes waiting for it are written.
+Slots hold the notes waiting for them when they are written: as many whole notes as fit in
+MAX_SLOT_TEXT characters, the oldest first (those that make an edit ask or stop lead), with a
+last line saying how many more wait; the rest wait for the slot's next write. Slots are never
+overwritten (see ``slots``): when a slot that had notes written to it is gone from disk, the
+hook took it, and those notes are delivered; then the next notes waiting for it are written.
 
 The push line: for each live session with an open O6 finding, hooked or plain git (a worktree
 an agent has left), ``push/<worktree key>.txt`` holds one line the git pre-push hook prints.
@@ -70,6 +72,31 @@ NO_NOTES = ("git", "cloud")       # no hooks here (plain git, a cloud agent's br
 
 def _rel(state, path):
     return os.path.relpath(path, state.root).replace(os.sep, "/")
+
+
+def _whole_notes(notes, limit):
+    """The first notes whose texts, joined by blank lines, fit in `limit` characters; always the
+    first one (no note is longer than notes.MAX_NOTE)."""
+    size, kept = -2, []
+    for n in notes:
+        size += 2 + len(n["text"])
+        if kept and size > limit:
+            break
+        kept.append(n)
+    return kept
+
+
+def _slot_text(notes):
+    """(the notes one write of a slot carries, its text): as many whole notes as fit in
+    MAX_SLOT_TEXT, and when the rest must wait for the slot's next write, a last line saying how
+    many."""
+    batch = _whole_notes(notes, MAX_SLOT_TEXT)
+    if len(batch) < len(notes):
+        room = MAX_SLOT_TEXT - 2 - len(templates.more_waiting(len(notes)))   # len(notes) bounds the count's digits
+        batch = _whole_notes(notes, room)
+        texts = [n["text"] for n in batch] + [templates.more_waiting(len(notes) - len(batch))]
+        return batch, "\n\n".join(texts)[:MAX_SLOT_TEXT]
+    return batch, "\n\n".join(n["text"] for n in batch)[:MAX_SLOT_TEXT]
 
 
 def _abs(state, rel):
@@ -307,30 +334,42 @@ class Deliverer:
 
     def fill(self, steer=False):
         """Write every free slot that has notes waiting, in the form its session's agent
-        accepts. Returns the slots written."""
+        accepts: as many whole notes as fit in MAX_SLOT_TEXT; the rest wait for the slot's next
+        write. Returns the slots written."""
         written, agents = [], {}
         for slot_rel in self.record.slots_with(("pending", "written")):
             self._settle(slot_rel)
             pending = self.record.notes(slot=slot_rel, states=("pending",))
             if not pending or self.record.notes(slot=slot_rel, states=("written",)):
                 continue                                  # nothing new, or the slot still waits
-            text = "\n\n".join(n["text"] for n in pending)[:MAX_SLOT_TEXT]
-            sid = pending[0]["session_id"]
+            sid, kind = pending[0]["session_id"], pending[0]["kind"]
             if sid not in agents:
                 row = self.record.session(sid)
                 agents[sid] = row["agent"] if row else ""
-            numbers = [claims.from_note_key(n["finding_key"]) for n in pending]
-            held = [self.record.claim(x) for x in numbers if x is not None]
-            # steer stops an edit only for a strong finding's note: never for a claim's, nor for a
-            # medium one (an O3 about TypeScript, whose uses are heuristic)
-            strong = steer and any((self.record.finding(n["finding_key"]) or {}).get("strength") == "strong"
-                                   for n, x in zip(pending, numbers) if x is None)
-            data = adapters.output(agents[sid], pending[0]["kind"], text, steer=strong,
-                                   ask=any(c and c["hard"] for c in held))
+            asks, stops = self._deciders(pending, steer)       # over every note waiting, not only those written now
+            lead = asks | stops
+            pending.sort(key=lambda n: n["id"] not in lead)     # those that make the edit ask or stop lead, so the text says why
+            batch, text = _slot_text(pending)
+            data = adapters.output(agents[sid], kind, text, steer=bool(stops), ask=bool(asks))
             if slots.write(_abs(self.state, slot_rel), data):
-                self.record.mark_written([n["id"] for n in pending], self.now_ns())
+                self.record.mark_written([n["id"] for n in batch], self.now_ns())
                 written.append(slot_rel)
         return written
+
+    def _deciders(self, notes, steer):
+        """Ids of the notes that make an edit wait for the user's answer (a hard claim's) and, with
+        steer, of those that stop it (a strong finding's: never a claim's, nor a medium one's, such
+        as an O3 about TypeScript, whose uses are heuristic)."""
+        asks, stops = set(), set()
+        for n in notes:
+            number = claims.from_note_key(n["finding_key"])
+            if number is not None:
+                c = self.record.claim(number)
+                if c and c["hard"]:
+                    asks.add(n["id"])
+            elif steer and (self.record.finding(n["finding_key"]) or {}).get("strength") == "strong":
+                stops.add(n["id"])
+        return asks, stops
 
     def taken(self, slot_rel, ts):
         """A hook's spool line says it took this slot."""

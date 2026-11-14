@@ -327,6 +327,11 @@ def about(finding, me, sessions):
     return _cap(f"{rule} {clean(finding['symbol'] or finding['file'], 200)}.")
 
 
+def more_waiting(count):
+    """The last line of a slot that holds only some of the notes waiting for it."""
+    return _cap(f"{count} more note{'s' if count != 1 else ''} wait for a later step; orch status lists every overlap.")
+
+
 def push_line(findings):
     """The one line shown at push for the O6 findings still open in a worktree, or ""."""
     if not findings:

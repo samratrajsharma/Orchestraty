@@ -436,6 +436,84 @@ def test_a_caller_a_worktree_without_hooks_changed_but_did_not_fix_stays_left_be
         c.close()
 
 
+def _deliverer(state):
+    from orchestraty.coordinator.record import Record
+    from orchestraty.delivery import deliver
+    rec = Record(state.record)
+    return rec, deliver.Deliverer(state, rec, None)
+
+
+def _rel(state, path):
+    return os.path.relpath(path, state.root).replace(os.sep, "/")
+
+
+SESSION = {"agent": "claude", "repo_id": 1, "cwd": "/w/wt-b", "worktree": "/w/wt-b", "branch": "b", "base_commit": "c",
+           "base_guessed": 0, "started": 5, "last_seen": 5, "state": "live", "turn": "", "note": ""}
+
+
+def test_a_full_slot_takes_whole_notes_and_the_rest_come_next_time(state):
+    """Notes that do not fit in one hook's text wait, whole, for the next one; only what was
+    handed over is counted as delivered."""
+    from orchestraty.capture.hook import take_slot
+    from orchestraty.delivery import deliver
+    rec, d = _deliverer(state)
+    try:
+        rec.put_session(dict(SESSION, id="A"))
+        slot = slots.stop_slot(state, "A")
+        texts = ["Orchestraty: note %02d " % i + "x" * 1000 for i in range(30)]
+        for i, text in enumerate(texts):
+            rec.add_note(f"O6|a.py::f{i:02d}|A", "A", "stop", _rel(state, slot), text, 10, 10)
+        got = []
+        while d.fill():
+            text = json.loads(take_slot(slot))["hookSpecificOutput"]["additionalContext"]
+            assert len(text) <= deliver.MAX_SLOT_TEXT
+            whole = [t for t in texts if t in text]
+            assert {n["text"] for n in rec.notes(slot=_rel(state, slot), states=("written",))} == set(whole)
+            got += whole
+            if len(got) < len(texts):
+                assert f"{len(texts) - len(got)} more note" in text
+        assert got == texts                                       # each once, oldest first
+        assert [n["state"] for n in rec.notes()] == ["delivered"] * 30
+        assert sum(1 for x in rec.change_log() if x["kind"] == "note_delivered") == 30
+    finally:
+        rec.close()
+
+
+def test_a_hard_claim_behind_many_notes_still_asks_and_the_reason_names_it(state):
+    from orchestraty import claims
+    from orchestraty.rules.overlap import Finding
+    rec, d = _deliverer(state)
+    try:
+        rec.put_session(dict(SESSION, id="B"))
+        slot = slots.edit_slot(state, "B", "/w/wt-b/c.py")
+        for i in range(20):
+            rec.add_note(f"O3|a.py::f{i:02d}|A|B|c.py", "B", "edit", _rel(state, slot),
+                         "Orchestraty: note %02d " % i + "x" * 1000, 10, 10)
+        cid = rec.add_claim(1, "A", "symbol", "a.py::charge", "a.py", True, 5, 2 ** 62)
+        claim_note = "Orchestraty: another session has claimed charge in a.py (hard claim #%d)." % cid
+        rec.add_note(claims.note_key(cid), "B", "edit", _rel(state, slot), claim_note, 10, 10)
+        assert d.fill()
+        out = read_slot(slot)["hookSpecificOutput"]
+        assert out["permissionDecision"] == "ask" and claim_note in out["permissionDecisionReason"]
+        assert notes_of_record(rec, "B")[claims.note_key(cid)]["state"] == "written"
+        # with steer on, a strong finding's note far down the slot stops the edit, and says why
+        os.remove(slot)
+        rec.db.execute("UPDATE notes SET state = 'pending', written = NULL")
+        rec.db.execute("DELETE FROM claims")
+        strong = Finding("O3|a.py::f19|A|B|c.py", "O3", "strong", ("A", "B"), changer="A", receiver="B",
+                         symbol="a.py::f19", file="c.py")
+        rec.put_finding(1, strong, 10)
+        assert d.fill(steer=True)
+        out = read_slot(slot)["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny" and "note 19 " in out["permissionDecisionReason"]
+    finally:
+        rec.close()
+
+
+def notes_of_record(rec, sid):
+    return {n["finding_key"]: n for n in rec.notes(session_id=sid)}
+
+
 def test_sessions_without_hooks_get_no_notes(state, repo, git, tmp_path):
     config.watch(state, str(repo / ".git"))
     wa, wc = tmp_path / "wt-a", tmp_path / "wt-c"
