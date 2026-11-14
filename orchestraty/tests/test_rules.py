@@ -129,6 +129,47 @@ def test_a_staticmethod_made_a_plain_method_reaches_only_the_calls_on_the_class(
     assert [u["file"] for u in o6.detail["left"]] == ["k_class.py"]
 
 
+KEYWORD_ONLY = "def charge(amount, *, currency):\n    return amount\n"
+TOUCHED = "from a import charge\n\n\ndef pay():\n    z = 3\n    return charge(1, 'EUR')\n"
+FIXED = "from a import charge\n\n\ndef pay():\n    z = 3\n    return charge(1, currency='EUR')\n"
+TOUCH = change("b.py::pay", contract="none", reasons=())
+
+
+def test_o6_a_caller_a_session_changed_but_left_on_the_old_form_is_still_left_behind():
+    views = {"A": view("A", ["a.py"], [changed(BASE["a.py"], KEYWORD_ONLY)]), "B": view("B", ["b.py"], [TOUCH])}
+    graphs = {"B": graph_of(dict(BASE, **{"b.py": TOUCHED}))}
+    [o6] = by_rule(run(views, graphs=graphs, base=graph_of(BASE)), "O6")
+    assert o6.detail["left"] == [{"symbol": "b.py::pay", "file": "b.py", "lines": [5]}]
+    graphs["B"] = graph_of(dict(BASE, **{"b.py": FIXED}))                 # B fixed the call: it is updated
+    assert by_rule(run(views, graphs=graphs, base=graph_of(BASE)), "O6") == []
+    views["C"] = view("C", ["b.py"], [TOUCH])
+    graphs["C"] = graph_of(dict(BASE, **{"b.py": TOUCHED}))                # one session's fix is enough
+    assert by_rule(run(views, graphs=graphs, base=graph_of(BASE)), "O6") == []
+    del views["C"]
+    assert by_rule(run(views, graphs={}, base=graph_of(BASE)), "O6") == []  # B's copy not known yet: its change counts
+
+
+def test_o6_the_changing_sessions_own_callers_are_judged_in_its_own_copy():
+    views = {"A": view("A", ["a.py", "b.py"], [changed(BASE["a.py"], KEYWORD_ONLY), TOUCH])}
+    [o6] = by_rule(run(views, graphs={"A": graph_of({"a.py": KEYWORD_ONLY, "b.py": TOUCHED})},
+                       base=graph_of(BASE)), "O6")
+    assert [u["symbol"] for u in o6.detail["left"]] == ["b.py::pay"]
+    assert by_rule(run(views, graphs={"A": graph_of({"a.py": KEYWORD_ONLY, "b.py": FIXED})}, base=graph_of(BASE)),
+                   "O6") == []
+
+
+def test_o6_a_call_left_to_a_removed_function_is_never_updated():
+    removed = changed(BASE["a.py"], "")
+    views = {"A": view("A", ["a.py"], [removed]), "B": view("B", ["b.py"], [TOUCH])}
+    graphs = {"B": graph_of(dict(BASE, **{"b.py": TOUCHED}))}
+    [o6] = by_rule(run(views, graphs=graphs, base=graph_of(BASE)), "O6")
+    assert o6.detail["left"][0]["symbol"] == "b.py::pay"
+    made_async = changed(BASE["a.py"], "async def charge(amount, currency):\n    return amount\n")
+    assert made_async.breaks == {"now async": [["any"]]}
+    views["A"] = view("A", ["a.py"], [made_async])                       # every call breaks: arguments show nothing,
+    assert by_rule(run(views, graphs=graphs, base=graph_of(BASE)), "O6") == []   # so B's change of pay counts
+
+
 def test_a_moved_and_broken_function_is_found_where_the_other_session_uses_it():
     b_copy = dict(BASE, **{"c.py": "from a import charge\n\n\ndef use():\n    return charge(2, 'USD')\n"})
     moved = change("d.py::charge", kind="moved", moved_from="a.py::charge")

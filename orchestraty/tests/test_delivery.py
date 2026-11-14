@@ -403,6 +403,39 @@ def test_an_ended_session_takes_its_notes_back(state, two):
     assert {n["state"] for n in c.record.notes(session_id="B")} == {"withdrawn"}
 
 
+TOUCHED = "from a import charge\n\n\ndef pay():\n    z = 3\n    return charge(1, 'EUR')\n"
+
+
+def test_a_caller_changed_but_left_on_the_old_form_keeps_the_push_line_and_the_stop_note(state, two):
+    c, wa, wb = two
+    edit(state, c, "A", wa, "a.py", BROKEN)
+    edit(state, c, "B", wb, "b.py", TOUCHED)                         # B changed pay, but not its call
+    push = Path(state.root) / "push" / (slots.file_key(str(wa)) + ".txt")
+    assert push.read_text(encoding="utf-8").startswith("orchestraty: 1 caller(s) of charge still use its old form (pay)")
+    assert "pay in b.py (line 5)" in read_slot(slots.stop_slot(state, "A"))["hookSpecificOutput"]["additionalContext"]
+    edit(state, c, "B", wb, "b.py", UPDATED)                         # now it is updated
+    assert not push.exists()
+
+
+def test_a_caller_a_worktree_without_hooks_changed_but_did_not_fix_stays_left_behind(state, repo, git, tmp_path):
+    config.watch(state, str(repo / ".git"))
+    wa, wc = tmp_path / "wt-a", tmp_path / "wt-c"
+    git(repo, "worktree", "add", "-q", "-b", "feat-a", str(wa))
+    git(repo, "worktree", "add", "-q", "-b", "feat-c", str(wc))
+    (wc / "b.py").write_text(TOUCHED, encoding="utf-8")                # someone without hooks touched pay
+    spool_event(state.root, "A", "SessionStart", wa)
+    c = cmain.Coordinator(state)
+    try:
+        c.step()
+        c.livemap.indexes.wait(120)
+        edit(state, c, "A", wa, "a.py", BROKEN)
+        assert any(s["agent"] == "git" for s in c.record.sessions(states=("live",)))
+        push = Path(state.root) / "push" / (slots.file_key(str(wa)) + ".txt")
+        assert push.read_text(encoding="utf-8").startswith("orchestraty: 1 caller(s) of charge still use its old form (pay)")
+    finally:
+        c.close()
+
+
 def test_sessions_without_hooks_get_no_notes(state, repo, git, tmp_path):
     config.watch(state, str(repo / ".git"))
     wa, wc = tmp_path / "wt-a", tmp_path / "wt-c"

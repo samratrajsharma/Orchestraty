@@ -29,8 +29,11 @@ O4 in the other session's own copy of the code. In a file that session is
 changing it is a finding; in any other file that uses it, the finding is latent: not shown as
 an overlap, but it gives the session its note before its first edit of that file (at most
 MAX_LATENT files per change and session). O6 looks at the callers the base commit had, and a
-caller counts as updated when some live session modified it. Calls made at module level,
-outside any function, are not seen.
+caller counts as updated when a live session changed it so that, in that session's own copy
+of the code, its calls no longer run into the breaking reasons. A use left of a removed
+function always breaks. A reason that breaks every call (a function made async, say) shows
+nothing in a call's arguments, so there the change of the caller counts; so does it while that
+copy's graph is not known. Calls made at module level, outside any function, are not seen.
 
 For TypeScript (``orch ts on``), the changes are those of a module's exports (``livemap.typescript``)
 and a use needs import evidence: a file of the other session's copy that imports the export (or
@@ -61,7 +64,7 @@ from dataclasses import dataclass, field
 
 from orch_engine.routes import EXACT
 
-from orchestraty.livemap.contracts import breaking_reasons
+from orchestraty.livemap.contracts import ANY, breaking_reasons
 
 WEAK, MEDIUM, STRONG = "weak", "medium", "strong"
 MAX_LATENT = 100
@@ -120,6 +123,47 @@ def _breaking_uses(change, graph, target):
             continue                      # each of its calls passes its arguments in a way that still works
         out.append((use, lines, why))
     return out
+
+
+def _changed_callers(views):
+    """{symbol as the base commit has it: [(session id, its name in that session's copy)]} for every
+    function or class a live session modified, moved or removed."""
+    out = {}
+    for sid, v in sorted(views.items()):
+        for k, c in v.symbols.items():
+            if c.kind in CHANGED_KINDS:
+                out.setdefault(c.moved_from or k, []).append((sid, k))
+    return out
+
+
+def _checked_in_copy(change):
+    """Whether a session's own copy can show that a caller still breaks: a removal (any use left
+    breaks), or a breaking reason that shows in how a call passes its arguments. A reason that
+    breaks every call (now async, a base class removed) shows nothing there."""
+    return change.kind == "removed" or any(ANY not in c for c in (change.breaks or {}).values())
+
+
+def _still_breaks(change, uses, caller):
+    """Whether `caller` still uses what `change` broke in one session's copy (`uses`: [_uses dict
+    per name]): any use of a removed function; else a use that runs into a reason its calls'
+    arguments show."""
+    shown = {r: c for r, c in (change.breaks or {}).items() if ANY not in c}
+    for found in uses:
+        use = found.get(caller)
+        if use is not None and (change.kind == "removed" or breaking_reasons(shown, use[1])):
+            return True
+    return False
+
+
+def _updated(change, copies, copy_uses):
+    """Whether a session that changed this caller (`copies`: [(sid, its name there)]) updated it: in
+    its own copy the caller no longer breaks. While that copy's graph is not known, or when the
+    change cannot be seen in a call's arguments, the session's change of the caller counts."""
+    for sid, name in copies:
+        uses = copy_uses(sid) if _checked_in_copy(change) else None
+        if uses is None or not _still_breaks(change, uses, name):
+            return True
+    return False
 
 
 def _reasons(change, why):
@@ -241,22 +285,28 @@ def contract_uses(changer, user, views, graphs, ts_uses=None):
                           detail=detail)
 
 
-def left_behind(changer, views, base_graphs):
-    """O6: callers of what `changer` broke that no live session has modified."""
+def left_behind(changer, views, base_graphs, graphs=None):
+    """O6: callers of what `changer` broke that no live session has updated: changed so that, in
+    its own copy of the code, their calls no longer break."""
     graph = base_graphs(changer)
     if graph is None:
         return
-    updated = set()
-    for v in views.values():
-        updated.update(k for k, c in v.symbols.items() if c.kind in CHANGED_KINDS)
-        updated.update(c.moved_from for c in v.symbols.values() if c.moved_from)
+    changed = _changed_callers(views)
     for sym, change in sorted(views[changer].symbols.items()):
         if change.contract != BREAKING or change.language == "typescript":
             continue
         target = change.moved_from or sym
+        names = (target, sym) if sym != target else (target,)
+        memo = {}
+
+        def copy_uses(sid, names=names, memo=memo):
+            if sid not in memo:
+                g = graphs(sid) if graphs is not None else None
+                memo[sid] = None if g is None else [_uses(g, n) for n in names]
+            return memo[sid]
         left, why = [], set()
         for use, lines, hit in _breaking_uses(change, graph, target):
-            if use not in updated:
+            if not _updated(change, changed.get(use, ()), copy_uses):
                 left.append({"symbol": use, "file": _file_of(use), "lines": lines})
                 why.update(hit)
         if left:
@@ -331,6 +381,6 @@ def evaluate(views, graphs, base_graphs, hooked=None, planned=None, routes=None,
             if b != a and not one_folder(a, b, views):
                 for f in contract_uses(a, b, views, graphs, ts_uses):
                     out[f.key] = f
-        for f in left_behind(a, views, base_graphs):
+        for f in left_behind(a, views, base_graphs, graphs):
             out[f.key] = f
     return [out[k] for k in sorted(out)]
