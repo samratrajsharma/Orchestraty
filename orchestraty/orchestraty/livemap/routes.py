@@ -7,8 +7,9 @@ compatible. A changed route counts under both its old and its new method and pat
 session that changes either one changes the same route. Each route keeps the engine's
 confidence: a heuristic one (some part of its path computed, or where it is mounted not known)
 is listed but never makes a strong finding. A changed file that does not parse (an edit half
-done) keeps its base commit's routes until it parses again: what it declares is not known, so
-its routes are not taken as removed.
+done) keeps the routes the session's copy last declared, else its base commit's, until it
+parses again (the live map's ``known``): what it declares is not known, so its routes are not
+taken as removed.
 """
 from dataclasses import dataclass, field
 

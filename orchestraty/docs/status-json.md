@@ -79,6 +79,7 @@ A cloud branch, in [`cloud`](#cloud), has the same fields, read this way: `workt
 | `files` | object | `{path: status}`, `status` being `A` (added), `M` (modified) or `D` (deleted). |
 | `unattributed` | array of paths | Files changed in a worktree two sessions share that neither session's edits name, so neither is said to have changed them. |
 | `symbols` | array | The functions and classes it added, removed, moved or modified, for Python; with TypeScript contracts on (`orch ts on`), also the exports of its TypeScript modules that changed. See [symbol](#symbol). |
+| `not_compared` | object | `{path: why}` for its changed Python files whose functions were not compared this time, `why` being `does not parse` (a syntax error its base commit does not have, as in a file caught mid-edit), `too large` (over 2,000,000 bytes) or `not readable`. Until it reads whole again, such a file counts as the session's copy last showed it, else as its base commit has it, so none of its functions looks removed. `{}` when every file was compared. |
 
 ### Symbol
 

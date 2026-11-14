@@ -113,6 +113,60 @@ def test_a_change_that_keeps_every_function_and_line_is_still_a_change(repo, git
     assert not lm.refresh("a")                                    # nothing new since
 
 
+BROKEN = "def charge(amount):\n    return amount\n"
+HALF_DONE = "def charge(amount, currency):\n    return (\n"                 # an edit caught half done
+
+
+def test_a_file_that_does_not_parse_is_not_compared(repo, git, lm):
+    follow(lm, "a", repo, head(git, repo))
+    write(repo / "a.py", HALF_DONE)
+    assert lm.refresh("a")
+    v = lm.views["a"]
+    assert v.files == {"a.py": "M"} and v.symbols == {}                 # not "every function removed"
+    assert v.not_compared == {"a.py": "does not parse"}
+    write(repo / "a.py", "def charge(amount, currency):\n    return amount\n\nfoo = (\n")   # charge whole, the file not
+    lm.refresh("a")
+    assert lm.views["a"].symbols == {}
+    write(repo / "a.py", BROKEN)
+    assert lm.refresh("a")
+    assert lm.views["a"].not_compared == {} and lm.views["a"].symbols["a.py::charge"].contract == "breaking"
+    write(repo / "a.py", BROKEN + "\nfoo = (\n")                        # half done again: kept as last read whole
+    lm.refresh("a")
+    v = lm.views["a"]
+    assert v.not_compared == {"a.py": "does not parse"}
+    assert v.symbols["a.py::charge"].reasons == ["parameter currency removed"]
+    assert not lm.refresh("a")
+    assert lm.indexes.wait(120)
+    assert "b.py::pay" in set(lm.graph("a").callers("a.py::charge"))    # the graph keeps the file's functions
+
+
+def test_a_file_grown_too_large_is_not_compared(repo, git, lm, monkeypatch):
+    from orchestraty.livemap import map as livemap_map
+    monkeypatch.setattr(livemap_map, "MAX_BLOB_BYTES", 200)              # the base a.py is 46 bytes
+    follow(lm, "a", repo, head(git, repo))
+    write(repo / "a.py", "def charge(amount, currency):\n    return amount\n" + "# more\n" * 40)
+    lm.refresh("a")
+    v = lm.views["a"]
+    assert v.symbols == {} and v.not_compared == {"a.py": "too large"}
+    os.remove(repo / "a.py")
+    lm.refresh("a")
+    v = lm.views["a"]
+    assert v.symbols["a.py::charge"].kind == "removed" and v.not_compared == {}   # a deletion is still one
+
+
+def test_a_cloud_branch_file_too_large_is_not_compared(repo, git, lm, monkeypatch):
+    from orchestraty.livemap import map as livemap_map
+    base = head(git, repo)
+    write(repo / "a.py", "def charge(amount, currency):\n    return amount\n" + "# more\n" * 40)
+    git(repo, "commit", "-q", "-am", "grown")
+    tip = head(git, repo)
+    monkeypatch.setattr(livemap_map, "MAX_BLOB_BYTES", 200)
+    lm.track_cloud(session("c", "", base), "repo-key", str(repo), tip)
+    lm.refresh("c")
+    v = lm.views["c"]
+    assert v.symbols == {} and v.not_compared == {"a.py": "too large"}
+
+
 def test_body_changes_additions_removals_and_moves(repo, git, lm):
     follow(lm, "a", repo, head(git, repo))
     write(repo / "a.py", "def charge(amount, currency):\n    return amount * 2\n\n\ndef refund(x):\n    return x\n")

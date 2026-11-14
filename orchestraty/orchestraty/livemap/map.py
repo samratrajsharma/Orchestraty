@@ -18,6 +18,12 @@ Which files belong to a session:
 * in a folder that two live sessions share, other changes are marked not attributed rather
   than guessed.
 
+A changed Python file whose content is not known right now is not compared: one that does not
+parse while its base does (an edit half done), that cannot be read, or that has grown past
+MAX_BLOB_BYTES. It stands as the session's copy last showed it whole, else as its base commit has
+it, so none of its functions looks removed; the view lists it (``not_compared``) until it reads
+whole again. A deletion is still one.
+
 A cloud agent's branch (``remote``) has no folder: its view is read from a shadow
 repository's objects, base commit to the branch's tip, through the same parses and analysis,
 and only when the tip or the base moved.
@@ -38,6 +44,7 @@ from orchestraty.livemap.contracts import ANY, BREAKING, COMPATIBLE, NONE, REVIE
 from orchestraty.livemap.index import BaseIndexes, ParseCache, blob_id, view
 
 PYTHON = (".py",)
+NOT_PARSED, TOO_LARGE, NOT_READ = "does not parse", "too large", "not readable"   # why a file is not compared
 READ_ONLY_TOOLS = ({"Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "TodoWrite", "TodoRead",
                     "ExitPlanMode", "BashOutput", "ListMcpResourcesTool", "ReadMcpResourceTool"}
                    | adapters.READ_ONLY_TOOLS)                 # and the other agents' read-only tools
@@ -79,6 +86,7 @@ class SessionView:
     git_dir: str = ""                                  # a cloud branch: the shadow repository it is read from
     tip: str = ""                                      # and the branch's tip there
     ts_blobs: dict = field(default_factory=dict)       # changed .ts/.js path -> blob id on disk (orch ts on)
+    not_compared: dict = field(default_factory=dict)   # changed .py path -> why its functions were not compared
 
     @property
     def source(self):
@@ -96,7 +104,7 @@ class SessionView:
         return (tuple(sorted(self.files.items())), tuple(sorted(self.unattributed)),
                 tuple(sorted((k, s.kind, s.change, s.contract, tuple(s.reasons), tuple(s.lines), repr(s.breaks))
                              for k, s in self.symbols.items())),
-                self.content())
+                self.content(), tuple(sorted(self.not_compared.items())))
 
     def breaking(self):
         return {k: s for k, s in self.symbols.items() if s.contract == BREAKING}
@@ -142,6 +150,21 @@ def analyse(base, head):
                                                 bs[k]["kind"])
         out[k] = SymbolChange(k, "modified", change, verdict, reasons, hs[k]["file"], hs[k]["lines"], breaks=breaks)
     return out
+
+
+def known(base, head, unread, before):
+    """(head parses to compare, {path: why not compared}). A changed file whose head does not parse
+    while its base does (an edit half done), or that could not be read (`unread`), stands as the
+    session's copy last showed it whole (`before`: the previous view's head), else as its base
+    commit has it, so nothing in it is taken as removed. A deletion stays one."""
+    head, unread = dict(head), dict(unread)
+    for path, pf in head.items():
+        if pf is not None and pf.error and path not in unread and not (base.get(path) is not None and base[path].error):
+            unread[path] = NOT_PARSED
+    for path in unread:
+        last = before.get(path)
+        head[path] = last if last is not None and not last.error else base.get(path)
+    return head, unread
 
 
 def _stat(path):
@@ -283,8 +306,9 @@ class LiveMap:
                 mine[path] = status
         new = SessionView(sid, old.repo_key, top, base, files=mine, unattributed=sorted(unattributed))
         try:
-            base_pf, new.head, new.head_blobs = self._parses(top, base,
-                                                             {p: s for p, s in mine.items() if p.endswith(PYTHON)})
+            base_pf, head, new.head_blobs, unread = self._parses(top, base,
+                                                                 {p: s for p, s in mine.items() if p.endswith(PYTHON)})
+            new.head, new.not_compared = known(base_pf, head, unread, old.head)
             new.symbols = analyse(base_pf, new.head)
         except (gitio.GitError, gitio.UntrustedRepositoryError, RuntimeError) as exc:
             new.error = str(exc)[:300]
@@ -325,7 +349,8 @@ class LiveMap:
         try:
             new.files = git_changes.commit_diff(git_dir, base, tip)
             python = {p: s for p, s in new.files.items() if p.endswith(PYTHON)}
-            base_pf, new.head, new.head_blobs = self._parses(git_dir, base, python, at=tip)
+            base_pf, head, new.head_blobs, unread = self._parses(git_dir, base, python, at=tip)
+            new.head, new.not_compared = known(base_pf, head, unread, old.head)
             new.symbols = analyse(base_pf, new.head)
         except (gitio.GitError, gitio.UntrustedRepositoryError, RuntimeError) as exc:
             new.error = str(exc)[:300]
@@ -334,10 +359,11 @@ class LiveMap:
         return new.key() != old.key() or new.error != old.error
 
     def _parses(self, top, base, python, at=None):
-        """({path: base ParsedFile or None}, {path: head ParsedFile or None}, {path: head blob id})
-        for the changed .py files: the head as it is on disk in `top`, or (with `at`) as it is
-        at that commit of the repository `top`."""
-        head, head_blobs = self._heads_at(top, at, python) if at is not None else self._heads_on_disk(top, python)
+        """({path: base ParsedFile or None}, {path: head ParsedFile or None}, {path: head blob id},
+        {path: why its head is not known}) for the changed .py files: the head as it is on disk in
+        `top`, or (with `at`) as it is at that commit of the repository `top`."""
+        head, head_blobs, unread = (self._heads_at(top, at, python) if at is not None
+                                    else self._heads_on_disk(top, python))
         wanted = [p for p, s in python.items() if s != "A" and (base, p) not in self._base_blobs]
         if wanted:
             found = git_changes.blob_ids(top, base, wanted)
@@ -355,10 +381,10 @@ class LiveMap:
                 base_pf[path] = self.cache.get(path, data[blob], blob) if len(data[blob]) <= MAX_BLOB_BYTES else None
             else:
                 base_pf[path] = self.cache.get(path, b"", blob)        # a cached parse: the key is all it needs
-        return base_pf, head, head_blobs
+        return base_pf, head, head_blobs, unread
 
     def _heads_on_disk(self, top, python):
-        head, head_blobs = {}, {}
+        head, head_blobs, unread = {}, {}, {}
         for path, status in python.items():
             head[path] = head_blobs[path] = None
             if status == "D":
@@ -367,14 +393,17 @@ class LiveMap:
                 with open(os.path.join(top, *path.split("/")), "rb") as fh:
                     data = fh.read(MAX_BLOB_BYTES + 1)
             except OSError:
+                unread[path] = NOT_READ
                 continue
             if len(data) <= MAX_BLOB_BYTES:
                 head_blobs[path] = blob_id(data)
                 head[path] = self.cache.get(path, data, head_blobs[path])
-        return head, head_blobs
+            else:
+                unread[path] = TOO_LARGE
+        return head, head_blobs, unread
 
     def _heads_at(self, top, commit, python):
-        head_blobs = {p: None for p in python}
+        head_blobs, unread = {p: None for p in python}, {}
         head_blobs.update(git_changes.blob_ids(top, commit, [p for p, s in python.items() if s != "D"]))
         missing = sorted({b for p, b in head_blobs.items() if b and not self.cache.known(p, b)})
         data = read_blobs(top, missing) if missing else {}
@@ -382,8 +411,9 @@ class LiveMap:
         for path, blob in head_blobs.items():
             if blob in data and len(data[blob]) > MAX_BLOB_BYTES:
                 blob = head_blobs[path] = None
+                unread[path] = TOO_LARGE
             head[path] = self.cache.get(path, data.get(blob, b""), blob) if blob else None
-        return head, head_blobs
+        return head, head_blobs, unread
 
     # code graphs
     def graph(self, sid):

@@ -139,7 +139,7 @@ def test_a_file_that_does_not_parse_keeps_its_routes(state, two):
     c, wa, wb = two
     edit(state, c, "A", wa, "app/users.py", "@router.get('/{uid}')", "@router.post('/{uid}')")
     edit(state, c, "B", wb, "app/users.py", "def old_user(uid):", "def old_user(uid:")       # half an edit
-    assert c.livemap.views["B"].head["app/users.py"].error
+    assert c.livemap.views["B"].not_compared == {"app/users.py": "does not parse"}
     assert c.livemap.routes("B").changes == [] and not findings(c, "O5")
 
 

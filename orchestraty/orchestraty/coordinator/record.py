@@ -7,7 +7,9 @@ from the events and git. ``spool_files`` keeps where reading stopped in each spo
 in the same transaction as the events read, so a restart neither loses nor repeats a line.
 ``labels`` and ``missed`` keep the user's word on the findings (``orch label``, ``orch missed``),
 ``declarations`` what agents say they are about to change (the MCP tool ``declare``), ``claims``
-what a session has reserved (``orch claim``, the MCP tool ``claim``). ``changes`` is append-only
+what a session has reserved (``orch claim``, the MCP tool ``claim``). ``session_not_compared``
+(schema 5) the changed Python files whose functions the live map could not compare this time
+(a syntax error, too large, not readable), next to ``session_files``. ``changes`` is append-only
 too: the record's own write methods log each session started or ended, finding opened or
 resolved, note written, delivered or withdrawn, declaration made and claim made or ended, in the
 order they happen (``orch events`` reads it).
@@ -21,7 +23,7 @@ import sqlite3
 import time
 from contextlib import contextmanager
 
-SCHEMA = 4
+SCHEMA = 5
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -159,6 +161,11 @@ _MIGRATIONS = {
                ended INTEGER,
                why TEXT NOT NULL DEFAULT '')""",
         "CREATE INDEX IF NOT EXISTS claims_by_repo ON claims (repo_id, expires)"),
+    5: ("""CREATE TABLE IF NOT EXISTS session_not_compared (
+               session_id TEXT NOT NULL,
+               path TEXT NOT NULL,
+               why TEXT NOT NULL,
+               PRIMARY KEY (session_id, path))""",),
 }
 
 EVENT_COLUMNS = ("ts", "agent", "event", "session_id", "tool_name", "tool_use_id", "cwd", "file_path")
@@ -309,10 +316,14 @@ class Record:
              for c in SESSION_COLUMNS])
 
     # what each session changed (a projection of the live map, replaced on every change)
-    def put_changes(self, sid, files, unattributed, symbols):
-        """files: {path: status}; unattributed: [path]; symbols: [SymbolChange.as_dict()]."""
+    def put_changes(self, sid, files, unattributed, symbols, not_compared=None):
+        """files: {path: status}; unattributed: [path]; symbols: [SymbolChange.as_dict()];
+        not_compared: {path: why}."""
         self.db.execute("DELETE FROM session_files WHERE session_id = ?", (sid,))
         self.db.execute("DELETE FROM session_symbols WHERE session_id = ?", (sid,))
+        self.db.execute("DELETE FROM session_not_compared WHERE session_id = ?", (sid,))
+        self.db.executemany("INSERT INTO session_not_compared VALUES (?, ?, ?)",
+                            [(sid, p, why) for p, why in sorted((not_compared or {}).items())])
         self.db.executemany("INSERT INTO session_files VALUES (?, ?, ?, ?)",
                             [(sid, p, s, 1) for p, s in files.items()] + [(sid, p, "?", 0) for p in unattributed])
         self.db.executemany("INSERT INTO session_symbols VALUES (?, ?, ?, ?, ?, ?)",
@@ -337,6 +348,13 @@ class Record:
             d.update(symbol=r["symbol"], kind=r["kind"], change=r["change"], contract=r["contract"])
             symbols.append(d)
         return files, unattributed, symbols
+
+    def not_compared(self, sid):
+        """{path: why} for one session's changed Python files that were not compared; {} before schema 5."""
+        if not self.has_table("session_not_compared"):
+            return {}
+        return {r["path"]: r["why"] for r in self.db.execute(
+            "SELECT path, why FROM session_not_compared WHERE session_id = ? ORDER BY path", (sid,))}
 
     # findings of the overlap rules
     def put_finding(self, repo_id, f, now):

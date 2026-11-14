@@ -109,6 +109,45 @@ def test_a_call_changed_in_place_opens_and_resolves_its_finding(state, two):
     assert key in keys(c, states=("resolved",))
 
 
+HALF_DONE = "def charge(amount, currency):\n    return (\n"
+
+
+def _session_of(state, sid):
+    [s] = [s for r in status.collect(state)["repositories"] for s in r["sessions"] if s["id"] == sid]
+    return s
+
+
+def test_a_file_caught_mid_edit_makes_no_finding(state, two):
+    c, wa, wb = two
+    edit(state, c, "A", wa, "a.py", HALF_DONE)
+    edit(state, c, "B", wb, "c.py", USES)
+    assert keys(c) == set() and keys(c, latent=True) == set()            # not O4 "removed", not O6
+    assert _session_of(state, "A")["changes"]["not_compared"] == {"a.py": "does not parse"}
+    assert "not compared: a.py (does not parse)" in status.render(status.collect(state))
+
+
+def test_a_finding_holds_while_its_file_is_caught_mid_edit(state, two):
+    c, wa, wb = two
+    edit(state, c, "A", wa, "a.py", BROKEN)
+    edit(state, c, "B", wb, "c.py", USES)
+    before = {"O6|a.py::charge|A", "O3|a.py::charge|A|B|c.py"}
+    assert keys(c) == before
+    edit(state, c, "A", wa, "a.py", BROKEN + "\nfoo = (\n")            # A half way through its next edit
+    assert keys(c) == before and keys(c, states=("resolved",)) == set()
+    edit(state, c, "B", wb, "c.py", "from a import charge\n\n\ndef use():\n    return charge(2, 'USD'\n")   # B too
+    assert keys(c) == before
+
+
+def test_a_file_grown_too_large_makes_no_finding(state, two, monkeypatch):
+    from orchestraty.livemap import map as livemap_map
+    monkeypatch.setattr(livemap_map, "MAX_BLOB_BYTES", 200)
+    c, wa, wb = two
+    edit(state, c, "A", wa, "a.py", "def charge(amount, currency):\n    return amount\n" + "# more\n" * 40)
+    edit(state, c, "B", wb, "c.py", USES)
+    assert keys(c) == set() and keys(c, latent=True) == set()
+    assert "not compared: a.py (too large)" in status.render(status.collect(state))
+
+
 def test_findings_wait_while_a_graph_is_being_built(state, two, monkeypatch):
     c, wa, wb = two
     edit(state, c, "A", wa, "a.py", BROKEN)

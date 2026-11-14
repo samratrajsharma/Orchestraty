@@ -54,14 +54,14 @@ def _claim(c):
 
 
 def _session(s, now, changes, declared=(), claims=()):
-    files, unattributed, symbols = changes
+    files, unattributed, symbols, unread = changes
     return {"id": s["id"], "agent": s["agent"], "hears": _hears(s["agent"]), "worktree": s["worktree"],
             "branch": s["branch"],
             "base_commit": s["base_commit"], "base_guessed": bool(s["base_guessed"]),
             "state": s["state"], "turn": s["turn"], "note": s["note"],
             "started": _iso(s["started"] / NS), "last_event": _iso(s["last_seen"] / NS),
             "seconds_since_last_event": max(0, int(now - s["last_seen"] / NS)),
-            "changes": {"files": files, "unattributed": unattributed, "symbols": symbols},
+            "changes": {"files": files, "unattributed": unattributed, "symbols": symbols, "not_compared": unread},
             "declared": [{"paths": d["paths"], "symbols": d["symbols"], "task": d["task"], "since": _iso(d["ts"] / NS),
                           "until": _iso(d["expires"] / NS)} for d in declared],
             "claims": [_claim(c) for c in claims]}
@@ -79,7 +79,7 @@ def collect(state, include_ended=False, now=None):
             states = None if include_ended else ("live",)
             for s in record.sessions(states=states):
                 sessions_by_repo.setdefault(s["repo_id"], []).append(s)
-                changes[s["id"]] = record.changes(s["id"])
+                changes[s["id"]] = (*record.changes(s["id"]), record.not_compared(s["id"]))
             for d in record.declarations(active_at=int(now * NS)):
                 declared.setdefault(d["session_id"], []).append(d)
             for c in record.claims(active_at=int(now * NS)):
@@ -101,7 +101,7 @@ def collect(state, include_ended=False, now=None):
         cloud = [s for s in sessions if s["agent"] == remote.CLOUD_AGENT]
         data["repositories"].append({
             "name": repo_name(common_dir), "common_dir": common_dir,
-            "sessions": [_session(s, now, changes.get(s["id"], ({}, [], [])),
+            "sessions": [_session(s, now, changes.get(s["id"], ({}, [], [], {})),
                                   declared.get(s["id"], ()) if s["state"] == "live" else (),
                                   claimed.get(s["id"], ()) if s["state"] == "live" else ())
                          for s in sorted(local, key=lambda s: (s["started"], s["id"]))],
@@ -126,7 +126,7 @@ def _cloud(state, cfg, common_dir, now, sessions, changes):
                  "branches": int(kept.get("branches") or 0)}
     return {"on": chosen["on"], "remote": chosen["remote"], "patterns": chosen["patterns"], "agents_told": False,
             "fetch": fetch,
-            "branches": [_session(s, now, changes.get(s["id"], ({}, [], [])))
+            "branches": [_session(s, now, changes.get(s["id"], ({}, [], [], {})))
                          for s in sorted(sessions, key=lambda s: (s["branch"], s["id"]))]}
 
 
@@ -258,6 +258,10 @@ def _summary(changes, limit=4):
     parts = ["files: " + ", ".join(names[:limit]) + (f" (+{len(names) - limit} more)" if len(names) > limit else "")]
     if changes["unattributed"]:
         parts.append(f"{len(changes['unattributed'])} not attributed")
+    unread = changes.get("not_compared") or {}
+    if unread:
+        listed = [f"{p} ({why})" for p, why in sorted(unread.items())]
+        parts.append("not compared: " + ", ".join(listed[:limit]) + (f" (+{len(listed) - limit} more)" if len(listed) > limit else ""))
     marked = [c for c in symbols if c["contract"] in ("breaking", "review")]
     modified = [c for c in symbols if c["contract"] not in ("breaking", "review") and c["kind"] != "added"]
     if marked:

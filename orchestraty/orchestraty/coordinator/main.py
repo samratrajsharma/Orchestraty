@@ -256,7 +256,7 @@ class Coordinator:
                     v = self.livemap.views.get(sid)
                     if v is not None:
                         self.record.put_changes(sid, v.files, v.unattributed,
-                                                [c.as_dict() for c in v.symbols.values()])
+                                                [c.as_dict() for c in v.symbols.values()], v.not_compared)
         return self.changed
 
     def update_findings(self):
