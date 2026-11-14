@@ -85,11 +85,18 @@ class SessionView:
         """Where git reads this view's commits: its worktree, or the shadow of a cloud branch."""
         return self.git_dir or self.worktree
 
+    def content(self):
+        """What the changed code files hold: their blob ids (the code graphs are kept by these too)."""
+        return (tuple(sorted(self.head_blobs.items(), key=lambda kv: kv[0])),
+                tuple(sorted(self.ts_blobs.items(), key=lambda kv: kv[0])))
+
     def key(self):
-        """What a refresh compares to tell whether anything changed."""
+        """What a refresh compares to tell whether anything changed. The content counts too: a call
+        can change its form inside a function already changed, on the same lines."""
         return (tuple(sorted(self.files.items())), tuple(sorted(self.unattributed)),
                 tuple(sorted((k, s.kind, s.change, s.contract, tuple(s.reasons), tuple(s.lines), repr(s.breaks))
-                             for k, s in self.symbols.items())))
+                             for k, s in self.symbols.items())),
+                self.content())
 
     def breaking(self):
         return {k: s for k, s in self.symbols.items() if s.contract == BREAKING}

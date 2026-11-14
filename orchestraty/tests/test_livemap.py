@@ -104,6 +104,15 @@ def test_a_signature_change_is_breaking(repo, git, lm):
     assert not lm.refresh("a")                                    # nothing new since
 
 
+def test_a_change_that_keeps_every_function_and_line_is_still_a_change(repo, git, lm):
+    follow(lm, "a", repo, head(git, repo))
+    write(repo / "b.py", "from a import charge\n\n\ndef pay():\n    return charge(2, currency='EUR')\n")
+    assert lm.refresh("a")
+    write(repo / "b.py", "from a import charge\n\n\ndef pay():\n    return charge(2, 'EUR')\n")   # same lines
+    assert lm.refresh("a")                                        # the call changed its form: the rules must run
+    assert not lm.refresh("a")                                    # nothing new since
+
+
 def test_body_changes_additions_removals_and_moves(repo, git, lm):
     follow(lm, "a", repo, head(git, repo))
     write(repo / "a.py", "def charge(amount, currency):\n    return amount * 2\n\n\ndef refund(x):\n    return x\n")

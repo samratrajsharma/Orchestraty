@@ -88,6 +88,27 @@ def test_a_finding_that_stops_holding_is_resolved(state, two):
     assert keys(c) == set()
 
 
+KEYWORD_ONLY = "def charge(amount, *, currency):\n    return amount\n"
+BY_NAME = "from a import charge\n\n\ndef use():\n    return charge(2, currency='USD')\n"
+
+
+def test_a_call_changed_in_place_opens_and_resolves_its_finding(state, two):
+    """A call that changes its form inside a function already changed, on the same lines,
+    is worked out again: the finding opens, and resolves when the call is fixed."""
+    c, wa, wb = two
+    key = "O3|a.py::charge|A|B|c.py"
+    edit(state, c, "A", wa, "a.py", KEYWORD_ONLY)
+    edit(state, c, "B", wb, "c.py", BY_NAME)
+    assert key not in keys(c)                                     # by name works with the new form
+    edit(state, c, "B", wb, "c.py", USES)                         # same function, same lines, by position
+    assert key in keys(c)
+    [o3] = [f for f in c.record.findings() if f["key"] == key]
+    assert o3["strength"] == "strong"
+    edit(state, c, "B", wb, "c.py", BY_NAME)                      # fixed in place
+    assert key not in keys(c)
+    assert key in keys(c, states=("resolved",))
+
+
 def test_findings_wait_while_a_graph_is_being_built(state, two, monkeypatch):
     c, wa, wb = two
     edit(state, c, "A", wa, "a.py", BROKEN)

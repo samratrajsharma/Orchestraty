@@ -246,6 +246,30 @@ def test_off_by_default_nothing_runs(state, project):
         c.close()
 
 
+def test_a_new_content_state_is_checked_again(state, project, monkeypatch):
+    """A change that keeps every function and line (here, the check's own condition) is a new
+    content state of the working copies, so the pair is checked together again."""
+    repo, wa, wb, base = project
+    config.watch(state, str(repo / ".git"))
+    together.save_settings(state, str(repo / ".git"), on=True, command=f'"{sys.executable}" check.py', timeout=60)
+    c = two_sessions(state, project)
+    try:
+        wait_for(c)
+        [first] = together.results(state)
+        monkeypatch.setattr(cmain, "TOGETHER_SECONDS", 0)              # only now: no second run of the first state
+        text = (wb / "check.py").read_text(encoding="utf-8")
+        assert "refunds.refund() == 1" in text
+        (wb / "check.py").write_text(text.replace("refunds.refund() == 1", "refunds.refund() >= 1"), encoding="utf-8")
+        spool_event(state.root, "B", "PostToolUse", wb, tool_name="Edit", file_path=str(wb / "check.py"))
+        settle(c)
+        wait_for(c)
+        results = together.results(state)
+        assert len(results) == 2, results
+        assert results[0]["state"] != results[1]["state"]
+    finally:
+        c.close()
+
+
 def test_the_coordinator_runs_the_check_and_both_sessions_hear(state, project, capsys, monkeypatch):
     repo, wa, wb, base = project
     monkeypatch.chdir(repo)

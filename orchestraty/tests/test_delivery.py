@@ -182,6 +182,28 @@ def test_a_note_withdrawn_before_it_was_seen_comes_back_with_its_finding(state, 
     assert slots.waiting(slot)
 
 
+KEYWORD_ONLY = "def charge(amount, *, currency):\n    return amount\n"
+BY_NAME = "from a import charge\n\n\ndef use():\n    return charge(2, currency='USD')\n"
+
+
+def test_a_call_changed_in_place_to_a_form_that_breaks_is_told(state, two):
+    """B already changes use(); when its call changes to a form that breaks, on the same
+    lines, both agents hear; when it is fixed in place, B's waiting note is withdrawn."""
+    c, wa, wb = two
+    key = "O3|a.py::charge|A|B|c.py"
+    edit(state, c, "A", wa, "a.py", KEYWORD_ONLY)
+    edit(state, c, "B", wb, "c.py", BY_NAME)
+    slot = slots.edit_slot(state, "B", str(wb / "c.py"))
+    assert not slots.waiting(slot)
+    edit(state, c, "B", wb, "c.py", USES)                            # same lines, by position
+    assert "c.py uses it: use (line 5)" in read_slot(slots.next_slot(state, "B"))["hookSpecificOutput"]["additionalContext"]
+    assert ("next", key) in notes_of(c, "A")
+    assert slots.waiting(slot)
+    edit(state, c, "B", wb, "c.py", BY_NAME)                         # fixed in place
+    assert notes_of(c, "B")[("edit", key)]["state"] == "withdrawn"
+    assert not slots.waiting(slot)
+
+
 def test_a_delivered_note_is_not_repeated_when_its_finding_comes_back(state, two, hook_script):
     c, wa, wb = two
     edit(state, c, "A", wa, "a.py", BROKEN)

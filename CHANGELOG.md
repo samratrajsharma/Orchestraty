@@ -2,6 +2,12 @@
 
 Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestraty`.
 
+## Unreleased
+
+### Fixed
+
+- Findings are worked out again whenever a session's changed code changes, even when no line or signature moves. A call changed in place to a form that breaks now opens its finding and its notes, a call fixed in place resolves it, and the push line, merge order and the together check follow.
+
 ## 0.1.0 (9 November 2026)
 
 Phase 1, on top of the coordination core already in place (the hook script and its installer, the background coordinator and its record, the live map, the overlap rules O1 to O4 and O6, notes written in advance, the push line, steer and wake, `orch status` and the Claude Code mod).
