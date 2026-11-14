@@ -14,7 +14,9 @@ session's .ts files is compared too (``typescript``), and its changes join the f
 
 Which files belong to a session:
 * a file named by one of its edit events is always its own;
-* a file already changed when the session was first seen is not, until its size or time changes;
+* a file already changed when the session was first seen is not, until its size or time changes,
+  unless the record already gave it to the session (a coordinator that restarted, a session
+  back after it ended): what the record held stays as it was;
 * in a folder that two live sessions share, other changes are marked not attributed rather
   than guessed.
 
@@ -193,19 +195,26 @@ class LiveMap:
         self.cloud = {}                                # session id -> (shadow git dir, tip): cloud branches
 
     # sessions
-    def track(self, session, repo_key, adopt_existing=False):
+    def track(self, session, repo_key, adopt_existing=False, recorded=None):
         """Start following a live session. Files already changed in its folder are not its own
-        until they change again, unless adopt_existing (a plain-git worktree owns them all)."""
+        until they change again, unless adopt_existing (a plain-git worktree owns them all).
+        `recorded` is what the record holds for a session seen before (a coordinator that
+        restarted, a session back after it ended): ({path: status}, [unattributed path]). Its
+        files stay its own and its unattributed ones stay unattributed."""
         sid = session["id"]
         if sid in self.sessions:
             return
+        own, unattributed = recorded or ({}, [])
         self.sessions[sid] = session
         self.views[sid] = SessionView(sid, repo_key, session["worktree"], session["base_commit"])
+        self.edits[sid].update(own)                    # its own, even in a folder it shares
         try:
             already = {} if adopt_existing else git_changes.changed_files(session["worktree"], session["base_commit"])
         except (gitio.GitError, gitio.UntrustedRepositoryError):
             already = {}
-        self.dirty_at_start[sid] = {p: _stat(os.path.join(session["worktree"], *p.split("/"))) for p in already}
+        known_before = set(own) | set(unattributed)
+        self.dirty_at_start[sid] = {p: _stat(os.path.join(session["worktree"], *p.split("/"))) for p in already
+                                    if p not in known_before}
         self.pending.add(sid)
         self.indexes.get(repo_key, session["base_commit"], session["worktree"])
 

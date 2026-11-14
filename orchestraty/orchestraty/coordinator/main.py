@@ -125,7 +125,9 @@ class Coordinator:
         if key is None:
             self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
             key = self._repo_keys.get(session["repo_id"], "")
-        self.livemap.track(session, key, adopt_existing=session["agent"] == LEVEL0_AGENT)
+        files, unattributed, _ = self.record.changes(session["id"])   # a session seen before keeps what it changed
+        self.livemap.track(session, key, adopt_existing=session["agent"] == LEVEL0_AGENT,
+                           recorded=(files, unattributed))
 
     def _end(self, session, note):
         session["state"], session["note"], session["turn"] = "ended", note, ""
@@ -673,6 +675,7 @@ class Coordinator:
         self.log.info("session %s moved from %s to %s", session["id"][:8], session["worktree"], info["top"])
         self._ended_hooked(session)
         self.livemap.forget(session["id"])
+        self.record.put_changes(session["id"], {}, [], [])   # its old folder's files are not its own in the new one
         self.deliverer.forget_session(session["id"])
         self._dirty_repos.add(session["repo_id"])
         self._push_dirty = True

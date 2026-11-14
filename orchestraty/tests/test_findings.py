@@ -148,6 +148,31 @@ def test_a_file_grown_too_large_makes_no_finding(state, two, monkeypatch):
     assert "not compared: a.py (too large)" in status.render(status.collect(state))
 
 
+def test_a_restarted_coordinator_keeps_the_findings_and_their_notes(state, two):
+    """orch coordinator stop (the upgrade step) and a restart forget nothing: every live
+    session keeps the files it changed, its findings stay open and no note is taken back."""
+    c, wa, wb = two
+    edit(state, c, "A", wa, "a.py", BROKEN)
+    edit(state, c, "B", wb, "c.py", USES)
+    before, latent = keys(c), keys(c, latent=True)
+    assert {"O6|a.py::charge|A", "O3|a.py::charge|A|B|c.py"} <= before
+    last = c.record.last_change()
+    c.close()
+    again = cmain.Coordinator(state)
+    try:
+        again.step()
+        assert again.livemap.indexes.wait(120)
+        again._last_scan = None
+        again.step()
+        assert keys(again) == before and keys(again, latent=True) == latent
+        assert [x["kind"] for x in again.record.change_log(after_id=last)
+                if x["kind"] in ("finding_resolved", "note_withdrawn")] == []
+        assert again.livemap.views["A"].files == {"a.py": "M"} and again.record.changes("A")[0] == {"a.py": "M"}
+        assert again.record.changes("B")[0] == {"c.py": "A"}
+    finally:
+        again.close()
+
+
 def test_findings_wait_while_a_graph_is_being_built(state, two, monkeypatch):
     c, wa, wb = two
     edit(state, c, "A", wa, "a.py", BROKEN)

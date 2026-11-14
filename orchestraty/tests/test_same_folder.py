@@ -180,6 +180,26 @@ def test_a_session_that_moves_to_another_worktree_leaves_the_folder(state, repo,
         c.close()
 
 
+def test_a_session_that_moves_takes_none_of_its_old_folders_files(state, repo, git, tmp_path):
+    c = coordinator(state, repo)
+    try:
+        wx = tmp_path / "wt-x"
+        git(repo, "worktree", "add", "-q", "-b", "feat-x", str(wx))
+        (wx / "a.py").write_text("def charge(amount):\n    return amount\n", encoding="utf-8")   # someone's change there
+        start(state, "B", repo)
+        settle(c)
+        (repo / "a.py").write_text("def charge(amount, currency, extra=0):\n    return amount\n", encoding="utf-8")
+        spool_event(state.root, "B", "PostToolUse", repo, tool_name="Edit", file_path=str(repo / "a.py"))
+        settle(c)
+        assert c.record.changes("B")[0] == {"a.py": "M"}
+        (wx / "x.py").write_text("x = 1\n", encoding="utf-8")
+        spool_event(state.root, "B", "PostToolUse", wx, tool_name="Write", file_path=str(wx / "x.py"))
+        settle(c)
+        assert c.record.changes("B")[0] == {"x.py": "A"}                      # not wt-x's a.py
+    finally:
+        c.close()
+
+
 def test_a_worktree_made_inside_the_repositorys_folder_counts_as_leaving(state, repo, git):
     c = coordinator(state, repo)
     try:

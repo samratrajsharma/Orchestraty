@@ -219,6 +219,27 @@ def test_in_a_shared_folder_only_named_files_are_attributed(repo, git, lm):
     assert "a.py::charge" in lm.views["a"].symbols and "a.py::charge" not in lm.views["b"].symbols
 
 
+def test_files_the_record_gave_a_session_stay_its_own_when_it_is_followed_again(repo, git, lm):
+    base = head(git, repo)
+    write(repo / "a.py", "def charge(amount):\n    return amount\n")        # its change, from before a restart
+    write(repo / "c.py", "x = 1\n")                                         # someone's earlier change
+    lm.track(session("a", repo, base), "repo-key", recorded=({"a.py": "M"}, []))
+    lm.refresh("a")
+    v = lm.views["a"]
+    assert v.files == {"a.py": "M"} and v.symbols["a.py::charge"].contract == "breaking"
+
+
+def test_in_a_shared_folder_what_the_record_held_stays_as_it_was(repo, git, lm):
+    base = head(git, repo)
+    write(repo / "a.py", "def charge(amount):\n    return amount\n")
+    write(repo / "c.py", "x = 1\n")
+    lm.track(session("a", repo, base), "repo-key", recorded=({"a.py": "M"}, ["c.py"]))
+    lm.track(session("b", repo, base), "repo-key", recorded=({}, ["c.py"]))
+    lm.refresh_pending()
+    assert lm.views["a"].files == {"a.py": "M"} and lm.views["b"].files == {}
+    assert lm.views["a"].unattributed == ["c.py"] == lm.views["b"].unattributed
+
+
 def test_paths_from_events(repo, git, lm, tmp_path):
     follow(lm, "a", repo, head(git, repo), cwd=repo / "sub")
     s = lm.sessions["a"]
@@ -296,6 +317,41 @@ def test_the_coordinator_records_what_a_session_changed(state, repo, coordinator
     [charge] = symbols
     assert charge["symbol"] == "a.py::charge" and charge["contract"] == "breaking"
     assert charge["reasons"] == ["parameter currency removed"]
+
+
+def test_a_restarted_coordinator_keeps_what_each_session_changed(state, repo, coordinator):
+    config.watch(state, str(repo / ".git"))
+    spool_event(state.root, "s1", "SessionStart", repo)
+    c = coordinator()
+    c.step()
+    write(repo / "a.py", "def charge(amount):\n    return amount\n")
+    spool_event(state.root, "s1", "PostToolUse", repo, tool_name="Edit", file_path=str(repo / "a.py"))
+    c.step()
+    c.close()
+    again = coordinator()
+    again.step()
+    v = again.livemap.views["s1"]
+    assert v.files == {"a.py": "M"} and v.symbols["a.py::charge"].contract == "breaking"
+
+
+def test_a_session_back_after_it_timed_out_keeps_its_changes(state, repo, coordinator):
+    config.watch(state, str(repo / ".git"))
+    now = [time.time_ns()]
+    c = coordinator(now_ns=lambda: now[0])
+    spool_event(state.root, "s1", "SessionStart", repo, ts=now[0])
+    c.step()
+    write(repo / "a.py", "def charge(amount):\n    return amount\n")
+    spool_event(state.root, "s1", "PostToolUse", repo, tool_name="Edit", file_path=str(repo / "a.py"), ts=now[0])
+    c.step()
+    now[0] += (config.DEFAULTS["session_timeout"] + 60) * cmain.NS
+    c.step()
+    assert c.record.session("s1")["state"] == "ended"
+    spool_event(state.root, "s1", "UserPromptSubmit", repo, ts=now[0])
+    c.step()
+    c._last_scan = None
+    c.step()
+    assert c.record.session("s1")["state"] == "live"
+    assert c.livemap.views["s1"].files == {"a.py": "M"}
 
 
 def test_plain_git_worktrees_become_level0_sessions(state, repo, git, tmp_path, coordinator):
