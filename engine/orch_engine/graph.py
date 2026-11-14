@@ -37,7 +37,8 @@ class CodeGraph:
       - symbol node: "<rel_path>::<qualname>", e.g. "model.py::Detector.predict"
     Edge types: contains, method_of, calls, imports, inherits. A calls or inherits edge also
     records how it was bound (an evidence tag) and the source lines it comes from; see
-    edge_info(); a Python calls edge also records how each of its calls passes its arguments.
+    edge_info(); a Python calls edge also records how each of its calls passes its arguments,
+    and whether it is made on the class or on an instance.
     Calls that bound to nothing in the repository are kept per file in
     `unresolved`, for name-only searches.
     """
@@ -75,16 +76,17 @@ class CodeGraph:
     def edge_info(self, src, dst, etype="calls"):
         """{"evidence": tag, "lines": [...]} for a calls or inherits edge, else {}. A calls
         edge whose calls are Python adds "args": how each call passes its arguments, as
-        {"positional": n, "star": bool, "keywords": [...], "double_star": bool}. For a method
-        the positional count leaves out the receiver, also where a call passes it by hand
-        (Cls.m(obj, ...) counts like obj.m(...))."""
+        {"positional": n, "star": bool, "keywords": [...], "double_star": bool, "on_class": bool}.
+        For a method the positional count leaves out the receiver, also where a call passes it
+        by hand (Cls.m(obj, ...) counts like obj.m(...)); on_class says whether the call is made
+        on the class (Cls.m(...), or cls.m(...) in a classmethod) rather than on an instance."""
         info = self._info.get((src, dst, etype))
         if not info:
             return {}
         out = {"evidence": info[0], "lines": list(info[1])}
         if len(info) > 2 and info[2]:
-            out["args"] = [{"positional": p, "star": s, "keywords": list(k), "double_star": d}
-                           for p, s, k, d in info[2]]
+            out["args"] = [{"positional": p, "star": s, "keywords": list(k), "double_star": d, "on_class": c}
+                           for p, s, k, d, c in info[2]]
         return out
 
     def successors(self, nid, etype=None):
@@ -602,10 +604,21 @@ def _namespace_notes(r):
     return [{"path": d + "/", "reason": NAMESPACE_NOTE} for d in sorted(hit)]
 
 
-def _passes_receiver(target, evidence):
-    """Whether a call bound with `evidence` passes the method's receiver by hand: Cls.m(obj, ...)
+_IMPLICIT_CLASS = ("__new__", "__init_subclass__", "__class_getitem__")   # class methods without the decorator
+
+
+def _on_class(caller, evidence):
+    """Whether a call bound with `evidence` is made on the class, not on an instance: Cls.m(...),
+    or cls.m(...) in a classmethod."""
+    if evidence == "class_attr":
+        return True
+    return evidence == "self_method" and ("classmethod" in caller.decorators or caller.name in _IMPLICIT_CLASS)
+
+
+def _passes_receiver(target, on_class):
+    """Whether a call made on the class passes the method's receiver by hand: Cls.m(obj, ...)
     does, for a method that is neither a classmethod nor a staticmethod."""
-    return (evidence == "class_attr" and target.kind == "method"
+    return (on_class and target.kind == "method"
             and not {"classmethod", "staticmethod"} & set(target.decorators))
 
 
@@ -656,8 +669,9 @@ def build_graph(parsed_files):
                         found[target] = [ev, set(), set()]
                     found[target][1].add(site[3])
                     if shape is not None:
-                        found[target][2].add(_after_receiver(shape) if _passes_receiver(r.syms[target], ev)
-                                             else shape)
+                        on_class = _on_class(sym, ev)
+                        s = _after_receiver(shape) if _passes_receiver(r.syms[target], on_class) else shape
+                        found[target][2].add(s + (on_class,))
             for target, (ev, lines, args) in found.items():
                 g.add_edge(sym.id, target, "calls", evidence=ev, lines=lines, args=args)
             if sym.kind == "class":

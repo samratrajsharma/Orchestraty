@@ -7,13 +7,13 @@ whether callers can break:
 * breaking: a parameter removed or renamed, positional parameters reordered, a new parameter
   callers must pass, a default removed, a parameter that can no longer be passed by position
   or by name, ``*args`` or ``**kwargs`` removed, a function made async or no longer async, a
-  method made a staticmethod or a classmethod or no longer one; for a class, a base class
-  removed;
+  plain method made a staticmethod or a classmethod or back (it breaks only the calls made on
+  the class), a method made a function or back; for a class, a base class removed;
 * review: a return or parameter annotation changed, a default value changed, decorators
   changed; for a class, its decorators, its other bases or a metaclass changed;
 * compatible: an optional parameter added, ``*args`` or ``**kwargs`` added, a parameter
   opened up (positional-only to positional-or-keyword, keyword-only to positional at the end),
-  a positional-only parameter renamed.
+  a positional-only parameter renamed, a staticmethod made a classmethod or back.
 
 Each verdict comes with short reasons for the notes, made only of parameter names. For each
 breaking reason, ``breaks`` says which calls it breaks, as conditions on how a call passes
@@ -24,7 +24,9 @@ its arguments (the engine records that for every Python call):
 * ``["positional", n]``: a call that passes ``n`` or more arguments by position;
 * ``["missing", p, i]``: a call that passes ``p`` neither by name nor at position ``i``
   (``i`` is None for a keyword-only parameter);
-* ``["keywords", names]``: a call that passes a keyword not in ``names``.
+* ``["keywords", names]``: a call that passes a keyword not in ``names``;
+* ``["on_class"]``: a call made on the class (``Cls.m(...)``, or ``cls.m(...)`` in a
+  classmethod), not on an instance.
 
 Positions count the arguments a call writes, so for a method they start after ``self`` or
 ``cls``. So a parameter renamed in place breaks only the calls that pass it by name, and a
@@ -43,6 +45,7 @@ BY_NAME = (POSITIONAL_OR_KEYWORD, KEYWORD_ONLY)
 BREAKING, REVIEW, COMPATIBLE, NONE = "breaking", "review", "compatible", "none"
 _RANK = {NONE: 0, COMPATIBLE: 1, REVIEW: 2, BREAKING: 3}
 ANY = ["any"]
+ON_CLASS = ["on_class"]
 _BINDINGS = {"staticmethod": "static", "classmethod": "class"}
 _AS = {"static": "a staticmethod", "class": "a classmethod", "instance": "a plain method", "": "a function"}
 
@@ -65,6 +68,18 @@ def _binding(sig, kind):
         if name in _BINDINGS:
             return _BINDINGS[name]
     return "instance"
+
+
+def _binding_change(was, now):
+    """(verdict, conditions) for a method whose binding changed. A call on an instance gets the
+    same arguments whether the method is a plain method, a staticmethod or a classmethod; only a
+    call made on the class can break, and only where one side is a plain method. A method made a
+    function, or back, breaks every call."""
+    if "" in (was, now):
+        return BREAKING, [ANY]
+    if "instance" in (was, now):
+        return BREAKING, [ON_CLASS]
+    return COMPATIBLE, []                         # a staticmethod made a classmethod, or back
 
 
 def _after_receiver(params, binding):
@@ -90,7 +105,8 @@ def classify_function(old, new, kind="function", old_kind=None):
 
     was, now = _binding(old, old_kind or kind), _binding(new, kind)
     if was != now:
-        say(BREAKING, f"now {_AS[now]}", ANY)
+        verdict, conditions = _binding_change(was, now)
+        say(verdict, f"now {_AS[now]}", *conditions)
     before, after = _after_receiver(_params(old), was), _after_receiver(_params(new), now)
     old_by_name = {p["name"]: p for p in before if p["kind"] not in (VAR_POSITIONAL, VAR_KEYWORD)}
     new_by_name = {p["name"]: p for p in after if p["kind"] not in (VAR_POSITIONAL, VAR_KEYWORD)}
@@ -236,6 +252,8 @@ def call_breaks(shape, condition):
         return not (name in keywords or (index is not None and positional > index))
     if what == "keywords":
         return double_star or bool(keywords - set(condition[1]))
+    if what == "on_class":
+        return bool(shape.get("on_class", True))  # a shape that does not say counts as on the class
     return True                                   # "any", or a condition this version does not know
 
 

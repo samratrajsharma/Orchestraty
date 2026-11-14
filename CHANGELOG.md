@@ -8,6 +8,7 @@ Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestr
 
 - Findings are worked out again whenever a session's changed code changes, even when no line or signature moves. A call changed in place to a form that breaks now opens its finding and its notes, a call fixed in place resolves it, and the push line, merge order and the together check follow.
 - A Python file caught mid-edit with a syntax error, or grown past 2 MB, or not readable for a moment, no longer counts as having all its functions removed, which gave false strong O4 and O6 notes (and could give a false O5). It is not compared until it reads whole again: it stands as the session's copy last showed it, else as its base commit has it, and `orch status` lists it (`changes.not_compared` in `--json`). The record's schema is now 5.
+- Making a plain method a staticmethod or a classmethod, or back, now flags only the calls made on the class (`Cls.m(obj, ...)`, or `cls.m(...)` in a classmethod), not calls on an instance, which still work; a staticmethod made a classmethod, or back, breaks no call. Before, every caller got a false strong note. The engine's calls edges now say whether each call is made on the class (`on_class`), and its cache version is now 5, so each base commit's index is built once again after the upgrade.
 
 ## 0.1.0 (9 November 2026)
 

@@ -101,6 +101,34 @@ def test_o6_callers_left_behind_and_callers_someone_updated():
     assert by_rule(run(views, base=graph_of(BASE)), "O6") == []
 
 
+TOOL = "class Tool:\n    def run(self, x):\n        return x\n"
+ON_AN_INSTANCE = "from m import Tool\n\n\ndef use():\n    t = Tool()\n    return t.run(1)\n"
+ON_THE_CLASS = "from m import Tool\n\n\ndef use():\n    t = Tool()\n    return Tool.run(t, 1)\n"
+
+
+@pytest.mark.parametrize("made", ["    @staticmethod\n    def run(x):\n        return x\n",
+                                  "    @classmethod\n    def run(cls, x):\n        return x\n"])
+def test_a_method_made_static_or_class_reaches_only_the_calls_on_the_class(made):
+    after = "class Tool:\n" + made
+    change_ = changed(TOOL, after, path="m.py")
+    base = {"m.py": TOOL, "k_instance.py": ON_AN_INSTANCE, "k_class.py": ON_THE_CLASS}
+    findings = run({"A": view("A", ["m.py"], [change_]), "B": view("B")},
+                   graphs={"B": graph_of(base)}, base=graph_of(base))
+    assert [f.file for f in by_rule(findings, "O3", latent=True)] == ["k_class.py"]
+    [o6] = by_rule(findings, "O6")
+    assert [u["file"] for u in o6.detail["left"]] == ["k_class.py"]
+    assert o6.detail["reasons"][0].startswith("now a ")
+
+
+def test_a_staticmethod_made_a_plain_method_reaches_only_the_calls_on_the_class():
+    static = "class Tool:\n    @staticmethod\n    def run(x):\n        return x\n"
+    base = {"m.py": static, "k_instance.py": ON_AN_INSTANCE,
+            "k_class.py": "from m import Tool\n\n\ndef use():\n    return Tool.run(1)\n"}
+    change_ = changed(static, TOOL, path="m.py")
+    [o6] = by_rule(run({"A": view("A", ["m.py"], [change_])}, base=graph_of(base)), "O6")
+    assert [u["file"] for u in o6.detail["left"]] == ["k_class.py"]
+
+
 def test_a_moved_and_broken_function_is_found_where_the_other_session_uses_it():
     b_copy = dict(BASE, **{"c.py": "from a import charge\n\n\ndef use():\n    return charge(2, 'USD')\n"})
     moved = change("d.py::charge", kind="moved", moved_from="a.py::charge")

@@ -24,10 +24,12 @@ def method(before, after, name="C.m"):
     return classify(new.kind, old.signature, new.signature)
 
 
-def shape(call):
-    """A call's argument shape as the engine puts it on a calls edge."""
+def shape(call, on_class=False):
+    """A call's argument shape as the engine puts it on a calls edge (for Cls.m(obj, ...), the
+    engine has already left out obj)."""
     positional, star, keywords, double_star = arg_shape(ast.parse(call).body[0].value)
-    return {"positional": positional, "star": star, "keywords": list(keywords), "double_star": double_star}
+    return {"positional": positional, "star": star, "keywords": list(keywords), "double_star": double_star,
+            "on_class": on_class}
 
 
 CASES = [
@@ -138,8 +140,53 @@ def test_method_calls_count_their_arguments_after_the_receiver():
     assert breaking_reasons(breaks, [shape("c.m(1, 2)")]) == ["parameter b removed"]
     for to in ("@staticmethod\n    def m(a, b=0): pass", "@classmethod\n    def m(cls, a, b=0): pass"):
         got, reasons, breaks = method("class C:\n    def m(self, a, b=0): pass\n", f"class C:\n    {to}\n")
-        assert got == BREAKING and breaking_reasons(breaks, [shape("c.m(1)")]) == reasons[:1]
-        assert reasons[0] in ("now a staticmethod", "now a classmethod")
+        assert got == BREAKING and reasons[0] in ("now a staticmethod", "now a classmethod")
+        assert breaking_reasons(breaks, [shape("c.m(1)")]) == []                    # on an instance: still works
+        assert breaking_reasons(breaks, [shape("C.m(1)", on_class=True)]) == reasons[:1]
+
+
+BINDINGS = [
+    ("def m(self, a): pass", "@staticmethod\n    def m(a): pass"),
+    ("def m(self, a): pass", "@classmethod\n    def m(cls, a): pass"),
+    ("@staticmethod\n    def m(a): pass", "def m(self, a): pass"),
+    ("@classmethod\n    def m(cls, a): pass", "def m(self, a): pass"),
+]
+
+
+@pytest.mark.parametrize("before,after", BINDINGS)
+def test_a_plain_method_made_static_or_class_or_back_breaks_only_the_calls_on_the_class(before, after):
+    got, reasons, breaks = method(f"class C:\n    {before}\n", f"class C:\n    {after}\n")
+    assert got == BREAKING and reasons[0].startswith("now a ")
+    assert breaking_reasons(breaks, [shape("c.m(1)")]) == []
+    assert breaking_reasons(breaks, [shape("C.m(1)", on_class=True)]) == reasons[:1]
+    assert breaking_reasons(breaks, [{"positional": 1}]) == reasons[:1]      # a shape that does not say: cautious
+
+
+def test_a_staticmethod_made_a_classmethod_breaks_no_call():
+    for before, after in (("@staticmethod\n    def m(a): pass", "@classmethod\n    def m(cls, a): pass"),
+                          ("@classmethod\n    def m(cls, a): pass", "@staticmethod\n    def m(a): pass")):
+        got, reasons, breaks = method(f"class C:\n    {before}\n", f"class C:\n    {after}\n")
+        assert got == REVIEW and breaks == {} and "decorators changed" in reasons
+
+
+def test_a_binding_change_with_a_parameter_change():
+    got, reasons, breaks = method("class C:\n    def m(self, a, b=0): pass\n",
+                                  "class C:\n    @staticmethod\n    def m(a): pass\n")
+    assert reasons[:2] == ["now a staticmethod", "parameter b removed"]
+    assert breaking_reasons(breaks, [shape("c.m(1)")]) == []
+    assert breaking_reasons(breaks, [shape("c.m(1, 2)")]) == ["parameter b removed"]
+    assert breaking_reasons(breaks, [shape("C.m(1)", on_class=True)]) == ["now a staticmethod"]
+    _, reasons, breaks = method("class C:\n    def m(self, a): pass\n",
+                                "class C:\n    @staticmethod\n    def m(self, a): pass\n")   # self kept by mistake
+    assert "parameter self placed before existing ones" in breaking_reasons(breaks, [shape("c.m(1)")])
+
+
+def test_a_method_made_a_function_still_breaks_every_call():
+    old = [s for s in parse_python("m.py", "class C:\n    def m(self, a): pass\n").symbols if s.qualname == "C.m"][0]
+    new = [s for s in parse_python("m.py", "def m(a): pass\n").symbols if s.qualname == "m"][0]
+    got, reasons, breaks = classify("function", old.signature, new.signature, "method")
+    assert got == BREAKING and "now a function" in reasons
+    assert breaking_reasons(breaks, [shape("m(1)")]) == ["now a function"]
 
 
 def test_a_use_with_no_recorded_calls_can_break_under_every_reason():

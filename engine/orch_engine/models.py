@@ -5,7 +5,7 @@ from typing import Optional
 # The version of what the engine computes: parsed files, fingerprints and edges. It is part of
 # every cache key and cache file name, so an entry written by another version is never
 # served. Bump it whenever parse output, fingerprints or edges change.
-ENGINE_SCHEMA = 4
+ENGINE_SCHEMA = 5
 
 
 @dataclass
