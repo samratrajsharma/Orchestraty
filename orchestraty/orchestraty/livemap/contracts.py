@@ -236,9 +236,20 @@ def classify(kind, old, new, old_kind=None):
     return classify_function(old, new, kind, old_kind)
 
 
+def positional_room(sig, kind):
+    """How many arguments a call can pass by position to a function or method with this
+    signature (after self or cls); None when it takes any number (``*args``) or is not known."""
+    if not sig or kind == "class":
+        return None
+    params = _after_receiver(_params(sig), _binding(sig, kind))
+    if any(p["kind"] == VAR_POSITIONAL for p in params):
+        return None
+    return sum(1 for p in params if p["kind"] in POSITIONAL)
+
+
 def call_breaks(shape, condition):
     """Whether a call passing its arguments as `shape` (the engine's {"positional", "star",
-    "keywords", "double_star"}) meets one condition. A call that unpacks *x or **x may pass
+    "keywords", "double_star", "on_class"}) meets one condition. A call that unpacks *x or **x may pass
     anything there, so it meets every condition its unpacking could touch."""
     positional, keywords = shape.get("positional", 0), set(shape.get("keywords", ()))
     star, double_star = bool(shape.get("star")), bool(shape.get("double_star"))

@@ -136,7 +136,8 @@ TOUCH = change("b.py::pay", contract="none", reasons=())
 
 
 def test_o6_a_caller_a_session_changed_but_left_on_the_old_form_is_still_left_behind():
-    views = {"A": view("A", ["a.py"], [changed(BASE["a.py"], KEYWORD_ONLY)]), "B": view("B", ["b.py"], [TOUCH])}
+    views = {"A": own_view("A", {"a.py": KEYWORD_ONLY}, [changed(BASE["a.py"], KEYWORD_ONLY)]),
+             "B": view("B", ["b.py"], [TOUCH])}
     graphs = {"B": graph_of(dict(BASE, **{"b.py": TOUCHED}))}
     [o6] = by_rule(run(views, graphs=graphs, base=graph_of(BASE)), "O6")
     assert o6.detail["left"] == [{"symbol": "b.py::pay", "file": "b.py", "lines": [5]}]
@@ -150,7 +151,7 @@ def test_o6_a_caller_a_session_changed_but_left_on_the_old_form_is_still_left_be
 
 
 def test_o6_the_changing_sessions_own_callers_are_judged_in_its_own_copy():
-    views = {"A": view("A", ["a.py", "b.py"], [changed(BASE["a.py"], KEYWORD_ONLY), TOUCH])}
+    views = {"A": own_view("A", {"a.py": KEYWORD_ONLY, "b.py": TOUCHED}, [changed(BASE["a.py"], KEYWORD_ONLY), TOUCH])}
     [o6] = by_rule(run(views, graphs={"A": graph_of({"a.py": KEYWORD_ONLY, "b.py": TOUCHED})},
                        base=graph_of(BASE)), "O6")
     assert [u["symbol"] for u in o6.detail["left"]] == ["b.py::pay"]
@@ -168,6 +169,50 @@ def test_o6_a_call_left_to_a_removed_function_is_never_updated():
     assert made_async.breaks == {"now async": [["any"]]}
     views["A"] = view("A", ["a.py"], [made_async])                       # every call breaks: arguments show nothing,
     assert by_rule(run(views, graphs=graphs, base=graph_of(BASE)), "O6") == []   # so B's change of pay counts
+
+
+def own_view(sid, sources, symbols):
+    """A session's view with its own parse of the files it changed, as the live map keeps it."""
+    v = view(sid, list(sources), symbols)
+    v.head = {p: parse_python(p, text) for p, text in sources.items()}
+    return v
+
+
+@pytest.mark.parametrize("old_def,old_call,new_def,new_call", [
+    ("def charge(amount, fee, currency)", "charge(1, 0, 'EUR')", "def charge(amount, currency)", "charge(1, 'EUR')"),
+    ("def charge(amount, currency)", "charge(1, 'EUR')", "def charge(currency, amount)", "charge('EUR', 1)"),
+    ("def charge(amount)", "charge(1)", "def charge(account, amount)", "charge('acct', 1)"),
+])
+def test_o6_a_caller_fixed_to_the_new_form_by_its_own_session_is_updated(old_def, old_call, new_def, new_call):
+    """A call written for the new form can still look like one the old form's conditions name (a
+    middle parameter removed, a reorder, a parameter added first): it counts as updated."""
+    base = {"a.py": old_def + ":\n    return 1\n", "b.py": f"from a import charge\n\n\ndef pay():\n    return {old_call}\n"}
+    mine = {"a.py": new_def + ":\n    return 1\n", "b.py": f"from a import charge\n\n\ndef pay():\n    z = 3\n    return {new_call}\n"}
+    made = changed(base["a.py"], mine["a.py"])
+    views = {"A": own_view("A", mine, [made, change("b.py::pay", contract="none", reasons=())])}
+    assert by_rule(run(views, graphs={"A": graph_of(mine)}, base=graph_of(base)), "O6") == []
+
+
+def test_o6_a_class_call_fixed_for_a_new_staticmethod_is_updated():
+    base = {"m.py": TOOL, "k.py": ON_THE_CLASS}
+    static = "class Tool:\n    @staticmethod\n    def run(x):\n        return x\n"
+    mine = {"m.py": static, "k.py": "from m import Tool\n\n\ndef use():\n    return Tool.run(1)\n"}
+    views = {"A": own_view("A", mine, [changed(TOOL, static, path="m.py"), change("k.py::use", contract="none", reasons=())])}
+    assert by_rule(run(views, graphs={"A": graph_of(mine)}, base=graph_of(base)), "O6") == []
+
+
+def test_o6_a_caller_left_on_the_old_form_in_its_sessions_own_copy_is_still_left_behind():
+    mine = {"a.py": KEYWORD_ONLY, "b.py": TOUCHED}                      # A touched pay but kept charge(1, 'EUR')
+    views = {"A": own_view("A", mine, [changed(BASE["a.py"], KEYWORD_ONLY), TOUCH])}
+    [o6] = by_rule(run(views, graphs={"A": graph_of(mine)}, base=graph_of(BASE)), "O6")
+    assert [u["symbol"] for u in o6.detail["left"]] == ["b.py::pay"]
+
+
+def test_o6_a_call_left_to_a_function_its_own_session_removed_is_still_left_behind():
+    mine = {"a.py": "", "b.py": TOUCHED}                                # charge is gone, pay still calls it
+    views = {"A": own_view("A", mine, [changed(BASE["a.py"], ""), TOUCH])}
+    [o6] = by_rule(run(views, graphs={"A": graph_of(mine)}, base=graph_of(BASE)), "O6")
+    assert [u["symbol"] for u in o6.detail["left"]] == ["b.py::pay"]
 
 
 def test_a_moved_and_broken_function_is_found_where_the_other_session_uses_it():

@@ -2,6 +2,7 @@
 script takes them, the coordinator learns they were delivered; steer, wake and the push line."""
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -508,6 +509,42 @@ def test_a_hard_claim_behind_many_notes_still_asks_and_the_reason_names_it(state
         assert out["permissionDecision"] == "deny" and "note 19 " in out["permissionDecisionReason"]
     finally:
         rec.close()
+
+
+def test_a_late_took_line_delivers_only_what_was_written_before_it(state):
+    """The hook takes a full slot; before the coordinator reads its line, the slot's next batch is
+    written. The line delivers the first batch only: the next one still waits on disk."""
+    from orchestraty.capture.hook import take_slot
+    rec, d = _deliverer(state)
+    try:
+        rec.put_session(dict(SESSION, id="B"))
+        nxt = slots.next_slot(state, "B")
+        for i in range(20):
+            rec.add_note(f"O3|a.py::f{i:02d}|A|B|c.py", "B", "next", _rel(state, nxt),
+                         "Orchestraty: note %02d " % i + "x" * 1000, 10, 10)
+        d.fill()
+        first = {n["id"] for n in rec.notes(slot=_rel(state, nxt), states=("written",))}
+        assert take_slot(nxt)
+        took = time.time_ns()                                       # the hook's line, read a step later
+        time.sleep(0.01)
+        d.fill()                                                    # the first batch is settled, the next written
+        second = {n["id"] for n in rec.notes(slot=_rel(state, nxt), states=("written",))}
+        assert second and not (first & second)
+        d.taken(_rel(state, nxt), took)
+        assert slots.waiting(nxt)
+        assert {n["id"] for n in rec.notes(slot=_rel(state, nxt), states=("written",))} == second
+        assert {n["id"] for n in rec.notes(states=("delivered",))} == first
+    finally:
+        rec.close()
+
+
+def test_a_session_that_reorders_and_fixes_its_own_caller_has_nothing_left_behind(state, two):
+    c, wa, wb = two
+    edit(state, c, "A", wa, "a.py", "def charge(currency, amount):\n    return amount\n")
+    edit(state, c, "A", wa, "b.py", "from a import charge\n\n\ndef pay():\n    return charge('EUR', 1)\n")
+    push = Path(state.root) / "push" / (slots.file_key(str(wa)) + ".txt")
+    assert not push.exists()
+    assert not [f for f in c.record.findings() if f["rule"] == "O6"]
 
 
 def notes_of_record(rec, sid):

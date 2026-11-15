@@ -339,9 +339,11 @@ class Deliverer:
         written, agents = [], {}
         for slot_rel in self.record.slots_with(("pending", "written")):
             self._settle(slot_rel)
+            if self.record.notes(slot=slot_rel, states=("written",)):
+                continue                                  # the slot still waits for its hook
             pending = self.record.notes(slot=slot_rel, states=("pending",))
-            if not pending or self.record.notes(slot=slot_rel, states=("written",)):
-                continue                                  # nothing new, or the slot still waits
+            if not pending:
+                continue
             sid, kind = pending[0]["session_id"], pending[0]["kind"]
             if sid not in agents:
                 row = self.record.session(sid)
@@ -372,8 +374,11 @@ class Deliverer:
         return asks, stops
 
     def taken(self, slot_rel, ts):
-        """A hook's spool line says it took this slot."""
-        if self.record.notes(slot=slot_rel, states=("written",)):
+        """A hook's spool line says it took this slot: the notes written there before it are
+        delivered. A slot written after the hook took the one before (the rest of a full slot)
+        still waits on disk, and only its own taking delivers it."""
+        written = self.record.notes(slot=slot_rel, states=("written",))
+        if written and all((n["written"] or 0) <= ts for n in written):
             self._delivered(slot_rel, ts)
 
     # 3. the push line
