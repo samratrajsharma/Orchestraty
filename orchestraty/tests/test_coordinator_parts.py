@@ -310,7 +310,7 @@ def test_a_newer_record_is_refused(tmp_path):
     rec = Record(path)
     rec.meta_set("schema", "99")
     rec.close()
-    with pytest.raises(SchemaError):
+    with pytest.raises(SchemaError, match="written by a newer Orchestraty .*upgrade Orchestraty, or move that file aside"):
         Record(path)
 
 

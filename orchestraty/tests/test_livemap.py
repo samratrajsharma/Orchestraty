@@ -154,6 +154,19 @@ def test_a_file_grown_too_large_is_not_compared(repo, git, lm, monkeypatch):
     assert v.symbols["a.py::charge"].kind == "removed" and v.not_compared == {}   # a deletion is still one
 
 
+def test_a_file_grown_too_large_and_then_deleted_leaves_the_graph(repo, git, lm, monkeypatch):
+    from orchestraty.livemap import map as livemap_map
+    monkeypatch.setattr(livemap_map, "MAX_BLOB_BYTES", 200)
+    follow(lm, "a", repo, head(git, repo))
+    write(repo / "a.py", "def charge(amount, currency):\n    return amount\n" + "# more\n" * 40)
+    lm.refresh("a")
+    assert lm.indexes.wait(120)
+    assert "a.py::charge" in lm.graph("a").nodes                       # not compared: it stands as it was
+    os.remove(repo / "a.py")
+    lm.refresh("a")
+    assert "a.py::charge" not in lm.graph("a").nodes                   # gone now: not the cached graph
+
+
 def test_a_cloud_branch_file_too_large_is_not_compared(repo, git, lm, monkeypatch):
     from orchestraty.livemap import map as livemap_map
     base = head(git, repo)

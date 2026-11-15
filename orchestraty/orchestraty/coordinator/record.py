@@ -218,7 +218,8 @@ class Record:
         version = int(found or 1)
         if version > SCHEMA:
             self.db.close()
-            raise SchemaError(f"the record at {path} has schema {found}; this version reads {SCHEMA}")
+            raise SchemaError(f"the record at {path} was written by a newer Orchestraty (schema {found}; this version "
+                              f"reads {SCHEMA}): upgrade Orchestraty, or move that file aside to start a new record")
         for step in range(version + 1, SCHEMA + 1):
             with self.transaction():
                 for sql in _MIGRATIONS[step]:

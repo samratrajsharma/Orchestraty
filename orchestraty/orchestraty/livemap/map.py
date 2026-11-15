@@ -434,7 +434,8 @@ class LiveMap:
         idx = self.indexes.get(v.repo_key, v.base, v.source)
         if idx is None:
             return None
-        key = tuple(sorted(v.head_blobs.items(), key=lambda kv: kv[0]))
+        key = (tuple(sorted(v.head_blobs.items(), key=lambda kv: kv[0])),     # a file not compared stands in
+               tuple(sorted(v.not_compared.items())))                       # for itself: not the same as gone
         cached = self._graphs.get(sid)
         if cached and cached[0] == key:
             return cached[1]
@@ -451,7 +452,7 @@ class LiveMap:
         idx = self.indexes.get(v.repo_key, v.base, v.source)
         if idx is None:
             return None
-        key = (v.base, tuple(sorted(v.head_blobs.items(), key=lambda kv: kv[0])))
+        key = (v.base, tuple(sorted(v.head_blobs.items(), key=lambda kv: kv[0])), tuple(sorted(v.not_compared.items())))
         cached = self._routes.get(sid)
         if cached and cached[0] == key:
             return cached[1]

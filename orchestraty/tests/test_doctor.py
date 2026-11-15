@@ -92,6 +92,21 @@ def test_a_coordinator_that_does_not_start(state_root, tmp_path):
     assert not hook.coordinator_alive(str(state_root), time.time())
 
 
+def test_a_coordinator_that_meets_a_newer_record_says_so(state_root, tmp_path):
+    from orchestraty.coordinator import main as cmain
+    assert doctor.NEWER_RECORD == cmain.NEWER_RECORD
+    broken = tmp_path / "newer" / "orchestraty"
+    broken.mkdir(parents=True)
+    (broken / "__init__.py").write_text("", encoding="utf-8")
+    (broken / "__main__.py").write_text(f"raise SystemExit({cmain.NEWER_RECORD})\n", encoding="utf-8")
+    hooks_folder = state_root / "hooks"
+    hooks_folder.mkdir(parents=True)
+    (hooks_folder / "launch.txt").write_text(f"{sys.executable}\n{broken.parent}\n", encoding="utf-8")
+    check = doctor.coordinator_check(State(), seconds=30)
+    assert check.kind == "fix" and "written by a newer Orchestraty" in check.text
+    assert "upgrade Orchestraty" in check.fix and "aside" in check.fix and "orch init" not in check.fix
+
+
 def test_a_running_coordinator_of_another_version_is_a_problem(state_root):
     state = State()
     state_root.mkdir(parents=True, exist_ok=True)

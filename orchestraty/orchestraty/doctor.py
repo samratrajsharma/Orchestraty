@@ -39,6 +39,8 @@ from orchestraty.capture import hook
 from orchestraty.capture import install as hooks
 from orchestraty.coordinator.lock import Lock, touch
 
+NEWER_RECORD = 4                  # the coordinator's exit code for a record a newer Orchestraty wrote
+
 Check = namedtuple("Check", "kind text fix")
 GIT_NEEDED = (2, 38)
 START_SECONDS = 30.0
@@ -323,6 +325,9 @@ def coordinator_check(state, seconds=START_SECONDS):
         _stop(state, seconds)
         _reap(proc, seconds)
     shown = f"exited with {proc.returncode}" if proc.returncode is not None else f"did not start within {seconds:.0f} s"
+    if proc.returncode == NEWER_RECORD:
+        return problem("coordinator: the record was written by a newer Orchestraty, which this one cannot read",
+                       f"upgrade Orchestraty, or move {state.record} aside to start a new record")
     return problem(f"coordinator: {shown}",
                    f"see {os.path.join(state.logs, 'coordinator.log')}, then run orch init again")
 
