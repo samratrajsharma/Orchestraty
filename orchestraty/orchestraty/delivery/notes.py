@@ -2,14 +2,14 @@
 
 Every value placed in a note is an identifier that came from git or the engine (a symbol, a
 path, a line number, a worktree folder, a branch, an agent name, an HTTP route) and is cleaned
-first: only letters, digits and ``_ . : / < > - [ ]`` survive (a route's path also keeps
-``{ } ( ) ^ $ * + ? |`` and the backslash, for its parameters and patterns; never a space), and
-each value is cut to a short length.
-Nothing another session wrote (a prompt, a message, a comment, a default value's text) ever
-reaches a note, so one session cannot steer another through it. The one exception is the together
-check's note (``together_fails``), which quotes one line of the output of the user's own check
-command, cleaned (no control characters, cut short) and given as that output. Each note says
-what its analysis covers and is cut to ``MAX_NOTE`` characters.
+first: only letters, digits and ``_ . : / - [ ]`` survive, never a space and never ``<`` or ``>``
+but in a nested function's ``<locals>``, and each value is cut to a short length. A route's path
+is shown only when it is made of a path's characters and parameters (``/users/{uid}``,
+``/users/<int:uid>``), else left out; where the route is declared still says which it is.
+Nothing another session wrote (a prompt, a message, a comment, a default value's text, a test's
+own message) ever reaches a note, so one session cannot steer another through it: the together
+check's note names only the error and where it happened, never the line of output it failed
+with. Each note says what its analysis covers and is cut to ``MAX_NOTE`` characters.
 """
 import os
 import re
@@ -30,16 +30,21 @@ TS_COVERAGE = ("TypeScript, heuristic: calls not resolved; a use is a file that 
 def _coverage(finding):
     """What a note's analysis covers: static calls, or for TypeScript, import evidence."""
     return TS_COVERAGE if finding.get("detail", {}).get("heuristic") else COVERAGE
-_UNSAFE = re.compile(r"[^A-Za-z0-9_.:/<>\-\[\]]")
+_UNSAFE = re.compile(r"[^A-Za-z0-9_.:/\-\[\]]")
 _UNSAFE_REASON = re.compile(r"[^A-Za-z0-9_ *./]")      # reasons are our own words around identifiers
-_UNSAFE_PATH = re.compile(r"[^A-Za-z0-9_.:/<>\-\[\]{}()^$*+?|\\]")   # a route's path, its parameters kept
+LOCALS = "<locals>"         # a nested function's qualname part (a route's handler): the only < and > a name keeps
+# A route's path as a note may show it: a path's characters, and parameters {uid}, {p:path}, <uid>, <int:uid>.
+_ROUTE_PATH = re.compile(r"(?:[A-Za-z0-9_.:/-]|\{[A-Za-z_]\w*(?::\w+)?\}|<(?:\w+:)?[A-Za-z_]\w*>)*", re.ASCII)
+UNSHOWN_PATH = "(a path with characters a note leaves out)"
+_ERROR_NAME = re.compile(r"\b[A-Z][A-Za-z0-9_]*(?:Error|Exception)\b")
+_FAILED_AT = re.compile(r"[A-Za-z0-9_./-]+\.[A-Za-z0-9]+(?:(?:::[A-Za-z0-9_.\[\]-]+)+|:[0-9]+)")
 AGENTS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "git": "plain-git"}
 CLOUD = "cloud"             # a cloud agent's branch: its agent works elsewhere and is never told
 
 
 def clean(value, limit=MAX_VALUE):
-    """An identifier made safe to place in a note."""
-    text = _UNSAFE.sub("?", str(value))
+    """An identifier made safe to place in a note: no space, no < or > but a qualname's <locals>."""
+    text = LOCALS.join(_UNSAFE.sub("?", part) for part in str(value).split(LOCALS))
     return text if len(text) <= limit else text[:limit - 1] + "~"
 
 
@@ -73,10 +78,13 @@ def _list(items, render):
 
 
 def clean_route(method, path):
-    """A route, its method and path, made safe to place in a note: a path keeps its parameters'
-    braces and its pattern's characters, never a space."""
-    path = _UNSAFE_PATH.sub("?", str(path))
-    if len(path) > MAX_VALUE:
+    """A route, its method and path, made safe to place in a note: the path as it is when it is
+    made only of a path's characters and parameters, else left out (a regular expression, a
+    space, a quote, anything else); where the route is declared still says which it is."""
+    path = str(path)
+    if not _ROUTE_PATH.fullmatch(path):
+        path = UNSHOWN_PATH
+    elif len(path) > MAX_VALUE:
         path = path[:MAX_VALUE - 1] + "~"
     return f"{re.sub(r'[^A-Z?]', '?', str(method).upper())[:12]} {path}"
 
@@ -291,14 +299,29 @@ def planned_overlap(finding, me, other):
                 "on who changes it before either of you goes on; nothing is held back.")
 
 
+def failure(line):
+    """The error a failing line of output names and where it happened, each cleaned or "":
+    ("TypeError", "tests/test_a.py::test_x"). The rest of the line is the merged code's own
+    output, another session's words among it, so nothing an agent reads quotes it."""
+    line = str(line or "")
+    error, where = _ERROR_NAME.search(line), _FAILED_AT.search(line)
+    return (clean(error.group(0), 60) if error else ""), (clean(where.group(0)) if where else "")
+
+
+def failed_with(line):
+    """What a failing line of output names, for a note: " with TypeError at tests/test_a.py::test_x",
+    or less, or ""."""
+    error, where = failure(line)
+    return (f" with {error}" if error else "") + (f" at {where}" if where else "")
+
+
 def together_fails(result, other):
     """The together check, to each of two sessions whose working copies pass the user's check
-    alone and fail it together. The command is the user's own; the line is the check's output,
-    cleaned (no control characters, cut short) and given as its output, in quotes."""
+    alone and fail it together. The command is the user's own; of the line the check failed
+    with, only the error's name and where it happened (see failed_with)."""
     command = usercommand.clean_line(result["command"], 120)
-    line = usercommand.clean_line(result.get("first_failing_line") or "", 200)
-    said = f' Its output says: "{line}".' if line else ""
-    return _cap(f"each passes alone, your working copy and that of {_who(other)}; together `{command}` fails.{said} "
+    said = failed_with(result.get("first_failing_line"))
+    return _cap(f"each passes alone, your working copy and that of {_who(other)}; together `{command}` fails{said}. "
                 "Orchestraty's together check merged the two working copies in a folder of its own and ran it there; "
                 "agree with that session on which change gives way.")
 

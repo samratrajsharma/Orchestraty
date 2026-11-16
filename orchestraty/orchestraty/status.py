@@ -181,7 +181,8 @@ def _together_line(r):
     """One line for one together check's result."""
     pair = " and ".join(sid[:8] for sid in r["sessions"])
     if r["result"] == "fails together":
-        return f"{pair}: each passes alone; together it fails: {r['first_failing_line']}"
+        return f"{pair}: each passes alone; together it fails" + (f": {r['first_failing_line']}"
+                                                                   if r["first_failing_line"] else "")
     if r["result"] == "passes together":
         return f"{pair}: pass together"
     if r["result"] == "fails alone":

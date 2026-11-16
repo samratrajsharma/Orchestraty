@@ -27,8 +27,9 @@ def environment(base=None):
 
 
 def clean_line(text, limit=MAX_LINE):
-    """One line of a command's output, safe to show: no control characters, cut to `limit`."""
-    text = "".join(c if c >= " " and c != "\x7f" else " " for c in text.replace("\t", "    ")).rstrip()
+    """One line of a command's output, safe to show: no control or format characters (an escape,
+    a direction mark, a line separator), each made a space, cut to `limit`."""
+    text = "".join(c if c.isprintable() else " " for c in text.replace("\t", "    ")).rstrip()
     return text if len(text) <= limit else text[:limit - 1] + "~"
 
 

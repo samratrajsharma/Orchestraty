@@ -183,7 +183,7 @@ Opt-in, for each repository. When the rules flag a medium or strong overlap betw
 | `conflicts` | array of paths | For a conflict, the files in conflict. |
 | `alone` | object | `{session id: {"exit_code", "timed_out"}}`, the command on each session's working copy alone; `exit_code` is null for a run that timed out. `{}` for a conflict. |
 | `together` | object or null | `{"exit_code", "timed_out"}` on both merged; null for a conflict. |
-| `first_failing_line` | string | When they fail together, the line of output that says the most (the last giving an error or an assertion, such as `TypeError: ...`; else the last naming an error or a failure; else the last): the command's own words, cleaned. |
+| `first_failing_line` | string | When they fail together, the line of output that says the most (the last giving an error or an assertion, such as `TypeError: ...`; else the last naming an error or a failure; else the last): the command's own words, cleaned. Shown in `orch status`; a note names only the error and where it happened, never this line. |
 | `error` | string | For an error, what git could not do. |
 
 ### `typescript`
@@ -239,5 +239,5 @@ The MCP server's `status` tool returns, as its structured content:
 | --- | --- | --- |
 | `schema` | integer | As above. |
 | `coordinator` | object | As above. |
-| `repository` | object | The caller's repository, as above, with one difference: another session's declarations have no `task`, and their paths and functions, and the O7 overlaps' key, symbol, file and `what`, are cleaned as notes clean them, so no session's words reach another agent. |
+| `repository` | object | The caller's repository, as above, with one difference: another session's declarations have no `task`, and their paths and functions, and the O7 overlaps' key, symbol, file and `what`, are cleaned as notes clean them; an O5 overlap's path, in its key, its `detail` and each session's `to` and `from`, is shown as notes show it (left out when it is not made of a path's characters and parameters); a together result's `first_failing_line` holds only the error's name and where it happened (`TypeError at tests/test_a.py::test_x`), its `conflicts` are cleaned, and its `error` keeps only what git could not do. So no session's words reach another agent. |
 | `you` | string or null | The caller's session id, when the server found it. |

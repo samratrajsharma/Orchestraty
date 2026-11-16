@@ -94,8 +94,19 @@ def _file_of(symbol):
 
 
 def _key(f):
-    """A finding's key as a tool shows it, each part cleaned: an O7 key holds what a session declared."""
-    return "|".join(templates.clean(x, 300) for x in f["key"].split("|"))
+    """A finding's key as a tool shows it, each part cleaned: an O7 key holds what a session
+    declared, an O5 key a route's path (shown only when it is a path, as notes show it)."""
+    parts = f["key"].split("|")
+    if f["rule"] == "O5" and len(parts) == 4:
+        method, _, path = parts[1].partition(" ")
+        return "|".join([parts[0], templates.clean_route(method, path)] + [templates.clean(x, 300) for x in parts[2:]])
+    return "|".join(templates.clean(x, 300) for x in parts)
+
+
+def _route(text):
+    """'METHOD path' as a note shows it, or "" for none."""
+    method, _, path = str(text or "").partition(" ")
+    return templates.clean_route(method, path) if text else ""
 
 
 def _file_done(status, symbol):
@@ -481,6 +492,17 @@ def status_tool(ws, args):
         if o["rule"] == "O7":                               # what two sessions declared, cleaned as notes clean it
             o.update(key=_key(o), symbol=templates.clean(o["symbol"], 200), file=templates.clean(o["file"], 200))
             o["detail"]["what"] = templates.clean(o["detail"].get("what", ""), 200)
+        elif o["rule"] == "O5":                             # a route's path is a string a session wrote
+            d = o["detail"]
+            o["key"] = _key(o)
+            d["path"] = templates.clean_route(d.get("method", ""), d.get("path", "")).split(" ", 1)[1]
+            for change in (d.get("changes") or {}).values():
+                change.update({side: _route(change.get(side)) for side in ("to", "from")})
+    for r in (repo.get("together") or {}).get("results", []):
+        # The merged code's output and git's words hold the other session's: names only.
+        r["first_failing_line"] = " at ".join(x for x in templates.failure(r.get("first_failing_line")) if x)
+        r["conflicts"] = [templates.clean(p, 200) for p in r.get("conflicts", [])]
+        r["error"] = r.get("error", "").split(": ", 1)[0]
     out = {"schema": data["schema"], "coordinator": data["coordinator"], "repository": repo,
            "you": me["id"] if me else None}
     return out, status.render({"coordinator": data["coordinator"], "repositories": [repo]}).rstrip("\n")
