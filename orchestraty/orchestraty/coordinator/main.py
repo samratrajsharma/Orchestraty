@@ -35,6 +35,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import sys
 import time
 
@@ -57,6 +58,7 @@ TOGETHER_SECONDS = 60             # a pair of sessions is checked together at mo
 KEEP_ENDED_SPOOL_SECONDS = 24 * 3600
 MAX_FAILURES = 20
 NS = 1_000_000_000
+SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")   # as the hook names a session's spool file
 WORKING_EVENTS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
                   "PreInvocation")          # Antigravity's: before each call of its model
 IDLE_EVENTS = ("SessionStart", "Stop", "StopFailure")
@@ -554,6 +556,9 @@ class Coordinator:
         sid = line.get("session_id")
         event = line.get("event") or line.get("hook_event_name") or ""
         if not isinstance(sid, str) or not sid or not isinstance(event, str):
+            return
+        if not SESSION_ID.fullmatch(sid):           # an id is a name: as the hook names the session's spool file
+            self.bad_lines += 1
             return
         session = self.session_for(sid, agent, line, event, ts)
         if session is None:

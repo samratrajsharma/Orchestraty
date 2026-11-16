@@ -36,8 +36,13 @@ LOCALS = "<locals>"         # a nested function's qualname part (a route's handl
 # A route's path as a note may show it: a path's characters, and parameters {uid}, {p:path}, <uid>, <int:uid>.
 _ROUTE_PATH = re.compile(r"(?:[A-Za-z0-9_.:/-]|\{[A-Za-z_]\w*(?::\w+)?\}|<(?:\w+:)?[A-Za-z_]\w*>)*", re.ASCII)
 UNSHOWN_PATH = "(a path with characters a note leaves out)"
-_ERROR_NAME = re.compile(r"\b[A-Z][A-Za-z0-9_]*(?:Error|Exception)\b")
-_FAILED_AT = re.compile(r"[A-Za-z0-9_./-]+\.[A-Za-z0-9]+(?:(?:::[A-Za-z0-9_.\[\]-]+)+|:[0-9]+)")
+_PARAMETER = re.compile(r"<(?:(\w+):)?([A-Za-z_]\w*)>", re.ASCII)   # Flask's and Django's <int:uid>
+# Where a runner says a test failed, at the start of its line: "FAILED tests/a.py::test_x", or
+# "a.py:5:" (mypy, pytest's location line). The error is the name that starts what follows:
+# "TypeError: ...", pytest's "E   TypeError: ...", the summary's "- TypeError: ...".
+_FAILED_TEST = re.compile(r"(?:FAIL(?:ED)?|ERROR):?\s+([A-Za-z0-9_./-]+\.[A-Za-z0-9]+(?:::[A-Za-z0-9_.-]+(?:\[[^\]]*\])?)+)")
+_AT_LINE = re.compile(r"([A-Za-z0-9_./-]+\.[A-Za-z0-9]+):([0-9]+):")
+_ERROR_NAME = re.compile(r"(?:E\s+)?(?:[A-Za-z_][\w.]*\.)?([A-Z][A-Za-z0-9_]*(?:Error|Exception))(?=:|\s*$)", re.ASCII)
 AGENTS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "git": "plain-git"}
 CLOUD = "cloud"             # a cloud agent's branch: its agent works elsewhere and is never told
 
@@ -84,7 +89,9 @@ def clean_route(method, path):
     path = str(path)
     if not _ROUTE_PATH.fullmatch(path):
         path = UNSHOWN_PATH
-    elif len(path) > MAX_VALUE:
+    else:                                           # a parameter in braces: nothing in a note looks like a tag
+        path = _PARAMETER.sub(lambda m: "{" + (m.group(1) + ":" if m.group(1) else "") + m.group(2) + "}", path)
+    if len(path) > MAX_VALUE:
         path = path[:MAX_VALUE - 1] + "~"
     return f"{re.sub(r'[^A-Z?]', '?', str(method).upper())[:12]} {path}"
 
@@ -303,9 +310,13 @@ def failure(line):
     """The error a failing line of output names and where it happened, each cleaned or "":
     ("TypeError", "tests/test_a.py::test_x"). The rest of the line is the merged code's own
     output, another session's words among it, so nothing an agent reads quotes it."""
-    line = str(line or "")
-    error, where = _ERROR_NAME.search(line), _FAILED_AT.search(line)
-    return (clean(error.group(0), 60) if error else ""), (clean(where.group(0)) if where else "")
+    line, where = str(line or "").strip(), ""
+    test = _FAILED_TEST.match(line) or _AT_LINE.match(line)
+    if test:
+        where = test.group(1) if test.re is _FAILED_TEST else f"{test.group(1)}:{test.group(2)}"
+        line = line[test.end():].lstrip(" -:")
+    error = _ERROR_NAME.match(line)
+    return (clean(error.group(1), 60) if error else ""), (clean(where) if where else "")
 
 
 def failed_with(line):
@@ -359,7 +370,7 @@ def about(finding, me, sessions):
 
 def more_waiting(count):
     """The last line of a slot that holds only some of the notes waiting for it."""
-    return _cap(f"{count} more note{'s' if count != 1 else ''} wait for a later step; orch status lists every overlap.")
+    return _cap(f"{count} more note{'s' if count != 1 else ''} wait for a later step, and come with it.")
 
 
 def push_line(findings):

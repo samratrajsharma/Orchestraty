@@ -425,3 +425,41 @@ def test_without_a_record_or_a_repository_it_still_answers_cleanly(state, tmp_pa
     assert result(answers, 1)["isError"] is True and result(answers, 2)["isError"] is True
     assert len(result(answers, 3)["tools"]) == 7
     assert not Path(state.record).exists()                 # the server made no record
+
+
+def test_a_server_in_the_main_checkout_answers_for_the_worktrees_inside_it(state, repo, git, tmp_path):
+    # Claude Code starts a desktop worktree session's MCP server in the main checkout, and puts the
+    # session's worktree under that checkout's .claude/worktrees.
+    config.watch(state, str(repo / ".git"))
+    wx, wy, wz = repo / ".claude" / "worktrees" / "x", repo / ".claude" / "worktrees" / "y", tmp_path / "wt-z"
+    git(repo, "worktree", "add", "-q", "-b", "wt-x", str(wx))
+    spool_event(state.root, "X", "SessionStart", wx)
+    spool_event(state.root, "X", "UserPromptSubmit", wx)
+    c = cmain.Coordinator(state)
+    try:
+        c.step()
+        # X is the one session with hooks there: it need not name itself
+        assert tools.call(state, str(repo), "declare", {"paths": ["a.py"]})[0]["session"] == "X"
+        git(repo, "worktree", "add", "-q", "-b", "wt-y", str(wy))
+        git(repo, "worktree", "add", "-q", "-b", "wt-z", str(wz))
+        for sid, top in (("Y", wy), ("M", repo), ("Z", wz)):
+            spool_event(state.root, sid, "SessionStart", top)
+            spool_event(state.root, sid, "UserPromptSubmit", top)
+        c.step()
+        # Y, X and the main checkout's M may all be calling: the server never guesses
+        with pytest.raises(tools.ToolError, match="cannot tell which one calls: pass `session`, the absolute path"):
+            tools.call(state, str(repo), "declare", {"paths": ["b.py"]})
+        # each names itself, by its folder or its id
+        assert tools.call(state, str(repo), "declare", {"paths": ["b.py"], "session": str(wy)})[0]["session"] == "Y"
+        assert tools.call(state, str(repo), "declare", {"paths": ["b.py"], "session": str(wx / "sub")})[0][
+            "session"] == "X"
+        assert tools.call(state, str(repo), "declare", {"paths": ["a.py"], "session": "M"})[0]["session"] == "M"
+        # Z works outside the main checkout: neither its id nor its folder is this server's
+        for ref in ("Z", str(wz)):
+            with pytest.raises(tools.ToolError, match="this server answers only for the sessions working there"):
+                tools.call(state, str(repo), "declare", {"paths": ["a.py"], "session": ref})
+        c.step()
+        assert sorted((d["session_id"], d["paths"][0]) for d in c.record.declarations()) == [
+            ("M", "a.py"), ("X", "a.py"), ("X", "b.py"), ("Y", "b.py")]
+    finally:
+        c.close()

@@ -426,7 +426,8 @@ def cmd_label(args):
         feedback.label(state, finding["key"], args.verdict, args.why)
     except feedback.Refused as exc:
         return _refuse("label", exc)
-    print(f"{finding['rule']} {feedback.what(finding)}: labelled {args.verdict}. {_recorded_when(state)}")
+    print(feedback.printable(f"{finding['rule']} {feedback.what(finding)}: labelled {args.verdict}. "
+                             f"{_recorded_when(state)}"))
     return 0
 
 

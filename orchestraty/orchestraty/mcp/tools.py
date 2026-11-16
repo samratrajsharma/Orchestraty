@@ -74,6 +74,13 @@ def _inside(path, top):
     return p == t or p.startswith(t.rstrip(os.sep) + os.sep)
 
 
+def _ours(session, top):
+    """Whether a session works in the worktree `top` or in a worktree inside it: Claude Code
+    starts a desktop worktree session's MCP server in the main checkout, and puts its
+    worktrees under that checkout's .claude/worktrees."""
+    return bool(session["worktree"]) and _inside(session["worktree"], top)
+
+
 def _worktree(folder):
     """worktree_info of the folder, or of the nearest folder above it that exists; None outside
     any worktree (or in one git will not read)."""
@@ -107,6 +114,106 @@ def _route(text):
     """'METHOD path' as a note shows it, or "" for none."""
     method, _, path = str(text or "").partition(" ")
     return templates.clean_route(method, path) if text else ""
+
+
+def _key_text(key):
+    """A finding's key, given as text, as a tool shows it (see _key)."""
+    return _key({"key": str(key), "rule": str(key).split("|", 1)[0]})
+
+
+def _folder(path):
+    """A folder another session works in, cleaned as notes clean names, its separators kept."""
+    return templates.clean(str(path or "").replace("\\", "/"), 300)
+
+
+def _first_words(text):
+    """Of a message that may end with another tool's own words (git's, a compiler's): ours only."""
+    return templates.printable(str(text or "").split(": ", 1)[0], 120)
+
+
+def _names(value, key=""):
+    """Every name in a value from the record (files, functions, branches, ids) cleaned as notes
+    clean them: a contract change's reasons as reasons, a folder with its separators."""
+    if isinstance(value, dict):
+        return {templates.clean(k, 300): _names(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_names(v, key) for v in value]
+    if not isinstance(value, str):
+        return value
+    if key == "reasons":
+        return templates.clean_reason(value)
+    if key in ("worktree", "cwd"):
+        return _folder(value)
+    return templates.clean(value, 300)
+
+
+def _session_view(s, own):
+    """One session row of the status tool: names cleaned; another session's declarations
+    without their task line."""
+    declared = s.get("declared", [])
+    out = _names({k: v for k, v in s.items() if k not in ("declared", "changes", "hears", "note")})
+    note = str(s.get("note") or "")                 # ours ("plain git", "timed out"), but for an agent's end reason
+    out["hears"], out["note"] = s.get("hears", []), (
+        "ended: " + templates.clean(note[len("ended: "):], 60) if note.startswith("ended: ") else templates.printable(note))
+    changes = s.get("changes") or {}
+    out["changes"] = {"files": _names(changes.get("files", {})), "unattributed": _names(changes.get("unattributed", [])),
+                      "symbols": _names(changes.get("symbols", [])),
+                      "not_compared": {templates.clean(p, 300): templates.printable(why, 120)
+                                       for p, why in (changes.get("not_compared") or {}).items()}}
+    out["declared"] = [dict({"paths": [templates.clean(p, 200) for p in d["paths"]],
+                             "symbols": [templates.clean(x, 200) for x in d["symbols"]],
+                             "since": d["since"], "until": d["until"]},
+                            **({"task": templates.printable(d.get("task", ""))} if own else {})) for d in declared]
+    return out
+
+
+def _agent_view(repo, mine):
+    """The repository as the status tool shows it to an agent: every name another session
+    controls (branches, folders, files, functions, claims, declared paths, route paths, finding
+    keys) cleaned as notes clean them, and of what another program printed (the merged code's
+    output, git's, a compiler's) only our own words and the names it gives."""
+    out = dict(repo)
+    out["sessions"] = [_session_view(s, mine(s)) for s in repo["sessions"]]
+    overlaps = []
+    for o in repo["overlaps"]:
+        d = o.get("detail") or {}
+        if o["rule"] == "O5":                               # a route's path is a string a session wrote
+            changes = {templates.clean(sid, 200): dict(_names({k: v for k, v in c.items() if k not in ("to", "from")}),
+                                                       to=_route(c.get("to")), **{"from": _route(c.get("from"))})
+                       for sid, c in (d.get("changes") or {}).items()}
+            detail = dict(_names({k: v for k, v in d.items() if k not in ("changes", "path", "method")}),
+                          method=templates.clean(d.get("method", ""), 12), changes=changes,
+                          path=templates.clean_route(d.get("method", ""), d.get("path", "")).split(" ", 1)[1])
+        else:
+            detail = _names(d)
+        overlaps.append(dict(_names({k: v for k, v in o.items() if k not in ("key", "detail")}),
+                             key=_key(o), detail=detail))
+    out["overlaps"] = overlaps
+    out["merge_order"] = [dict(_names({k: v for k, v in m.items() if k != "line"}), line=templates.printable(m["line"]))
+                          for m in repo.get("merge_order") or []]
+    together = dict(repo.get("together") or {})
+    together["results"] = [dict(r, sessions=_names(r.get("sessions", [])),
+                                findings=[_key_text(k) for k in r.get("findings", [])],
+                                alone={templates.clean(k, 200): v for k, v in (r.get("alone") or {}).items()},
+                                conflicts=_names(r.get("conflicts", [])),
+                                first_failing_line=" at ".join(x for x in templates.failure(r.get("first_failing_line"))
+                                                               if x),
+                                error=_first_words(r.get("error")))
+                           for r in together.get("results", [])]
+    out["together"] = together
+    typescript = dict(repo.get("typescript") or {})
+    typescript["runs"] = [dict(run, session=templates.clean(run.get("session", ""), 200), why=_first_words(run.get("why")),
+                               not_compared=_names(run.get("not_compared", [])),
+                               **{side: dict(run[side], error=templates.clean(_first_words(run[side].get("error")), 120))
+                                  for side in ("head", "base") if isinstance(run.get(side), dict)})
+                          for run in typescript.get("runs", [])]
+    out["typescript"] = typescript
+    cloud = dict(repo.get("cloud") or {})
+    if isinstance(cloud.get("fetch"), dict):
+        cloud["fetch"] = dict(cloud["fetch"], error=_first_words(cloud["fetch"].get("error")))
+    cloud["branches"] = [_session_view(s, False) for s in cloud.get("branches", [])]
+    out["cloud"] = cloud
+    return out
 
 
 def _file_done(status, symbol):
@@ -164,11 +271,11 @@ class Workspace:
     def locate(self, session=None, path=None):
         """Settle the worktree, the repository and the caller's session for this call."""
         here = _worktree(self.folder)
-        self.vouched = here is not None                 # the server's own folder tells whose session calls
+        self.vouched = here is not None                 # the server's own folder tells whose sessions call
         named = self._named(session, here) if session else None
         info = here
-        if info is None and named is not None and named["worktree"]:
-            info = _worktree(named["worktree"])
+        if named is not None and named["worktree"] and (info is None or not _same(info["top"], named["worktree"])):
+            info = _worktree(named["worktree"]) or info  # a session in a worktree inside the server's own
         if info is None and named is None and isinstance(path, str) and os.path.isabs(path):
             info = _worktree(os.path.dirname(path))
         repos = {r["key"]: r["id"] for r in self.record.repos()} if self.record is not None else {}
@@ -187,25 +294,49 @@ class Workspace:
             self.me = named
         elif self.top is not None:
             here = [s for s in self.live() if _same(s["worktree"], self.top)]
-            hooked = [s for s in here if s["agent"] != LEVEL0_AGENT]
+            inside = [s for s in self.live() if _ours(s, self.top) and not _same(s["worktree"], self.top)]
+            # With sessions in worktrees inside this one, any of them may be calling: never guess.
+            hooked = [s for s in here + inside if s["agent"] != LEVEL0_AGENT]
             if len(hooked) > 1:
                 self._several = hooked
             elif hooked or here:
                 self.me = (hooked or here)[0]
+            if self.me is not None and self.me["worktree"] and not _same(self.me["worktree"], self.top):
+                moved = _worktree(self.me["worktree"])      # the one session there works in a worktree inside it
+                if moved is not None:
+                    self.top, self.head = moved["top"], moved["head"]
 
     def _named(self, ref, here):
-        """The live session `ref` names. A server in a worktree answers for the sessions working
-        there and no other; outside any worktree, for the one named."""
+        """The live session `ref` names: its id, the start of it, or the absolute path of the
+        folder it works in. A server in a worktree answers for the sessions working there or in
+        a worktree inside it, and no other; outside any worktree, for the one named."""
         live = [s for s in self.sessions.values() if s["state"] == "live"]
-        ours = live if here is None else [s for s in live if _same(s["worktree"], here["top"])]
+        ours = live if here is None else [s for s in live if _ours(s, here["top"])]
+        where = f"{here['top']} or in a worktree inside it" if here is not None else ""
+        if os.path.isabs(ref):
+            info = _worktree(ref)
+            if info is None:
+                raise ToolError(f"{templates.clean(ref, 200)} is not inside a git worktree.")
+            found = [s for s in live if _same(s["worktree"], info["top"])]
+            if found and not [s for s in found if s in ours]:
+                raise ToolError(f"{templates.clean(ref, 200)} is not {where}: this server answers only for the "
+                                "sessions working there.")
+            found = [s for s in found if s in ours]
+            found = [s for s in found if s["agent"] != LEVEL0_AGENT] or found
+            if len(found) == 1:
+                return found[0]
+            if found:
+                raise ToolError(f"{len(found)} live sessions work in {templates.clean(info['top'], 200)}: pass your "
+                                "session's id instead (orch status lists them).")
+            raise ToolError(f"No live session works in {templates.clean(info['top'], 200)}.")
         found = _by_id(ours, ref)
         if len(found) == 1:
             return found[0]
         if found:
             raise ToolError(f"{templates.clean(ref, 60)} is the start of {len(found)} live sessions' ids: give more of it.")
         if _by_id(live, ref):
-            raise ToolError(f"The session {templates.clean(ref, 60)} does not work in {here['top']}: this server answers "
-                            "only for the sessions working in its own worktree.")
+            raise ToolError(f"The session {templates.clean(ref, 60)} does not work in {where}: this server answers "
+                            "only for the sessions working there.")
         raise ToolError(f"No live session has the id {templates.clean(ref, 60)} (orch status lists them).")
 
     def live(self):
@@ -223,12 +354,14 @@ class Workspace:
         if self._several:
             if not strict:
                 return None
-            raise ToolError(f"{len(self._several)} live sessions work in {self.top}: pass `session`, one of "
-                            + ", ".join(s["id"] for s in self._several) + ".")
+            raise ToolError(f"{len(self._several)} live sessions work in {self.top} or in worktrees inside it, so "
+                            "this server cannot tell which one calls: pass `session`, the absolute path of the folder "
+                            "you work in (or your session's id, one of "
+                            + ", ".join(templates.clean(s["id"], 60) for s in self._several) + ").")
         if required:
             raise ToolError(f"No live session works in {self.top or self.folder}. A session with hooks shows from its "
                             "first event; an agent without hooks shows (as plain git) once its worktree has changes. "
-                            "Or pass `session`.")
+                            "If you work in a worktree inside it, pass `session`: the absolute path of your folder.")
         return None
 
     def writer(self):
@@ -276,8 +409,13 @@ class Workspace:
             raise ToolError(f"{templates.clean(path, 200)}: a declared path has no spaces or control characters; "
                             "declare its folder instead.")
         if planned and not (os.path.exists(full) or os.path.isdir(os.path.dirname(full))):
+            new = full
+            while not os.path.isdir(os.path.dirname(new)) and os.path.dirname(new) != new:
+                new = os.path.dirname(new)
+            first = os.path.relpath(new, top).replace(os.sep, "/")
             raise ToolError(f"{templates.clean(path, 200)}: neither it nor its folder is in this worktree. Declare a "
-                            "file or folder that is there, or the folder a new one goes in.")
+                            "file or folder that is there, or the new folder at the top of it, "
+                            f"{templates.clean(first, 200)}.")
         return rel
 
     def symbol(self, symbol, path, planned=False):
@@ -285,7 +423,7 @@ class Workspace:
         names symbols. `planned`: as for path."""
         file, sep, name = symbol.strip().partition("::")
         file, name = (file.strip(), name.strip()) if sep else ("", file)
-        if not declarations.is_name(name) or (sep and not file):
+        if not name or (planned and not declarations.is_name(name)) or (sep and not file):
             raise ToolError(f'"{templates.clean(symbol.strip(), 200)}" is not a function or class name: give its name '
                             "(Class.method) or its full id (path::name).")
         return f"{self.path(file, planned) if sep else path}::{name}"
@@ -483,26 +621,7 @@ def status_tool(ws, args):
     repo = next((r for r in data["repositories"] if repo_key(r["common_dir"]) == ws.common_key), None)
     if repo is None:
         raise ToolError("This repository is not watched: run orch watch (or orch init) in it.")
-    for s in repo["sessions"]:
-        if not ws.mine(s):                                  # another session's words stay out of this agent's context
-            s["declared"] = [{"paths": [templates.clean(p, 200) for p in d["paths"]],
-                              "symbols": [templates.clean(x, 200) for x in d["symbols"]],
-                              "since": d["since"], "until": d["until"]} for d in s["declared"]]
-    for o in repo["overlaps"]:
-        if o["rule"] == "O7":                               # what two sessions declared, cleaned as notes clean it
-            o.update(key=_key(o), symbol=templates.clean(o["symbol"], 200), file=templates.clean(o["file"], 200))
-            o["detail"]["what"] = templates.clean(o["detail"].get("what", ""), 200)
-        elif o["rule"] == "O5":                             # a route's path is a string a session wrote
-            d = o["detail"]
-            o["key"] = _key(o)
-            d["path"] = templates.clean_route(d.get("method", ""), d.get("path", "")).split(" ", 1)[1]
-            for change in (d.get("changes") or {}).values():
-                change.update({side: _route(change.get(side)) for side in ("to", "from")})
-    for r in (repo.get("together") or {}).get("results", []):
-        # The merged code's output and git's words hold the other session's: names only.
-        r["first_failing_line"] = " at ".join(x for x in templates.failure(r.get("first_failing_line")) if x)
-        r["conflicts"] = [templates.clean(p, 200) for p in r.get("conflicts", [])]
-        r["error"] = r.get("error", "").split(": ", 1)[0]
+    repo = _agent_view(repo, ws.mine)                       # no session's words reach this agent's context
     out = {"schema": data["schema"], "coordinator": data["coordinator"], "repository": repo,
            "you": me["id"] if me else None}
     return out, status.render({"coordinator": data["coordinator"], "repositories": [repo]}).rstrip("\n")
@@ -593,10 +712,12 @@ def release(ws, args):
     return data, text
 
 
-_SESSION = {"type": "string", "minLength": 1, "maxLength": declarations.MAX_SESSION,
-            "description": "Your session's id, or its first characters (orch status shows them): a session working in "
-                           "this server's worktree. Needed only when several sessions work in this folder, or the "
-                           "server runs outside your workspace (then only the tools that read take it)."}
+_SESSION = {"type": "string", "minLength": 1, "maxLength": 1000,
+            "description": "The absolute path of the folder you work in, or your session's id or its first characters "
+                           "(orch status shows them): a session working in this server's worktree or in a worktree "
+                           "inside it. Needed when the tools say they cannot tell which session calls (a worktree "
+                           "session whose server runs in the main checkout, or several sessions in one folder), or "
+                           "when the server runs outside your workspace (then only the tools that read take it)."}
 _PATH = {"type": "string", "minLength": 1, "maxLength": 1000,
          "description": "The file: a path in the repository, absolute or relative to your workspace."}
 _READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
