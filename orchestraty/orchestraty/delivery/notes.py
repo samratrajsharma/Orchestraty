@@ -43,6 +43,13 @@ def clean(value, limit=MAX_VALUE):
     return text if len(text) <= limit else text[:limit - 1] + "~"
 
 
+def printable(value, limit=None):
+    """Text as it was written, but for its control and format characters (a line break, an
+    escape, a direction mark), each made "?": one line, which a terminal shows as text."""
+    text = "".join(c if c.isprintable() else "?" for c in str(value))
+    return text if limit is None or len(text) <= limit else text[:limit - 1] + "~"
+
+
 def _name(symbol):
     """'path::Qual.name' -> 'Qual.name'."""
     return clean(symbol.split("::", 1)[-1])

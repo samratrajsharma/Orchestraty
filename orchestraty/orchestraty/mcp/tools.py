@@ -5,9 +5,10 @@ Every answer comes from what the coordinator keeps, the record, opened read-only
 where and what each session changed, as of the coordinator's last pass. The server builds no
 code graph of its own. Each tool returns structured JSON and a short text, says what the answer
 covers and what it does not, and words what other sessions did with the notes' templates
-(``delivery.notes``): identifiers only, cleaned, so no session's words reach another. Only
-``status`` passes on the record's fields as ``orch status --json`` has them, without the other
-sessions' declared task lines.
+(``delivery.notes``): identifiers only, cleaned, so no session's words reach another.
+``status`` passes on the record's fields as ``orch status --json`` has them, except that other
+sessions' declarations come without their task line and with their paths and functions
+cleaned, as O7's findings are too.
 
 The caller. An agent starts the server in its workspace folder (Claude Code's project folder,
 ``CLAUDE_PROJECT_DIR``, when it sets one). The caller's session is the live session working in
@@ -88,6 +89,21 @@ def _worktree(folder):
 
 def _file_of(symbol):
     return str(symbol or "").split("::", 1)[0]
+
+
+def _key(f):
+    """A finding's key as a tool shows it, each part cleaned: an O7 key holds what a session declared."""
+    return "|".join(templates.clean(x, 300) for x in f["key"].split("|"))
+
+
+def _file_done(status, symbol):
+    """What a session did to the file a row of who_is_changing is about; for a function, said
+    of the file (the function's own change, when it has one, is said instead)."""
+    if status == "not attributed":
+        return "changed in a folder two sessions share, not attributed"
+    if symbol:
+        return {"A": "added the file", "D": "deleted the file"}.get(status, "changed other parts of the file")
+    return {"A": "added it", "D": "deleted it"}.get(status, "changed it")
 
 
 def _bare(text):
@@ -189,9 +205,11 @@ class Workspace:
                             "Or pass `session`.")
         return None
 
-    def path(self, path):
+    def path(self, path, planned=False):
         """The posix path in the repository that `path` names: absolute, or relative to the
-        caller's folder (or to its worktree's top, when the file is not found there)."""
+        caller's folder (or to its worktree's top, when the file is not found there).
+        `planned`, for declare: a plain path (no space or control character) of a file or
+        folder there, or of a new one in a folder there."""
         if self.top is None:
             raise ToolError(f"{self.folder} is not inside a git worktree: pass the file's absolute path, or start the "
                             "server in your workspace folder.")
@@ -214,17 +232,24 @@ class Workspace:
                 raise ToolError(f"{path} is not inside this repository.")
         rel = os.path.relpath(os.path.realpath(full), os.path.realpath(top)).replace(os.sep, "/")
         if rel in (".", "") or rel == ".." or rel.startswith("../"):
-            raise ToolError(f"{path} names no file in this repository.")
+            raise ToolError(f"{templates.clean(path, 200)} names no file in this repository.")
+        if planned and not declarations.is_path(rel):
+            raise ToolError(f"{templates.clean(path, 200)}: a declared path has no spaces or control characters; "
+                            "declare its folder instead.")
+        if planned and not (os.path.exists(full) or os.path.isdir(os.path.dirname(full))):
+            raise ToolError(f"{templates.clean(path, 200)}: neither it nor its folder is in this worktree. Declare a "
+                            "file or folder that is there, or the folder a new one goes in.")
         return rel
 
-    def symbol(self, symbol, path):
+    def symbol(self, symbol, path, planned=False):
         """'name' in `path` (a function, Class.method), or a full 'path::name' id, as the record
-        names symbols."""
-        symbol = symbol.strip()
-        if "::" in symbol:
-            file, name = symbol.split("::", 1)
-            return self.path(file.strip()) + "::" + name.strip()
-        return f"{path}::{symbol}"
+        names symbols. `planned`: as for path."""
+        file, sep, name = symbol.strip().partition("::")
+        file, name = (file.strip(), name.strip()) if sep else ("", file)
+        if not declarations.is_name(name) or (sep and not file):
+            raise ToolError(f'"{templates.clean(symbol.strip(), 200)}" is not a function or class name: give its name '
+                            "(Class.method) or its full id (path::name).")
+        return f"{self.path(file, planned) if sep else path}::{name}"
 
     def coordinator(self):
         return "running" if feedback.coordinator_running(self.state, self.now) else "not running: this is what it last saw"
@@ -264,6 +289,7 @@ def _tail(ws, notes=()):
 def who_is_changing(ws, args):
     path = ws.path(args["path"])
     symbol = ws.symbol(args["symbol"], path) if args.get("symbol") else None
+    path = _file_of(symbol) if symbol else path                     # a full id names its own file
     me = ws.caller(required=False, strict=False)
     rows, others_in_file = [], 0
     for s in ws.live():
@@ -273,7 +299,7 @@ def who_is_changing(ws, args):
         declared = [d for d in ws.declared.get(s["id"], []) if path in d["paths"] or (symbol and symbol in d["symbols"])]
         changes_file = path in files or path in unattributed
         if symbol and not named and not declared:
-            others_in_file += changes_file
+            others_in_file += changes_file and (me is None or s["id"] != me["id"])
             continue
         if not symbol and not changes_file and not declared:
             continue
@@ -282,14 +308,14 @@ def who_is_changing(ws, args):
                    changes=[_change(c) for c in (named if symbol else in_file)],
                    declared=[_declared(d, row["you"]) for d in declared])
         rows.append(row)
-    target = f"{symbol.split('::', 1)[1]} in {path}" if symbol else path
-    lines = [f"{templates.clean(target, 200)}: " + (f"{len(rows)} live session(s)." if rows else
-                                                    "no live session is changing it or has declared it.")]
+    target = (f"{templates.clean(symbol.split('::', 1)[1], 120)} in {templates.clean(path, 200)}" if symbol
+              else templates.clean(path, 200))
+    lines = [f"{target}: " + (f"{len(rows)} live session(s)." if rows else
+                              "no live session is changing it or has declared it.")]
     for r in rows:
         what = []
-        if r["file"]:
-            what.append("changed in a folder two sessions share, not attributed" if r["file"] == "not attributed"
-                        else {"A": "added it", "D": "deleted it"}.get(r["file"], "changed it"))
+        if r["file"] and not (symbol and r["changes"]):
+            what.append(_file_done(r["file"], symbol))
         for c in r["changes"]:
             contract = f", contract {c['contract']}" if c["contract"] not in ("none", "") else ""
             reasons = f" ({'; '.join(c['reasons'][:3])})" if c["reasons"] else ""
@@ -361,7 +387,7 @@ def check_before_edit(ws, args):
         elif kind == "also_changing":
             data[kind].append({"symbol": templates.clean(f["symbol"], 200), "session": f["session"], "note": text})
         else:
-            data[kind].append({"finding": f["key"], "rule": f["rule"], "strength": f["strength"],
+            data[kind].append({"finding": _key(f), "rule": f["rule"], "strength": f["strength"],
                                "symbol": templates.clean(f["symbol"], 200), "latent": bool(f["detail"].get("latent")),
                                "note": text})
     if items:
@@ -394,7 +420,7 @@ def my_overlaps(ws, args):
     rows = []
     for f in mine:
         others = [ws.sessions[x] for x in f["sessions"] if x != me["id"] and x in ws.sessions]
-        rows.append({"finding": f["key"], "rule": f["rule"], "strength": f["strength"],
+        rows.append({"finding": _key(f), "rule": f["rule"], "strength": f["strength"],
                      "symbol": templates.clean(f["symbol"], 200), "file": templates.clean(f["file"], 200),
                      "latent": bool(f["detail"].get("latent")),
                      "with": [_session_facts(ws, s, me) for s in others], "note": _bare(_overlap_note(ws, f, me))})
@@ -419,9 +445,14 @@ def status_tool(ws, args):
     if repo is None:
         raise ToolError("This repository is not watched: run orch watch (or orch init) in it.")
     for s in repo["sessions"]:
-        if me is None or s["id"] != me["id"]:
-            for d in s["declared"]:
-                d.pop("task", None)                         # another session's words stay out of this agent's context
+        if me is None or s["id"] != me["id"]:               # another session's words stay out of this agent's context
+            s["declared"] = [{"paths": [templates.clean(p, 200) for p in d["paths"]],
+                              "symbols": [templates.clean(x, 200) for x in d["symbols"]],
+                              "since": d["since"], "until": d["until"]} for d in s["declared"]]
+    for o in repo["overlaps"]:
+        if o["rule"] == "O7":                               # what two sessions declared, cleaned as notes clean it
+            o.update(key=_key(o), symbol=templates.clean(o["symbol"], 200), file=templates.clean(o["file"], 200))
+            o["detail"]["what"] = templates.clean(o["detail"].get("what", ""), 200)
     out = {"schema": data["schema"], "coordinator": data["coordinator"], "repository": repo,
            "you": me["id"] if me else None}
     return out, status.render({"coordinator": data["coordinator"], "repositories": [repo]}).rstrip("\n")
@@ -429,12 +460,13 @@ def status_tool(ws, args):
 
 def declare(ws, args):
     me = ws.caller()
-    paths = list(dict.fromkeys(ws.path(p) for p in args["paths"]))
+    paths = list(dict.fromkeys(ws.path(p, planned=True) for p in args["paths"]))
     names = [x.strip() for x in args.get("symbols", []) if x.strip()]
-    symbols = list(dict.fromkeys(ws.symbol(x, paths[0]) if "::" in x or len(paths) == 1 else x for x in names))
+    symbols = list(dict.fromkeys(ws.symbol(x, paths[0], planned=True) if "::" in x or len(paths) == 1
+                                 else _bare_name(x) for x in names))
     if any(len(p) > declarations.MAX_ITEM for p in paths + symbols):
         raise ToolError(f"A path or function name is longer than {declarations.MAX_ITEM} characters.")
-    task = (args.get("task") or "").strip()[:declarations.MAX_TASK]
+    task = declarations.one_line(args.get("task") or "")
     declarations.append(ws.state, me["id"], paths, symbols, task, now=ws.now)
     minutes = config.load(ws.state)["declare_minutes"]
     running = feedback.coordinator_running(ws.state, ws.now)
@@ -449,6 +481,14 @@ def declare(ws, args):
     return data, text
 
 
+def _bare_name(name):
+    """A function or class a declaration of several files names without its file."""
+    if not declarations.is_name(name):
+        raise ToolError(f'"{templates.clean(name, 200)}" is not a function or class name: give its name (Class.method) '
+                        "or its full id (path::name).")
+    return name
+
+
 def claim(ws, args):
     me = ws.caller()
     if not me["worktree"]:
@@ -461,7 +501,7 @@ def claim(ws, args):
     try:
         kind, target, file = claiming.resolve(top, base, args["target"])
     except claiming.Refused as exc:
-        raise ToolError(templates.clean_reason(str(exc)).rstrip(".") + ".") from None
+        raise ToolError(templates.printable(exc, templates.MAX_NOTE).rstrip(".") + ".") from None
     hard = bool(args.get("hard", False))
     minutes = args.get("minutes") or claiming.default_minutes(config.load(ws.state))
     claiming.append_claim(ws.state, me["id"], common_dir, kind, target, file, hard, minutes, now=ws.now)

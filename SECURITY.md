@@ -36,6 +36,6 @@ Examples of what we treat as a security problem:
 
 ## Notes cannot carry another session's words
 
-Every note is filled in from a template with identifiers from git and the code graph (function, file and branch names, line numbers), cleaned to a short list of safe characters and cut to a set length. Nothing another session wrote reaches a note, so one session cannot give another instructions through it. The one exception is the together check's note, which quotes one line of your own test command's output, cleaned and cut short.
+Every note is filled in from a template with identifiers from git and the code graph (function, file and branch names, line numbers), cleaned to a short list of safe characters and cut to a set length. Nothing another session wrote reaches a note, so one session cannot give another instructions through it. What an agent declares (the MCP tool `declare`) is held to the same: paths of its worktree and function or class names, never free text; its task line is shown only to you and to that agent. `orch status` and `orch events` print no control characters from what agents wrote. The one exception is the together check's note, which quotes one line of your own test command's output, cleaned and cut short.
 
 Orchestraty never answers an agent's permission question with "allow". With steer on (off by default), a strong finding's note stops the edit it is about; a hard claim makes another session's edit wait for its user's answer.

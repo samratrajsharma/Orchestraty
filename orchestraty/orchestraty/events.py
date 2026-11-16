@@ -18,6 +18,7 @@ import re
 import time
 
 from orchestraty.claims import describe, from_note_key
+from orchestraty.delivery.notes import printable
 from orchestraty.coordinator.record import Record
 
 EVENTS_SCHEMA = 1
@@ -141,7 +142,7 @@ def render(e):
         names = f" ({', '.join(x.split('::')[-1] for x in e['symbols'])})" if e.get("symbols") else ""
         until = f" until {_local(e['until'], '%H:%M')}" if e.get("until") else ""
         what = f"{sid}: {', '.join(e.get('paths', []))}{names}{until}"
-    return f"{_local(e['time'], '%Y-%m-%d %H:%M:%S')}  {kind:<16}  {what}"
+    return printable(f"{_local(e['time'], '%Y-%m-%d %H:%M:%S')}  {kind:<16}  {what}")
 
 
 def _line(e, as_json):

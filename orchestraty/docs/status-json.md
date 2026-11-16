@@ -239,5 +239,5 @@ The MCP server's `status` tool returns, as its structured content:
 | --- | --- | --- |
 | `schema` | integer | As above. |
 | `coordinator` | object | As above. |
-| `repository` | object | The caller's repository, as above, with one difference: another session's declarations have no `task`, so no session's words reach another agent. |
+| `repository` | object | The caller's repository, as above, with one difference: another session's declarations have no `task`, and their paths and functions, and the O7 overlaps' key, symbol, file and `what`, are cleaned as notes clean them, so no session's words reach another agent. |
 | `you` | string or null | The caller's session id, when the server found it. |

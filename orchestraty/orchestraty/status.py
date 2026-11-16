@@ -19,6 +19,7 @@ import time
 from orchestraty import adapters, claims as claiming, config, mergeorder, remote, together as checking
 from orchestraty.coordinator.lock import is_fresh
 from orchestraty.coordinator.record import Record, repo_key, repo_name
+from orchestraty.delivery.notes import printable
 
 STATUS_SCHEMA = 1
 LEVEL0_AGENT = "git"
@@ -331,7 +332,7 @@ def render(data, wake=False):
             lines += ["    " + _ts_line(r) for r in ts.get("runs", [])]
     if any(s["base_guessed"] for r in data["repositories"] for s in r["sessions"]):
         lines += ["", "base?: the session was first seen after it started, so its base is the commit at that time."]
-    return "\n".join(lines) + "\n"
+    return "\n".join(printable(line) for line in lines) + "\n"
 
 
 def _local(iso, form="%H:%M"):

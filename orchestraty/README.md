@@ -93,11 +93,11 @@ The hook's own time is not counted: the hook would have to read the clock and wr
 
 | Tool | What it answers |
 | --- | --- |
-| `who_is_changing(path, symbol?)` | The live sessions changing that file or function, or that have declared it, from any agent: each one's agent, worktree, branch, last event, and its function and contract changes with their reasons. |
+| `who_is_changing(path, symbol?)` | The live sessions changing that file or function, or that have declared it, from any agent: each one's agent, worktree, branch, last event, and its function and contract changes with their reasons. A function's full id (path::name) names its own file. |
 | `check_before_edit(path)` | What to know before editing the file, in the notes' own words: breaking or removed functions from other sessions that it uses, functions in it that another session is also changing, another session working in this same folder, and other sessions' claims on it. |
 | `my_overlaps()` | The findings that involve the caller's session, strongest first, each with what it tells the caller. |
 | `status()` | The caller's repository, as `orch status --json` has it. |
-| `declare(paths, symbols?, task?)` | What the agent says it is about to change. |
+| `declare(paths, symbols?, task?)` | What the agent says it is about to change: files or folders of its worktree (or a new one in a folder that is there), with no spaces or control characters, and functions or classes by name (Class.method) or path::name. Anything else is refused, and the coordinator drops a declaration of any other shape. Other agents see the paths and functions cleaned as notes clean them; `orch status` shows the task line with its control characters taken out. |
 | `claim(target, hard?, minutes?)` | Claims a file, a folder or a function or class (`path::name`, or `module.name`) for the caller's session, as `orch claim` does. |
 | `release(target)` | Ends one of the caller's own claims: what it claims, or its number. Another session's claim stays. |
 

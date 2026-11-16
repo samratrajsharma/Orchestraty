@@ -35,7 +35,8 @@ The other tools:
 - `my_overlaps`: every overlap between your changes and other sessions', strongest first.
 - `status`: the whole repository, as `orch status --json` gives it.
 - `declare`: before a larger change, say which files (and functions) you are about to change, so
-  other sessions see it before your edits land. Your task line stays on this machine.
+  other sessions see it before your edits land: files or folders that exist (or the folder a new
+  one goes in), and functions by name. Your task line stays on this machine.
 - `claim` and `release`: reserve a file, folder or function for this session, and end the claim.
   Claim only what your user's task needs, and release it when you are done.
 
