@@ -12,10 +12,12 @@ cleaned, as O7's findings are too.
 
 The caller. An agent starts the server in its workspace folder (Claude Code's project folder,
 ``CLAUDE_PROJECT_DIR``, when it sets one). The caller's session is the live session working in
-that folder's worktree, one with hooks before a plain-git one. When several work there, or the
-server runs elsewhere, each tool takes ``session``: the session's id, or its first characters as
-``orch status`` shows them. A server started outside any worktree takes the worktree from an
-absolute path. An agent without hooks has a session once its worktree has changes (a plain-git
+that folder's worktree, one with hooks before a plain-git one. When several work there, each
+tool takes ``session``: the session's id, or its first characters as ``orch status`` shows them,
+and only among the sessions working in the server's own worktree, so an agent cannot act in
+another session's name or read its task line. A server started outside any worktree takes the
+worktree from an absolute path or from ``session`` for the tools that read, returns no task line,
+and refuses ``declare``, ``claim`` and ``release``. An agent without hooks has a session once its worktree has changes (a plain-git
 session); before that, ``who_is_changing``, ``check_before_edit`` and ``status`` still answer.
 """
 import calendar
@@ -111,6 +113,11 @@ def _bare(text):
     return text[len("Orchestraty: "):] if text.startswith("Orchestraty: ") else text
 
 
+def _by_id(sessions, ref):
+    """The sessions whose id is `ref`, else those whose id starts with it."""
+    return [s for s in sessions if s["id"] == ref] or [s for s in sessions if s["id"].startswith(ref)]
+
+
 class Workspace:
     """What one tool call reads. The worktree the call is about: the one of the session it
     names, else the one holding the caller's folder, else (a server started outside any
@@ -123,7 +130,7 @@ class Workspace:
         self.folder = os.path.abspath(folder)
         self.now = time.time() if now is None else now
         self.top, self.repo_id, self.common_key, self.head = None, None, None, ""
-        self.me, self._several = None, []
+        self.me, self._several, self.vouched = None, [], False
         self.sessions, self.findings, self.changes, self.declared, self.claims = {}, [], {}, {}, []
         self.record = Record(state.record, readonly=True) if os.path.exists(state.record) else None
         if self.record is not None:
@@ -145,10 +152,12 @@ class Workspace:
 
     def locate(self, session=None, path=None):
         """Settle the worktree, the repository and the caller's session for this call."""
-        named = self._named(session) if session else None
-        info = _worktree(named["worktree"]) if named is not None and named["worktree"] else None
-        if info is None:
-            info = _worktree(self.folder)
+        here = _worktree(self.folder)
+        self.vouched = here is not None                 # the server's own folder tells whose session calls
+        named = self._named(session, here) if session else None
+        info = here
+        if info is None and named is not None and named["worktree"]:
+            info = _worktree(named["worktree"])
         if info is None and named is None and isinstance(path, str) and os.path.isabs(path):
             info = _worktree(os.path.dirname(path))
         repos = {r["key"]: r["id"] for r in self.record.repos()} if self.record is not None else {}
@@ -173,13 +182,19 @@ class Workspace:
             elif hooked or here:
                 self.me = (hooked or here)[0]
 
-    def _named(self, ref):
+    def _named(self, ref, here):
+        """The live session `ref` names. A server in a worktree answers for the sessions working
+        there and no other; outside any worktree, for the one named."""
         live = [s for s in self.sessions.values() if s["state"] == "live"]
-        found = [s for s in live if s["id"] == ref] or [s for s in live if s["id"].startswith(ref)]
+        ours = live if here is None else [s for s in live if _same(s["worktree"], here["top"])]
+        found = _by_id(ours, ref)
         if len(found) == 1:
             return found[0]
         if found:
             raise ToolError(f"{templates.clean(ref, 60)} is the start of {len(found)} live sessions' ids: give more of it.")
+        if _by_id(live, ref):
+            raise ToolError(f"The session {templates.clean(ref, 60)} does not work in {here['top']}: this server answers "
+                            "only for the sessions working in its own worktree.")
         raise ToolError(f"No live session has the id {templates.clean(ref, 60)} (orch status lists them).")
 
     def live(self):
@@ -204,6 +219,19 @@ class Workspace:
                             "first event; an agent without hooks shows (as plain git) once its worktree has changes. "
                             "Or pass `session`.")
         return None
+
+    def writer(self):
+        """The caller's session, for a tool that changes something in its name: only a server
+        started in that session's worktree can tell who calls."""
+        if not self.vouched:
+            raise ToolError(f"{self.folder} is not inside a git worktree, so this server cannot tell which session "
+                            "calls it: declare, claim and release need it started in your workspace folder "
+                            "(orch mcp --folder <your worktree>).")
+        return self.caller()
+
+    def mine(self, s):
+        """Whether `s` is the caller's session, as the server's own folder tells it."""
+        return self.vouched and self.me is not None and s["id"] == self.me["id"]
 
     def path(self, path, planned=False):
         """The posix path in the repository that `path` names: absolute, or relative to the
@@ -306,7 +334,7 @@ def who_is_changing(ws, args):
         row = _session_facts(ws, s, me)
         row.update(file=files.get(path) or ("not attributed" if path in unattributed else ""),
                    changes=[_change(c) for c in (named if symbol else in_file)],
-                   declared=[_declared(d, row["you"]) for d in declared])
+                   declared=[_declared(d, ws.mine(s)) for d in declared])
         rows.append(row)
     target = (f"{templates.clean(symbol.split('::', 1)[1], 120)} in {templates.clean(path, 200)}" if symbol
               else templates.clean(path, 200))
@@ -445,7 +473,7 @@ def status_tool(ws, args):
     if repo is None:
         raise ToolError("This repository is not watched: run orch watch (or orch init) in it.")
     for s in repo["sessions"]:
-        if me is None or s["id"] != me["id"]:               # another session's words stay out of this agent's context
+        if not ws.mine(s):                                  # another session's words stay out of this agent's context
             s["declared"] = [{"paths": [templates.clean(p, 200) for p in d["paths"]],
                               "symbols": [templates.clean(x, 200) for x in d["symbols"]],
                               "since": d["since"], "until": d["until"]} for d in s["declared"]]
@@ -459,7 +487,7 @@ def status_tool(ws, args):
 
 
 def declare(ws, args):
-    me = ws.caller()
+    me = ws.writer()
     paths = list(dict.fromkeys(ws.path(p, planned=True) for p in args["paths"]))
     names = [x.strip() for x in args.get("symbols", []) if x.strip()]
     symbols = list(dict.fromkeys(ws.symbol(x, paths[0], planned=True) if "::" in x or len(paths) == 1
@@ -490,9 +518,7 @@ def _bare_name(name):
 
 
 def claim(ws, args):
-    me = ws.caller()
-    if not me["worktree"]:
-        raise ToolError("That session has no worktree here (a cloud agent's branch): it cannot claim.")
+    me = ws.writer()
     common_dir = ws.common_dir(me)
     if not common_dir or not config.is_watched(config.load(ws.state), common_dir):
         raise ToolError("This repository is not watched: run orch watch (or orch init) in it.")
@@ -519,7 +545,7 @@ def claim(ws, args):
 
 
 def release(ws, args):
-    me = ws.caller()
+    me = ws.writer()
     ref = args["target"].strip()
     mine = [c for c in ws.claims if c["session_id"] == me["id"]]
     if ref.lstrip("#").isdigit():
@@ -546,8 +572,9 @@ def release(ws, args):
 
 
 _SESSION = {"type": "string", "minLength": 1, "maxLength": declarations.MAX_SESSION,
-            "description": "Your session's id, or its first characters (orch status shows them). Needed only when "
-                           "several sessions work in this folder, or the server runs outside your workspace."}
+            "description": "Your session's id, or its first characters (orch status shows them): a session working in "
+                           "this server's worktree. Needed only when several sessions work in this folder, or the "
+                           "server runs outside your workspace (then only the tools that read take it)."}
 _PATH = {"type": "string", "minLength": 1, "maxLength": 1000,
          "description": "The file: a path in the repository, absolute or relative to your workspace."}
 _READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}

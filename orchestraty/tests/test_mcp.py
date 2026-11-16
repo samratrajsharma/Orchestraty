@@ -261,7 +261,7 @@ def test_the_claim_tools_reach_the_record_through_the_coordinator(state, two):
     c.record.put_session({"id": "cloud-0123456789ab", "agent": "cloud", "repo_id": c.sessions["A"]["repo_id"], "cwd": "",
                           "worktree": "", "branch": "origin/claude/x", "base_commit": "", "base_guessed": 0, "started": 1,
                           "last_seen": time.time_ns(), "state": "live", "turn": "", "note": ""})
-    with pytest.raises(tools.ToolError, match="cannot claim"):
+    with pytest.raises(tools.ToolError, match="does not work in"):
         tools.call(state, str(wa), "claim", {"target": "a.py", "session": "cloud-0123456789ab"})
 
     # A releases it, by its number
@@ -271,6 +271,54 @@ def test_the_claim_tools_reach_the_record_through_the_coordinator(state, two):
     assert result(answers, 2)["structuredContent"]["released"] == [held["id"]]  # the record has not heard yet
     c.step()
     assert c.record.claim(held["id"])["why"] == "released" and c.record.claims(active_at=time.time_ns()) == []
+
+
+def test_a_server_answers_only_for_the_sessions_of_its_own_worktree(state, two):
+    c, wa, wb = two
+    tools.call(state, str(wb), "claim", {"target": "c.py", "hard": True})
+    tools.call(state, str(wb), "declare", {"paths": ["c.py"], "task": "B's own words"})
+    c.step()
+    [held] = c.record.claims()
+    # A's server names B: it can neither end B's claim nor claim or declare in B's name...
+    answers, _ = mcp(state, wa, initialize(), call(1, "release", target="c.py", session="B"),
+                     call(2, "release", target=f"#{held['id']}", session="B"),
+                     call(3, "claim", target="a.py", session="B"), call(4, "declare", paths=["a.py"], session="B"),
+                     call(5, "my_overlaps", session="B"), call(6, "check_before_edit", path="c.py", session="B"),
+                     call(7, "who_is_changing", path="c.py", session="B"), call(8, "status", session="B"),
+                     call(9, "who_is_changing", path="c.py"), call(10, "status"))
+    for rid in range(1, 9):
+        assert result(answers, rid)["isError"] is True, rid
+        assert "The session B does not work in" in text_of(result(answers, rid))
+    # ...nor read B's task line; without `session` it hears the paths, as before
+    assert "B's own words" not in json.dumps(answers)
+    assert [r["session"] for r in result(answers, 9)["structuredContent"]["sessions"]] == ["B"]
+    c.step()
+    assert [(x["id"], x["session_id"], x["ended"]) for x in c.record.claims()] == [(held["id"], "B", None)]
+    assert [(d["session_id"], d["paths"]) for d in c.record.declarations()] == [("B", ["c.py"])]
+    # B's own server still names B, and gets its own task line back
+    data, _ = tools.call(state, str(wb), "status", {"session": "B"})
+    assert data["repository"]["sessions"][1]["declared"][0]["task"] == "B's own words"
+    assert tools.call(state, str(wb), "release", {"target": "c.py", "session": "B"})[0]["released"] == [held["id"]]
+
+
+def test_a_server_outside_any_worktree_reads_but_changes_nothing_in_a_sessions_name(state, two, tmp_path):
+    c, wa, wb = two
+    tools.call(state, str(wb), "declare", {"paths": ["c.py"], "task": "B's own words"})
+    c.step()
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    answers, _ = mcp(state, outside, initialize(), call(1, "who_is_changing", path=str(wb / "c.py")),
+                     call(2, "status", session="B"), call(3, "my_overlaps", session="B"),
+                     call(4, "declare", paths=[str(wb / "c.py")]), call(5, "claim", target=str(wb / "c.py"), session="B"),
+                     call(6, "release", target="#1", session="B"))
+    assert [r["session"] for r in result(answers, 1)["structuredContent"]["sessions"]] == ["B"]
+    assert result(answers, 2)["structuredContent"]["you"] == "B"
+    assert result(answers, 3)["structuredContent"]["session"] == "B"
+    assert "B's own words" not in json.dumps(answers)
+    for rid in (4, 5, 6):
+        assert result(answers, rid)["isError"] is True and "cannot tell which session" in text_of(result(answers, rid))
+    c.step()
+    assert len(c.record.declarations()) == 1 and c.record.claims() == []
 
 
 def test_unknown_methods_and_bad_arguments_get_json_rpc_errors(state, two):

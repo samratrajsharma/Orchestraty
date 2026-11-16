@@ -86,8 +86,9 @@ def text(agent, argv=None, env=None):
         where = []
     else:
         raise ValueError(agent)
-    parts += ["", "If the agent does not start the server in your workspace folder, the tools take the worktree from "
-                  "the absolute paths you pass them, or from their session argument.",
+    parts += ["", "If the agent does not start the server in your workspace folder, the tools that read take the "
+                  "worktree from the absolute paths you pass them, or from their session argument; declare, claim "
+                  "and release need the server started there (--folder).",
               "", "Then, to have the agent check before it edits, add this line to your repository's AGENTS.md (or "
                   "to the file your agent reads its project instructions from):", "", _indent(AGENTS_LINE)]
     parts += where + ["", UNTESTED, "orch mcp --config writes nothing."]
