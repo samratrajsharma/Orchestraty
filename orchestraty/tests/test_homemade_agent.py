@@ -82,8 +82,11 @@ def test_a_homemade_agent_hears_before_it_edits_a_caller(state, hook_script, git
         [b] = [s for s in sessions if s["worktree"].endswith("wt-b") and s["agent"] == "helper-homemade"]
         [edit] = [n for n in record.notes(session_id=b["id"]) if n["kind"] == "edit"]
         assert edit["state"] == "delivered" and edit["finding_key"].startswith("O3|a.py::charge|")
-        writes = [e for e in record.events(b["id"]) if e["event"] == "PostToolUse"]
-        assert writes and edit["delivered"] < writes[0]["ts"]                   # heard before it wrote
+        events = record.events(b["id"])
+        writes = [e for e in events if e["event"] == "PostToolUse"]
+        before = [e for e in events if e["event"] == "PreToolUse" and e["id"] < writes[0]["id"]] if writes else []
+        # heard before it wrote: Windows' clock can give the note and the write one tick
+        assert writes and before and edit["delivered"] <= writes[0]["ts"]
     finally:
         record.close()
     assert config.load(state)["repos"] == []                                    # unwatched at the end
