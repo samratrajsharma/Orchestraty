@@ -185,7 +185,8 @@ def _skip_space(s, k):
 def value_end(s, j):
     """The index just past the JSON value that starts at s[j] (s: the payload made plain), or -1.
     A string ends at its next quote; an object or an array where its brackets close, counting
-    only the brackets between its strings."""
+    only the brackets between its strings. Each byte is looked at a set number of times: the
+    next } and the next ] are kept until passed, so a long run of either costs no more."""
     c = s[j:j + 1]
     if c == b'"':
         k = s.find(b'"', j + 1)
@@ -195,13 +196,19 @@ def value_end(s, j):
         while k < len(s) and s[k] not in b",}] \t\r\n":
             k += 1
         return k if k > j else -1
-    depth, k = 0, j
+    depth, k, n = 0, j, len(s)
+    brace = bracket = -1                            # the next } and ] at or after k (n: none)
     while True:
         q = s.find(b'"', k)
-        stop = len(s) if q < 0 else q
+        stop = n if q < 0 else q
         while True:                                 # the brackets before that string
-            c1, c2 = s.find(b"}", k, stop), s.find(b"]", k, stop)
-            close = min(c1 if c1 >= 0 else stop, c2 if c2 >= 0 else stop)
+            if brace < k:
+                brace = s.find(b"}", k)
+                brace = n if brace < 0 else brace
+            if bracket < k:
+                bracket = s.find(b"]", k)
+                bracket = n if bracket < 0 else bracket
+            close = min(brace, bracket, stop)
             depth += s.count(b"{", k, close) + s.count(b"[", k, close)
             if close == stop:
                 break
@@ -250,9 +257,16 @@ def top_level(raw):
     last, found = _LAST_WALK[0]
     if last is not raw:
         s = plain(raw)
-        found = (s, members(s, _skip_space(s, 0)))
+        found = (s, members(s, _skip_space(s, 3 if s.startswith(b"\xef\xbb\xbf") else 0)))   # past a BOM
         _LAST_WALK[0] = (raw, found)
     return found
+
+
+def _patch_at(s, top):
+    """Where a Codex apply_patch's patch starts: tool_input's own ``command``, or tool_input
+    itself when it is the patch (a string)."""
+    i = top.get(b"tool_input")
+    return i if i is not None and s[i:i + 1] == b'"' else members(s, i).get(b"command")
 
 
 def string_at(raw, i):
@@ -433,7 +447,7 @@ def edit_files(raw, agent):
     tool_input = members(s, top.get(b"tool_input"))
     if agent == b"codex" and tool in PATCH_TOOLS:
         cwd = string_at(raw, top.get(b"cwd"))
-        return patch_files(raw, s, tool_input.get(b"command"), json_unescape(cwd) if cwd else "")
+        return patch_files(raw, s, _patch_at(s, top), json_unescape(cwd) if cwd else "")
     key = EDIT_TOOLS.get(tool)
     token = string_at(raw, tool_input.get(key)) if key else None
     return [json_unescape(token)] if token is not None else []
@@ -540,7 +554,7 @@ def _fields(raw, agent, event, parts, first):
         if token is not None:
             parts.append(b',"file_path":%s' % token)
     elif agent == b"codex" and event in TOOL_EVENTS and tool in PATCH_TOOLS:
-        command = members(s, top.get(b"tool_input")).get(b"command")
+        command = _patch_at(s, top)
         _files(parts, patch_files(raw, s, command, json_unescape(cwd) if cwd else ""), first)
     extra = EVENT_FIELDS.get(event)
     if extra:

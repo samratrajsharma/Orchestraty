@@ -318,3 +318,14 @@ def test_a_patch_names_no_file_from_outside_its_command_before_the_edit(hook_scr
     assert proc.stdout == b"" and (folder / (slots.file_key(bogus) + ".json")).exists()
     _, line = one_line(spool)
     assert line["file_path"] == os.path.join(str(wt), "x.py") and "other_files" not in line
+
+
+def test_a_patch_given_as_the_whole_tool_input_names_its_files(hook_script, spool, tmp_path):
+    wt = tmp_path / "wt"
+    raw = codex("PostToolUse", "s7", wt, tool_name="apply_patch", tool_input=PATCH,
+                tool_response={"output": "*** Add File: " + LEAK}, tool_use_id="call_1")
+    run_hook(hook_script, ["codex", "PostToolUse"], raw)
+    _, line = one_line(spool)
+    names = ["pkg/a.py", "pkg/new file.py", "old.py", "b.py", "c.py"]
+    assert [line["file_path"]] + line["other_files"] == [os.path.join(str(wt), n) for n in names]
+    assert LEAK.encode() not in (spool / "codex" / "s7.jsonl").read_bytes()

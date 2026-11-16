@@ -6,6 +6,7 @@ import subprocess
 import sys
 import textwrap
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -388,3 +389,22 @@ def test_strings_holding_brackets_quotes_and_backslashes_are_skipped_whole():
     assert hook.field(raw, b"cwd") == b'"/real"' and hook.field(raw, b"tool_use_id") == b'"toolu_R"'
     compact = json.dumps(json.loads(raw), separators=(",", ":")).encode()
     assert hook.field(compact, b"cwd") == b'"/real"' and hook.field(compact, b"tool_use_id") == b'"toolu_R"'
+
+
+def test_long_runs_of_brackets_cost_no_more_than_their_length():
+    # a tool's structured rows of numbers: many ] and no string between them
+    raw = json.dumps({"tool_response": {"rows": [[i, i + 1, i + 2] for i in range(200_000)]},
+                      "tool_use_id": "toolu_M"}).encode()
+    started = time.perf_counter()
+    assert hook.field(raw, b"tool_use_id") == b'"toolu_M"'
+    assert time.perf_counter() - started < 1.0                  # it took seconds when each ] scanned to the end
+    raw = json.dumps({"x": [{} for _ in range(100_000)], "y": [[[[1]]]] * 50_000, "cwd": "/w"}).encode()
+    assert hook.field(raw, b"cwd") == b'"/w"'
+
+
+def test_a_payload_that_starts_with_a_byte_order_mark_is_read(hook_script, spool):
+    body = json.dumps({"session_id": "s-bom", "cwd": "/w", "hook_event_name": "PostToolUse", "tool_name": "Bash",
+                       "tool_use_id": "toolu_B"}).encode()
+    run_hook(hook_script, ["claude", "PostToolUse"], b"\xef\xbb\xbf" + body)
+    [(name, line)] = spool_lines(spool)
+    assert name == "s-bom.jsonl" and (line["session_id"], line["cwd"], line["tool_use_id"]) == ("s-bom", "/w", "toolu_B")
