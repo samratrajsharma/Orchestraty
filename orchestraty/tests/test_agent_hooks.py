@@ -257,3 +257,64 @@ def test_the_hooks_overhead_for_each_agent(hook_script, agent, event, raw):
                                   [sys.executable, "-S", "-I", str(hook_script), agent, event]], raw)
     added = took - baseline
     assert added < max(20.0, baseline), f"{agent}: the hook took {took:.1f} ms, a no-op {baseline:.1f} ms"
+
+
+# --------------------------------------------------------------------------------------- #
+# Only the tool's own name and its own file field: never an argument or the tool's output
+# --------------------------------------------------------------------------------------- #
+LEAK = "LEAK-OUTPUT-3c9b"
+
+
+@pytest.mark.parametrize("args_first", [False, True])
+def test_the_antigravity_tool_is_toolcalls_own_name_never_an_arguments(hook_script, spool, args_first):
+    run_hook(hook_script, ["antigravity", "PostToolUse"],
+             ag_tool("PostToolUse", "c5", "/w", "create_memory", {"name": LEAK, "body": SECRET}, args_first))
+    args = {"meta": {"name": LEAK, "TargetFile": "/w/" + LEAK}, "TargetFile": "/w/a.py", "CodeContent": SECRET}
+    run_hook(hook_script, ["antigravity", "PostToolUse"], ag_tool("PostToolUse", "c5", "/w", "write_to_file", args,
+                                                                  args_first))
+    lines = [line for _, line in spool_lines(spool)]
+    assert [line["tool_name"] for line in lines] == ["create_memory", "write_to_file"]
+    assert "file_path" not in lines[0] and lines[1]["file_path"] == "/w/a.py"
+    assert LEAK.encode() not in (spool / "antigravity" / "c5.jsonl").read_bytes()
+
+
+def test_antigravity_reads_its_own_top_level_names_whatever_their_order(hook_script, spool):
+    inner = {"conversationId": LEAK, "workspacePaths": [LEAK], "transcriptPath": LEAK, "TargetFile": LEAK}
+    body = {"toolCall": {"name": "write_to_file", "args": {"CodeContent": SECRET, "x": inner}}, "extra": inner,
+            "conversationId": "c6", "workspacePaths": ["/w"], "transcriptPath": "/t/brain/transcript.jsonl"}
+    run_hook(hook_script, ["antigravity", "PostToolUse"], json.dumps(body).encode())
+    name, line = one_line(spool)
+    assert (name, line["session_id"], line["cwd"], line["transcript_path"]) == ("c6.jsonl", "c6", "/w",
+                                                                                "/t/brain/transcript.jsonl")
+    assert line["tool_name"] == "write_to_file" and "file_path" not in line and LEAK not in json.dumps(line)
+
+
+@pytest.mark.parametrize("response", [
+    {"output": "Failed:\n*** Update File: " + LEAK + " is what you sent\n*** Add File: " + LEAK + "2"},
+    "error\n*** Delete File: " + LEAK + "\n",
+], ids=["object", "string"])
+def test_a_patchs_files_come_from_its_own_command_never_the_tool_output(hook_script, spool, tmp_path, response):
+    wt = tmp_path / "wt"
+    raw = codex("PostToolUse", "s5", wt, tool_name="apply_patch",
+                tool_input={"command": PATCH, "justification": "\n*** Add File: " + LEAK},
+                tool_response=response, tool_use_id="call_1")
+    run_hook(hook_script, ["codex", "PostToolUse"], raw)
+    _, line = one_line(spool)
+    names = ["pkg/a.py", "pkg/new file.py", "old.py", "b.py", "c.py"]
+    assert [line["file_path"]] + line["other_files"] == [os.path.join(str(wt), n) for n in names]
+    assert LEAK.encode() not in (spool / "codex" / "s5.jsonl").read_bytes()
+
+
+def test_a_patch_names_no_file_from_outside_its_command_before_the_edit(hook_script, spool, state_root, tmp_path):
+    wt = tmp_path / "wt"
+    folder = state_root / "notes" / "s6" / "edit"
+    folder.mkdir(parents=True)
+    bogus = os.path.join(str(wt), LEAK)
+    (folder / (slots.file_key(bogus) + ".json")).write_bytes(b"never taken")
+    raw = codex("PreToolUse", "s6", wt, tool_name="apply_patch",
+                tool_input={"command": "*** Begin Patch\n*** Update File: x.py\n*** End Patch",
+                            "justification": "\n*** Update File: " + LEAK}, tool_use_id="call_1")
+    proc = run_hook(hook_script, ["codex", "PreToolUse"], raw)
+    assert proc.stdout == b"" and (folder / (slots.file_key(bogus) + ".json")).exists()
+    _, line = one_line(spool)
+    assert line["file_path"] == os.path.join(str(wt), "x.py") and "other_files" not in line

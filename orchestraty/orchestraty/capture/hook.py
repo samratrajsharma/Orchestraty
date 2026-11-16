@@ -14,10 +14,13 @@ from anywhere else (a folder not named ``hooks``) it does nothing. It appends on
      "cwd": "...", "transcript_path": "...", "file_path": "...", "source": "...",
      "reason": "...", "stop_hook_active": true}
 
-Only those fields are copied from the payload, found with bytes.find and checked to be valid
-JSON values, never parsed; a missing or malformed field is left out. ``tool_name`` and
+Only those fields are copied, each from the payload's own (top-level) members, whatever their
+order: the script walks the bytes and skips each member's value whole, so a key of the same
+name inside a tool's input or output is never read. Values are checked to be valid JSON
+strings, never parsed; a missing or malformed field is left out. ``tool_name`` and
 ``tool_use_id`` are read for tool events only, ``file_path`` only for the tools that edit a
-file (NotebookEdit's ``notebook_path`` is recorded as ``file_path``), ``source`` for
+file, from the tool input's own members (NotebookEdit's ``notebook_path`` is recorded as
+``file_path``), ``source`` for
 SessionStart, ``reason`` for SessionEnd and ``stop_hook_active`` for Stop and SubagentStop.
 The payload itself (prompts, file contents, commands, tool output) is never stored; ``len`` is
 its size.
@@ -27,13 +30,15 @@ most agents copy its shape. Two agents differ (their adapters, ``orchestraty/ada
 the same; a test checks they agree), and the line keeps the names above for them too:
 
 * Codex uses Claude Code's names, but its edit tool, apply_patch, has no file field: the files
-  are on the patch's header lines (``*** Update File: <path>``, and Add File, Delete File, Move
-  to). The line gives the first as ``file_path`` (or the one whose note was taken) and the
+  are on the header lines of the patch, the string ``tool_input.command`` (``*** Update File:
+  <path>``, and Add File, Delete File, Move to; only that string is read, never the tool's
+  output). The line gives the first as ``file_path`` (or the one whose note was taken) and the
   others as ``other_files``, made absolute from ``cwd``.
 * Antigravity's names are camelCase: ``conversationId`` is the session, the first of
-  ``workspacePaths`` the folder, ``transcriptPath`` the transcript; the tool is
-  ``toolCall.name``, and an edit tool names its file in ``toolCall.args`` (``TargetFile``, or
-  ``file_path`` or ``path``), a ``file://`` URI made a path.
+  ``workspacePaths`` the folder, ``transcriptPath`` the transcript; the tool is toolCall's own
+  ``name`` (never a name among its args), and an edit tool names its file among
+  ``toolCall.args``' own members (``TargetFile``, or ``file_path`` or ``path``), a ``file://``
+  URI made a path.
 
 Silent and fail-open: it prints nothing but a note, and always exits 0. An internal failure
 appends one ``{"shim_error": "<exception class>"}`` line instead, so failures show up in the
@@ -89,13 +94,9 @@ import sys
 import time
 
 FIELDS = (b"session_id", b"hook_event_name", b"tool_name", b"tool_use_id", b"cwd", b"transcript_path")
-# Where the keys sit in real payloads (recorded from Claude Code 2.1.283): session_id,
-# transcript_path, cwd, hook_event_name and tool_name come before tool_input and
-# tool_response, so their first occurrence is the top-level one. tool_use_id comes after them,
-# so a nested key of that name inside tool_input or tool_response would come first: it is
-# taken from its last occurrence. file_path is the first key of that name: tool_input comes
-# before tool_response, and an edit tool's input holds no nested objects with that key.
-LAST = (b"tool_use_id",)
+# Each is read from the payload's own (top-level) members, whatever their order, and an edit
+# tool's file from tool_input's own: a key of the same name inside a tool's input or output
+# is never read, since the walk over an object's members skips each value whole.
 TOOL_FIELDS = (b"tool_name", b"tool_use_id")
 TOOL_EVENTS = (b"PreToolUse", b"PostToolUse", b"PostToolUseFailure")
 EDIT_TOOLS = {b'"Edit"': b"file_path", b'"Write"': b"file_path", b'"MultiEdit"': b"file_path",
@@ -169,62 +170,125 @@ def _string_token(raw, j):
     return None
 
 
-def _value_at(raw, key, last, start=0):
-    """The index just past `"key":` and its spaces for the first (or last) such key from
-    `start` on, or -1. A "key" not followed by a colon (for example the word used as a value)
-    is skipped. Keys inside string values cannot match: their quotes are escaped there."""
-    needle = b'"' + key + b'"'
-    end = len(raw)
+def plain(raw):
+    """raw with each escaped backslash and escaped quote made two underscores: the same length,
+    so an index means the same in both, and every quote left in it starts or ends a string."""
+    return raw.replace(b"\\\\", b"__").replace(b'\\"', b"__")
+
+
+def _skip_space(s, k):
+    while k < len(s) and s[k] in _SPACE:
+        k += 1
+    return k
+
+
+def value_end(s, j):
+    """The index just past the JSON value that starts at s[j] (s: the payload made plain), or -1.
+    A string ends at its next quote; an object or an array where its brackets close, counting
+    only the brackets between its strings."""
+    c = s[j:j + 1]
+    if c == b'"':
+        k = s.find(b'"', j + 1)
+        return k + 1 if k >= 0 else -1
+    if c != b"{" and c != b"[":                     # a number, true, false or null
+        k = j
+        while k < len(s) and s[k] not in b",}] \t\r\n":
+            k += 1
+        return k if k > j else -1
+    depth, k = 0, j
     while True:
-        i = raw.rfind(needle, start, end) if last else raw.find(needle, start)
-        if i < 0:
+        q = s.find(b'"', k)
+        stop = len(s) if q < 0 else q
+        while True:                                 # the brackets before that string
+            c1, c2 = s.find(b"}", k, stop), s.find(b"]", k, stop)
+            close = min(c1 if c1 >= 0 else stop, c2 if c2 >= 0 else stop)
+            depth += s.count(b"{", k, close) + s.count(b"[", k, close)
+            if close == stop:
+                break
+            depth -= 1
+            if depth == 0:
+                return close + 1
+            k = close + 1
+        if q < 0:
             return -1
-        j = i + len(needle)
-        while j < len(raw) and raw[j] in _SPACE:
-            j += 1
-        if j < len(raw) and raw[j] == 58:        # ':'
-            j += 1
-            while j < len(raw) and raw[j] in _SPACE:
-                j += 1
-            return j
-        if last:
-            end = i
-        else:
-            start = i + 1
+        k = s.find(b'"', q + 1) + 1                 # past that string
+        if k == 0:
+            return -1
 
 
-def field(raw, key, last=False, start=0):
-    """The raw JSON string value of the first (or, with last=True, the last) `"key": "..."` in
-    raw from `start` on, quotes included, or None when that key's value is not a valid string."""
-    j = _value_at(raw, key, last, start)
-    if j < 0 or j >= len(raw) or raw[j] != 34:
+def members(s, j):
+    """{key: index of its value} for the members of the JSON object that starts at s[j] (s: the
+    payload made plain), the first of each key; {} when no object starts there. Only that
+    object's own members: each value is skipped whole, so a key inside one is never seen."""
+    found = {}
+    if j is None or s[j:j + 1] != b"{":
+        return found
+    k = _skip_space(s, j + 1)
+    while s[k:k + 1] == b'"':
+        end = s.find(b'"', k + 1)
+        v = _skip_space(s, end + 1) if end >= 0 else len(s)
+        if s[v:v + 1] != b":":
+            break
+        v = _skip_space(s, v + 1)
+        found.setdefault(s[k + 1:end], v)
+        k = value_end(s, v)
+        if k < 0:
+            break
+        k = _skip_space(s, k)
+        if s[k:k + 1] != b",":
+            break
+        k = _skip_space(s, k + 1)
+    return found
+
+
+_LAST_WALK = [(None, None)]     # (payload, what top_level found for it): the hook reads one payload
+
+
+def top_level(raw):
+    """(raw made plain, the payload's own members): where every reader starts. The payload
+    last walked is kept, so the readers of one event walk it once."""
+    last, found = _LAST_WALK[0]
+    if last is not raw:
+        s = plain(raw)
+        found = (s, members(s, _skip_space(s, 0)))
+        _LAST_WALK[0] = (raw, found)
+    return found
+
+
+def string_at(raw, i):
+    """The JSON string token at raw[i], quotes included, or None: no index, or not a valid
+    string of at most MAX_FIELD bytes."""
+    if i is None or raw[i:i + 1] != b'"':
         return None
-    return _string_token(raw, j)
+    return _string_token(raw, i)
 
 
-def first_item(raw, key):
-    """The raw JSON string value of the first item of `"key": ["...", ...]`, or None."""
-    j = _value_at(raw, key, False)
-    if j < 0 or j >= len(raw) or raw[j] != 91:  # '['
+def first_string(raw, i):
+    """The first item of the JSON array at raw[i] when it is a string, or None."""
+    if i is None or raw[i:i + 1] != b"[":
         return None
-    j += 1
-    while j < len(raw) and raw[j] in _SPACE:
-        j += 1
-    if j >= len(raw) or raw[j] != 34:
+    return string_at(raw, _skip_space(raw, i + 1))
+
+
+def flag_at(raw, i):
+    """True or False for the JSON true or false at raw[i], or None."""
+    if i is None:
         return None
-    return _string_token(raw, j)
+    for word, value in ((b"true", True), (b"false", False)):
+        after = i + len(word)
+        if raw[i:after] == word and (after == len(raw) or raw[after] in b" \t\r\n,}"):
+            return value
+    return None
+
+
+def field(raw, key):
+    """The raw JSON string value of the payload's own `"key": "..."`, quotes included, or None."""
+    return string_at(raw, top_level(raw)[1].get(key))
 
 
 def flag(raw, key):
-    """True or False for the first `"key": true|false` in raw, or None."""
-    j = _value_at(raw, key, False)
-    if j < 0:
-        return None
-    for word, value in ((b"true", True), (b"false", False)):
-        after = j + len(word)
-        if raw[j:after] == word and (after == len(raw) or raw[after] in b" \t\r\n,}"):
-            return value
-    return None
+    """True or False for the payload's own `"key": true|false`, or None."""
+    return flag_at(raw, top_level(raw)[1].get(key))
 
 
 def json_unescape(token):
@@ -325,42 +389,37 @@ def _patch_path(raw, s):
     return json_unescape(token).strip() or None
 
 
-def patch_files(raw, cwd=""):
-    """The files the patch of an apply_patch payload changes, in order (at most
-    MAX_PATCH_FILES), each made absolute from `cwd`. Every header line starts after a newline,
-    which the JSON string holds as \\n: an odd run of backslashes before that n."""
-    start = _value_at(raw, b"tool_input", False)
+def patch_files(raw, s, command, cwd=""):
+    """The files the patch in the JSON string at raw[command] (tool_input.command) changes, in
+    order (at most MAX_PATCH_FILES), each made absolute from `cwd`; s is raw made plain. Only
+    that string is read. Every header line starts after a newline, which the string holds as
+    \\n; in s, a backslash left always starts an escape."""
     files = []
-    i = start
-    while start >= 0 and len(files) < MAX_PATCH_FILES:
-        i = raw.find(b"\\n*** ", i)
+    if command is None or s[command:command + 1] != b'"':
+        return files
+    end, i = value_end(s, command), command
+    while end > 0 and len(files) < MAX_PATCH_FILES:
+        i = s.find(b"\\n*** ", i, end)
         if i < 0:
             break
-        k = i
-        while k > start and raw[k - 1] == 92:
-            k -= 1
         j = i + 6
-        if (i - k) % 2 == 0:
-            for header in PATCH_HEADERS:
-                if raw.startswith(header, j):
-                    path = _patch_path(raw, j + len(header))
-                    if path and cwd and not os.path.isabs(path):
-                        path = os.path.join(cwd, path)
-                    if path and path not in files:
-                        files.append(path)
-                    break
+        for header in PATCH_HEADERS:
+            if raw.startswith(header, j):
+                path = _patch_path(raw, j + len(header))
+                if path and cwd and not os.path.isabs(path):
+                    path = os.path.join(cwd, path)
+                if path and path not in files:
+                    files.append(path)
+                break
         i = j
     return files
 
 
-def _args_path(raw, call, keys):
-    """The file an Antigravity edit tool names in toolCall.args (`call`: where toolCall's value
-    starts), a file:// URI made a path, or None."""
-    args = _value_at(raw, b"args", False, call)
-    if args < 0:
-        return None
+def _args_path(raw, args, keys):
+    """The file an Antigravity edit tool names in toolCall.args (`args`: its members), a file://
+    URI made a path, or None."""
     for key in keys:
-        token = field(raw, key, start=args)
+        token = string_at(raw, args.get(key))
         if token is not None:
             return uri_path(json_unescape(token)) or None
     return None
@@ -369,12 +428,14 @@ def _args_path(raw, call, keys):
 def edit_files(raw, agent):
     """The files the tool of an edit event changes, for the agents that take edit notes: []
     when it is not an edit tool."""
-    tool = field(raw, b"tool_name")
+    s, top = top_level(raw)
+    tool = string_at(raw, top.get(b"tool_name"))
+    tool_input = members(s, top.get(b"tool_input"))
     if agent == b"codex" and tool in PATCH_TOOLS:
-        cwd = field(raw, b"cwd")
-        return patch_files(raw, json_unescape(cwd) if cwd else "")
+        cwd = string_at(raw, top.get(b"cwd"))
+        return patch_files(raw, s, tool_input.get(b"command"), json_unescape(cwd) if cwd else "")
     key = EDIT_TOOLS.get(tool)
-    token = field(raw, key) if key else None
+    token = string_at(raw, tool_input.get(key)) if key else None
     return [json_unescape(token)] if token is not None else []
 
 
@@ -457,13 +518,14 @@ def event_line(raw, agent, event, now_ns, pid, first=None):
 def _fields(raw, agent, event, parts, first):
     """Claude Code's names (Codex's, and those of an agent this script does not know), added to
     the line's parts. Returns the session id."""
+    s, top = top_level(raw)
     session = b""
     tool = cwd = None
     not_a_tool_event = bool(event) and event not in TOOL_EVENTS
     for key in FIELDS:
         if not_a_tool_event and key in TOOL_FIELDS:
             continue
-        token = field(raw, key, last=key in LAST)
+        token = string_at(raw, top.get(key))
         if token is not None:
             parts.append(b',"%s":%s' % (key, token))
             if key == b"session_id":
@@ -474,18 +536,19 @@ def _fields(raw, agent, event, parts, first):
                 cwd = token
     path_key = EDIT_TOOLS.get(tool) if event in TOOL_EVENTS else None
     if path_key:
-        token = field(raw, path_key)
+        token = string_at(raw, members(s, top.get(b"tool_input")).get(path_key))
         if token is not None:
             parts.append(b',"file_path":%s' % token)
     elif agent == b"codex" and event in TOOL_EVENTS and tool in PATCH_TOOLS:
-        _files(parts, patch_files(raw, json_unescape(cwd) if cwd else ""), first)
+        command = members(s, top.get(b"tool_input")).get(b"command")
+        _files(parts, patch_files(raw, s, command, json_unescape(cwd) if cwd else ""), first)
     extra = EVENT_FIELDS.get(event)
     if extra:
-        token = field(raw, extra)
+        token = string_at(raw, top.get(extra))
         if token is not None:
             parts.append(b',"%s":%s' % (extra, token))
     if event in FLAG_EVENTS:
-        value = flag(raw, b"stop_hook_active")
+        value = flag_at(raw, top.get(b"stop_hook_active"))
         if value is not None:
             parts.append(b',"stop_hook_active":%s' % (b"true" if value else b"false"))
     return session
@@ -504,23 +567,24 @@ def _files(parts, files, first=None):
 
 def _antigravity_fields(raw, event, parts):
     """Antigravity's names, added to the line's parts under the line's own. Returns the session id."""
+    s, top = top_level(raw)
     session = b""
-    token = field(raw, AG_SESSION)
+    token = string_at(raw, top.get(AG_SESSION))
     if token is not None:
         parts.append(b',"session_id":%s' % token)
         session = token[1:-1]
-    call = _value_at(raw, b"toolCall", False) if event in AG_TOOL_EVENTS else -1
-    tool = field(raw, b"name", start=call) if call >= 0 else None
+    call = members(s, top.get(b"toolCall")) if event in AG_TOOL_EVENTS else {}
+    tool = string_at(raw, call.get(b"name"))         # toolCall's own name, never one in its args
     if tool is not None:
         parts.append(b',"tool_name":%s' % tool)
-    token = first_item(raw, AG_CWD)
+    token = first_string(raw, top.get(AG_CWD))
     if token is not None:
         parts.append(b',"cwd":%s' % token)
-    token = field(raw, AG_TRANSCRIPT)
+    token = string_at(raw, top.get(AG_TRANSCRIPT))
     if token is not None:
         parts.append(b',"transcript_path":%s' % token)
     keys = AG_EDIT_TOOLS.get(tool)
-    path = _args_path(raw, call, keys) if keys else None
+    path = _args_path(raw, members(s, call.get(b"args")), keys) if keys else None
     if path:
         parts.append(b',"file_path":' + json_string(path))
     return session

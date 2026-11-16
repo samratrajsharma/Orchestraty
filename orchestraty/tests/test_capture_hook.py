@@ -71,6 +71,14 @@ def test_a_large_payload_is_fine(hook_script, spool):
     assert proc.returncode == 0 and proc.stdout == b"" and proc.stderr == b""
     [(_, line)] = spool_lines(spool)
     assert line["len"] == len(data) and line["tool_use_id"] == "toolu_01ABC"
+    # output dense with quotes, backslashes and brackets, the event's own field after it
+    dense = json.dumps({"session_id": "s-dense", "hook_event_name": "PostToolUse", "tool_name": "Bash",
+                        "tool_response": {"output": json.dumps([{"k": 'a"b\\c', "v": ["}", "{", '"']}] * 50_000)},
+                        "tool_use_id": "toolu_DENSE"}).encode()
+    proc = run_hook(hook_script, ["claude", "PostToolUse"], dense)
+    assert proc.returncode == 0 and proc.stdout == b"" and proc.stderr == b""
+    [line] = [x for _, x in spool_lines(spool) if x.get("session_id") == "s-dense"]
+    assert line["tool_use_id"] == "toolu_DENSE" and "shim_error" not in line
 
 
 def test_without_an_agent_it_writes_nothing_and_stays_silent(hook_script, state_root):
@@ -158,12 +166,13 @@ def test_tool_fields_are_read_only_for_tool_events(hook_script, spool):
     assert not {"tool_name", "tool_use_id", "file_path"} & set(line)
 
 
-def test_the_last_occurrence_skips_the_word_used_as_a_value():
+def test_a_key_is_read_only_as_a_member_of_the_payload_itself():
     raw = b'{"tool_use_id": "toolu_1", "note": "tool_use_id", "x": {"tool_use_id": 5}, "y": "\\"tool_use_id\\""}'
-    assert hook.field(raw, b"tool_use_id", last=True) is None          # the last key has no string value
+    assert hook.field(raw, b"tool_use_id") == b'"toolu_1"'
     raw = b'{"a": {"tool_use_id": "nested"}, "tool_use_id": "toolu_2", "note": "tool_use_id"}'
-    assert hook.field(raw, b"tool_use_id", last=True) == b'"toolu_2"'
-    assert hook.field(raw, b"tool_use_id") == b'"nested"'                 # why first would be wrong
+    assert hook.field(raw, b"tool_use_id") == b'"toolu_2"'
+    raw = b'{"tool_use_id": 5, "x": {"tool_use_id": "nested"}}'
+    assert hook.field(raw, b"tool_use_id") is None                       # the payload's own is not a string
 
 
 def test_unicode_and_escapes_survive_as_valid_json(hook_script, spool):
@@ -314,3 +323,68 @@ def test_parallel_hook_runs_into_one_session_file_lose_nothing(hook_script, spoo
     lines = spool_lines(spool)
     assert sorted(line["tool_use_id"] for _, line in lines) == sorted(
         f"toolu_{k}_{i}" for k in range(5) for i in range(20))
+
+
+# --------------------------------------------------------------------------------------- #
+# Only the payload's own members: never a key inside the tool's input or output
+# --------------------------------------------------------------------------------------- #
+NESTED = "SECRET-NESTED-7f3a"
+
+
+@pytest.mark.parametrize("body,gone", [
+    ({"session_id": "s1", "transcript_path": "/t.jsonl", "hook_event_name": "PostToolUse", "tool_name": "Bash",
+      "tool_input": {"command": "ls", "cwd": NESTED}, "tool_response": {}, "tool_use_id": "toolu_1"}, "cwd"),
+    ({"transcript_path": "/t.jsonl", "cwd": "/w", "hook_event_name": "PostToolUse", "tool_name": "mcp__x__y",
+      "tool_input": {"session_id": NESTED}, "tool_response": {}, "tool_use_id": "toolu_1"}, "session_id"),
+    ({"session_id": "s1", "cwd": "/w", "hook_event_name": "PostToolUse", "tool_name": "Edit",
+      "tool_input": {"old_string": "a", "new_string": "b"}, "tool_response": {"file_path": NESTED},
+      "tool_use_id": "toolu_1"}, "file_path"),
+    ({"session_id": "s1", "cwd": "/w", "hook_event_name": "PostToolUse",
+      "tool_input": {"tool_name": NESTED, "transcript_path": NESTED}, "tool_use_id": "toolu_1"}, "tool_name"),
+], ids=["cwd", "session", "edit-file", "tool-and-transcript"])
+def test_a_missing_top_level_field_is_never_taken_from_inside_the_tool(hook_script, spool, body, gone):
+    run_hook(hook_script, ["claude", "PostToolUse"], json.dumps(body).encode())
+    [(name, line)] = spool_lines(spool)
+    assert gone not in line and NESTED not in json.dumps(line) and NESTED not in name
+
+
+@pytest.mark.parametrize("order", ["use-id-first", "response-first", "nested-edit-file-first"])
+def test_any_key_order_gives_the_top_level_values(hook_script, spool, order):
+    tool_input = {"file_path": "/w/real.py", "old_string": "a", "new_string": "b"}
+    response = {"file_path": "/w/response.py", "tool_use_id": "toolu_NESTED", "structuredContent": [DECOY]}
+    if order == "use-id-first":
+        body = dict(session_id="s1", cwd="/w", hook_event_name="PostToolUse", tool_name="Edit", tool_use_id="toolu_TOP",
+                    tool_input=tool_input, tool_response=response)
+    elif order == "response-first":
+        body = dict(tool_response=response, session_id="s1", cwd="/w", hook_event_name="PostToolUse", tool_name="Edit",
+                    tool_input=tool_input, tool_use_id="toolu_TOP")
+    else:
+        body = dict(session_id="s1", cwd="/w", hook_event_name="PostToolUse", tool_name="MultiEdit",
+                    tool_input={"edits": [{"file_path": "/w/inner.py", "old_string": "a"}], "file_path": "/w/real.py"},
+                    tool_use_id="toolu_TOP")
+    run_hook(hook_script, ["claude", "PostToolUse"], json.dumps(body).encode())
+    [(_, line)] = spool_lines(spool)
+    assert (line["session_id"], line["cwd"], line["tool_use_id"], line["file_path"]) == ("s1", "/w", "toolu_TOP",
+                                                                                         "/w/real.py")
+
+
+def test_a_nested_stop_flag_or_source_is_not_the_events_own(hook_script, spool, state_root):
+    folder = state_root / "notes" / "s1"
+    folder.mkdir(parents=True)
+    (folder / "stop.json").write_bytes(b'{"decision":"block","reason":"callers left"}')
+    stop = {"session_id": "s1", "background_tasks": [{"stop_hook_active": True}], "stop_hook_active": False}
+    proc = run_hook(hook_script, ["claude", "Stop"], json.dumps(stop).encode())
+    assert proc.stdout == b'{"decision":"block","reason":"callers left"}'          # the top-level flag is false
+    run_hook(hook_script, ["claude", "SessionStart"], json.dumps({"session_id": "s1", "x": {"source": NESTED}}).encode())
+    lines = {line["event"]: line for _, line in spool_lines(spool)}
+    assert lines["Stop"]["stop_hook_active"] is False and "source" not in lines["SessionStart"]
+
+
+def test_strings_holding_brackets_quotes_and_backslashes_are_skipped_whole():
+    tricky = 'a\\" } ] { [ "cwd": "x" \\\\'
+    raw = json.dumps({"tool_input": {"content": tricky, "list": ['"', "\\", "}", "]", {"cwd": "nested"}]},
+                      "tool_response": "\\\\\"", "empty": {}, "n": [1, [2, [3]], {"a": []}], "flag": True,
+                      "cwd": "/real", "tool_use_id": "toolu_R"}).encode()
+    assert hook.field(raw, b"cwd") == b'"/real"' and hook.field(raw, b"tool_use_id") == b'"toolu_R"'
+    compact = json.dumps(json.loads(raw), separators=(",", ":")).encode()
+    assert hook.field(compact, b"cwd") == b'"/real"' and hook.field(compact, b"tool_use_id") == b'"toolu_R"'
