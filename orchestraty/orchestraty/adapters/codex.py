@@ -144,7 +144,7 @@ def other_states(config, script):
                 command = hook.get("command") if isinstance(hook, dict) else None
                 shaped = _SHAPE.search(command) if isinstance(command, str) else None
                 if shaped and not shell.mentions(command, script):
-                    root = os.path.dirname(os.path.dirname(shaped.group("script")))
+                    root = shell.long_path(os.path.dirname(os.path.dirname(shaped.group("script"))))
                     if root not in found:
                         found.append(root)
     return found

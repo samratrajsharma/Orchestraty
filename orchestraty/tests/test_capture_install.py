@@ -2,6 +2,7 @@
 synthetic and lives in tmp_path."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -362,3 +363,31 @@ def test_only_the_shape_orch_init_writes_counts_as_another_state_folders(state):
     for args in (["-S", "-I", other, "codex", "Stop"], ["-S", other, "claude", "Stop"], ["-S", "-I", "hook.py", "claude"],
                  ["-S", "-I", other.replace("hook.py", "mine.py"), "claude", "Stop"]):
         assert ins.other_states(settings(args), state.hook_script) == [], args
+
+
+def test_a_program_that_does_not_run_as_python_3_10_is_refused(state, settings, tmp_path):
+    git = shutil.which("git")                  # a real program, absolute, an .exe on Windows: not a Python
+    if git is None:
+        pytest.skip("git not available on PATH")
+    bad = [os.path.abspath(git)]
+    if os.name != "nt":
+        old = tmp_path / "python3.9"
+        old.write_text("#!/bin/sh\nprintf 3.9\n", encoding="utf-8")
+        os.chmod(old, 0o755)
+        bad.append(str(old))
+    for python in bad:
+        with pytest.raises(ins.Refused, match="Python 3.10 or later"):
+            ins.install(state, str(settings), python)
+        with pytest.raises(ins.Refused, match="Python 3.10 or later"):
+            ins.install_for_plugin(state, str(settings), python)
+    assert not settings.exists()
+    assert ins.python_version(sys.executable) == tuple(sys.version_info[:2])
+
+
+def test_orch_init_refuses_an_empty_or_wrong_python_with_exit_2(settings, capsys):
+    git = shutil.which("git")
+    for python in ([""] + ([os.path.abspath(git)] if git else [])):
+        for agent in ("claude", "codex"):
+            assert cli.main(["init", "--agent", agent, "--yes", "--no-git-hooks", "--python", python]) == 2
+            assert "orch init:" in capsys.readouterr().err
+    assert not settings.exists() and not (Path(os.environ["CODEX_HOME"]) / "hooks.json").exists()

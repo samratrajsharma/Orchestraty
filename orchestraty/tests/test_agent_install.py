@@ -3,6 +3,7 @@ already there, idempotent, backed up first, Codex's trust state left alone, and 
 untouched on restore. The installed command lines run the real hook script."""
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -219,3 +220,34 @@ def test_codex_init_with_another_state_folder_takes_the_earlier_hooks_out(state,
             assert codex.other_states(config, state.hook_script) == [str(old)], line
             assert codex.without_others(config, state.hook_script) == {}
 
+
+def test_the_command_line_quotes_in_double_quotes_when_the_program_needs_none():
+    script = r"C:\Users\Jo O'Neil\.orchestraty\hooks\hook.py"
+    argv = [r"C:\Python312\python.exe", "-S", "-I", script, "codex", "Stop"]
+    assert shell.command_line(argv, windows=True, shorten=lambda p: p) == (     # read by cmd and PowerShell
+        rf'C:\Python312\python.exe -S -I "{script}" codex Stop')
+    for odd in (r"C:\Users\a $b\hook.py", r"C:\Users\a %b%\hook.py", r"C:\Users\a `b\hook.py"):
+        line = shell.command_line(argv[:3] + [odd] + argv[4:], windows=True, shorten=lambda p: p)
+        assert line.startswith("& ") and "'" + odd + "'" in line              # one of them would expand it
+    assert shell.mentions(shell.command_line(argv, windows=True, shorten=lambda p: p), script)
+
+
+def test_a_state_folder_with_a_space_gets_its_command_line_from_the_first_init(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ORCH_HOME", str(tmp_path / "fresh state"))          # not there yet
+    state = State()
+    home = Path(os.environ["CODEX_HOME"])
+    assert cli.main(["init", "--agent", "codex", "--yes", "--no-git-hooks"]) == 0
+    first = read(home / "hooks.json")
+    assert cli.main(["init", "--agent", "codex", "--yes", "--no-git-hooks"]) == 0
+    assert "nothing changed" in capsys.readouterr().out                     # the same line: no new trust needed
+    assert read(home / "hooks.json") == first and backups(state) == []
+    command = first["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    payload = json.dumps({"session_id": "cx2", "cwd": str(tmp_path), "hook_event_name": "SessionStart",
+                          "source": "startup"}).encode()
+    proc = run_command(command, payload)                                    # cmd on Windows, sh elsewhere
+    assert (proc.returncode, proc.stdout) == (0, b""), proc.stderr
+    assert (Path(state.root) / "spool" / "codex" / "cx2.jsonl").exists()
+    if os.name == "nt" and shutil.which("powershell"):
+        proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", command], input=payload,
+                              capture_output=True, timeout=120)
+        assert proc.returncode == 0, proc.stderr

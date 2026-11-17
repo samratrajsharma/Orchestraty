@@ -153,3 +153,56 @@ def test_orch_config_steer_and_wake(state, repo, monkeypatch, capsys, tmp_path):
     stop = __import__("json").loads(settings.read_text(encoding="utf-8"))["hooks"]["Stop"]
     assert [e["hooks"][0]["args"][-1] for e in stop] == ["Stop"]
     assert cli.main(["config", "wake"]) == 0 and capsys.readouterr().out == "wake: off\n"
+
+
+# --------------------------------------------------------------------------------------- #
+# The earlier folder: as git works it out, and every hook in it, also ones added later
+# --------------------------------------------------------------------------------------- #
+@pytest.mark.parametrize("scope", ["global", "local"])
+def test_a_hooks_path_with_a_tilde_keeps_running_and_uninstall_puts_back_only_its_own(state, repo, remote, hook_script,
+                                                                                    tmp_path, scope):
+    marker = (tmp_path / "theirs.log").as_posix()
+    write_hook(Path(os.environ["HOME"]) / "ghooks" / "pre-push", f'echo theirs >> "{marker}"\nexit 1\n')
+    where = ["--global"] if scope == "global" else []
+    subprocess.run(["git", "config"] + where + ["core.hooksPath", "~/ghooks"], cwd=repo, check=True)
+    githooks.install(str(repo), sys.executable, str(hook_script))
+    proc = push(repo, remote)
+    assert proc.returncode != 0 and Path(marker).exists(), "the user's own pre-push runs, and its exit code decides"
+    assert githooks.uninstall(str(repo)) is True
+    local = subprocess.run(["git", "config", "--local", "--get", "core.hooksPath"], cwd=repo, capture_output=True,
+                           text=True)
+    assert local.stdout.strip() == ("~/ghooks" if scope == "local" else "")   # a global value stays global
+
+
+def test_a_hook_added_to_the_earlier_folder_after_install_still_runs(state, repo, hook_script, tmp_path):
+    githooks.install(str(repo), sys.executable, str(hook_script))
+    write_hook(repo / ".git" / "hooks" / "commit-msg", "exit 1\n")         # by hand, or by a tool, afterwards
+    (repo / "c.py").write_text("c = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "c.py"], cwd=repo, check=True, capture_output=True)
+    proc = subprocess.run(["git", "-c", "user.name=T", "-c", "user.email=t@e", "commit", "-q", "-m", "c"], cwd=repo,
+                          capture_output=True)
+    assert proc.returncode != 0, "a commit-msg hook added after the chain must still decide"
+
+
+def test_a_hook_with_no_pass_through_ahead_of_time_is_named_and_orch_init_adds_it(state, repo, monkeypatch, capsys):
+    from orchestraty import doctor
+    monkeypatch.chdir(repo)
+    assert cli.main(["init", "--yes"]) == 0
+    assert githooks.unchained(str(repo)) == [] and doctor.git_hooks_check(str(repo)) is None
+    write_hook(repo / ".git" / "hooks" / "reference-transaction", "exit 0\n")
+    assert githooks.unchained(str(repo)) == ["reference-transaction"]
+    assert "reference-transaction" in doctor.git_hooks_check(str(repo)).text
+    assert cli.main(["init", "--yes"]) == 0
+    assert "already in this repository's git hooks" in capsys.readouterr().out
+    assert githooks.unchained(str(repo)) == [] and githooks.installed(str(repo))
+
+
+def test_a_pass_through_whose_hook_is_gone_and_that_git_would_obey_is_taken_out_again(state, repo, hook_script):
+    hooks = repo / ".git" / "hooks"
+    write_hook(hooks / "push-to-checkout", "exit 0\n")                   # its presence replaces git's own update
+    chain = Path(githooks.install(str(repo), sys.executable, str(hook_script)))
+    assert (chain / "push-to-checkout").exists() and (chain / githooks.ORIGINAL_FILE).exists()
+    (hooks / "push-to-checkout").unlink()
+    githooks.install(str(repo), sys.executable, str(hook_script))
+    assert not (chain / "push-to-checkout").exists() and (chain / "commit-msg").exists()
+    assert (chain / githooks.ORIGINAL_FILE).exists()

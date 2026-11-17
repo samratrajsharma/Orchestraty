@@ -374,6 +374,21 @@ def git_check(output=None):
     return ok(f"git {shown}")
 
 
+def git_hooks_check(cwd):
+    """A problem when the repository holding `cwd` has the push line and a hook added since that
+    its chain does not run yet (``githooks.unchained``); else None."""
+    from orchestraty import gitio
+    from orchestraty.capture import githooks
+    try:
+        missing = githooks.unchained(cwd) if gitio.worktree_info(cwd) else []
+    except (gitio.GitError, gitio.UntrustedRepositoryError):
+        return None
+    if not missing:
+        return None
+    return problem(f"git hooks: {', '.join(missing)} added since the push line was, so git does not run "
+                   f"{'it' if len(missing) == 1 else 'them'}", "run orch init again in this repository")
+
+
 def engine_check():
     try:
         import orch_engine
@@ -425,6 +440,9 @@ def checks(state, cwd, index=True, say=None):
     yield from agent_checks(state, cfg)
     yield coordinator_check(state)
     yield git_check()
+    hooks_line = git_hooks_check(cwd)
+    if hooks_line:
+        yield hooks_line
     yield engine_check()
     if index:
         yield index_check(cwd, say)

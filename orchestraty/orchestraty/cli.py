@@ -53,7 +53,7 @@ def cmd_init(args):
         return _init_agent(args)
     state = State()
     path = _settings_target(args)
-    python = args.python or hooks.hook_python()
+    python = hooks.hook_python() if args.python is None else args.python    # --python "" is refused
     wake = config.load(state)["wake"]
     if args.print:
         print(json.dumps({"hooks": hooks.hook_block(python, state.hook_script, wake)}, indent=2))
@@ -187,7 +187,7 @@ def _init_agent(args):
     state = State()
     adapter = adapters.get(args.agent)
     path = _agent_target(args)
-    python = args.python or hooks.hook_python()
+    python = hooks.hook_python() if args.python is None else args.python    # --python "" is refused
     block = adapter.hook_block(python, state.hook_script)
     if args.print:
         print(json.dumps(block, indent=2))
@@ -285,13 +285,15 @@ def _git_chain_here(state, python, assume_yes):
         if gitio.worktree_info(os.getcwd()) is None:
             return
         if githooks.installed(os.getcwd()):
+            githooks.install(os.getcwd(), python, state.hook_script)    # again: passes through hooks added since
             print("The push line is already in this repository's git hooks.")
             return
     except (gitio.GitError, gitio.UntrustedRepositoryError):
         return
     print("The push line: before each push, git prints one line when this push leaves callers of a")
     print("changed function behind. It sets core.hooksPath in this repository's own git config to a")
-    print("folder inside .git; the hooks you have keep running, and their exit codes still decide.")
+    print("folder inside .git; the hooks you have, and ones added to that folder later, keep running,")
+    print("and their exit codes still decide.")
     if not confirm("Add it?", assume_yes):
         print("No git hooks changed (orch init --no-git-hooks skips this question).")
         return
@@ -1163,7 +1165,8 @@ def build_parser():
     init = commands.add_parser("init", help="install the hooks into an agent (Claude Code unless --agent)",
                                description="Install the hook script and an agent's hook entries.")
     _add_target_options(init)
-    init.add_argument("--python", metavar="PATH", help="the interpreter the hooks run (default: this one's base)")
+    init.add_argument("--python", metavar="PATH", help="the absolute path of a Python 3.10 or later for the hooks (default: this one's base); "
+                                                         "orch init runs it once to check")
     init.add_argument("--print", action="store_true", help="only print the hook entries to add by hand")
     init.add_argument("--no-git-hooks", action="store_true", help="do not offer the push line in git's hooks")
     init.add_argument("--no-mod", action="store_true", help="do not load Orchestraty's Claude Code mod")

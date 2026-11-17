@@ -13,7 +13,9 @@ plugin installed, the plugin holds those hooks: ``install_for_plugin`` turns the
 """
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import time
 
@@ -26,6 +28,7 @@ from orchestraty.adapters.claude import (AGENT, EDIT_MATCHER, EVENTS, MATCHERS, 
 HOOK_SOURCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook.py")
 BACKUP_NAME = "settings.json"
 BACKUP_SOURCE = "source.txt"
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class Refused(Exception):
@@ -54,11 +57,31 @@ def _is_link(path):
     return (st.st_mode & 0o170000) == 0o120000 or bool(getattr(st, "st_reparse_tag", 0) & 0x20000000)
 
 
+def python_version(python):
+    """(major, minor) of the Python at `python`, run as the hooks run it (-S -I), or None when it
+    does not run as one (another program, a broken install, no answer in 30 seconds)."""
+    probe = "import sys; sys.stdout.write('%d.%d' % sys.version_info[:2])"
+    try:
+        proc = subprocess.run([python, "-S", "-I", "-c", probe], capture_output=True, timeout=30,
+                              stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = re.fullmatch(rb"(\d+)\.(\d+)", proc.stdout.strip())
+    return (int(m.group(1)), int(m.group(2))) if proc.returncode == 0 and m else None
+
+
 def check_python(python):
     if not python or not os.path.isabs(python) or not os.path.isfile(python):
         raise Refused("the hook interpreter must be the absolute path of an existing Python")
     if os.name == "nt" and not python.lower().endswith(".exe"):
         raise Refused("hooks in exec form on Windows need a real .exe")
+    if _same(python, sys.executable) or _same(python, hook_python()):
+        return                                    # this one runs: orch runs in it
+    version = python_version(python)
+    if version is None or version < (3, 10):
+        said = "Python %d.%d" % version if version else "not a Python"
+        raise Refused(f"{python} is {said}; the hooks need Python 3.10 or later (the absolute path of its "
+                      "python executable)")
 
 
 def check_settings_file(path):
@@ -247,12 +270,12 @@ def install_agent(state, adapter, path, python):
     check_python(python)
     check_settings_file(path)
     current = load_settings(path)
+    script = install_script(state)        # first: on Windows a path has its short form once it is there
+    write_launch(state)
     try:
-        wanted = adapter.merged(current, python, state.hook_script)
+        wanted = adapter.merged(current, python, script)
     except ValueError as exc:
         raise Refused(f"{path}: {exc}; fix it first") from exc
-    install_script(state)
-    write_launch(state)
     if os.path.exists(path) and wanted == current:
         return False, None
     saved = backup(state, path, "install")
