@@ -105,6 +105,12 @@ class SpoolReader:
         changed, self.changed = self.changed, {}
         return changed
 
+    def rewind(self, positions):
+        """Back to `positions` (the saved ones) after the lines read since were not saved: the
+        next poll reads them again."""
+        self.positions = dict(positions)
+        self.changed = {}
+
     def forget(self, path):
         self.positions.pop(path, None)
         self.changed.pop(path, None)

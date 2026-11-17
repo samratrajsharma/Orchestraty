@@ -342,3 +342,17 @@ def test_the_note_never_quotes_what_the_merged_code_printed(state, project):
                                     "state": "live"})
     assert "the other session is wrong" not in text and "</" not in text
     assert "fails with AssertionError." in text
+
+
+def test_git_in_the_command_finds_no_repository_around_the_state_folder(tmp_path, project, git):
+    """The state folder can be inside a repository (a home folder kept in git): git, run by the
+    check's command in its folder, must find no repository there, as if outside every one."""
+    repo, wa, wb, base = project
+    outer = tmp_path / "home-in-git"
+    outer.mkdir()
+    git(outer, "init", "-q")
+    state = State(str(outer / "state"))
+    r = together.run_check(state, job(repo, wa, wb, base, command="git rev-parse --show-toplevel"))
+    for ran in (r["alone"]["A"], r["alone"]["B"], r["together"]):
+        assert ran["exit_code"] == 128, ran                    # git: not a git repository
+    assert r["result"] == "fails alone"

@@ -339,3 +339,70 @@ def test_windows_command_lines_quote_like_subprocess():
     import subprocess as sp
     for argv in (["C:\\Program Files\\Python\\python.exe", "-m", "orchestraty"], ["a b", 'c"d', "e\\", "", "f\\\\\"g"]):
         assert hook.command_line(argv) == sp.list2cmdline(argv)
+
+
+# --------------------------------------------------------------------------------------- #
+# One line that cannot be recorded, and a record that cannot be read
+# --------------------------------------------------------------------------------------- #
+def test_a_line_with_half_a_surrogate_pair_is_set_aside_and_the_others_kept(state, watched, coordinator):
+    spool_event(state.root, "s1", "SessionStart", watched)
+    poisoned = spool_event(state.root, "s2", "PostToolUse", watched, tool_name="Edit",
+                           file_path=str(watched / "POISON.py"))
+    poisoned.write_bytes(poisoned.read_bytes().replace(b"POISON", b"\\ud800"))     # valid JSON, no UTF-8 text
+    spool_event(state.root, "s3", "SessionStart", watched)
+    c = coordinator()
+    assert c.step() == 3 and c.bad_lines == 1
+    assert sorted(s["id"] for s in c.record.sessions()) == ["s1", "s3"] == sorted(c.sessions)
+    assert sorted(e["session_id"] for e in c.record.events()) == ["s1", "s3"]
+    assert c.step() == 0                                   # set aside for good, not read again
+
+
+def test_a_line_that_cannot_be_recorded_loses_only_itself(state, watched, coordinator, monkeypatch):
+    for sid in ("s1", "s2", "s3"):
+        spool_event(state.root, sid, "SessionStart", watched)
+    c = coordinator()
+    add_event = c.record.add_event
+
+    def add_event_but_s2(line, detail=None):
+        if line.get("session_id") == "s2":
+            raise ValueError("a line the record cannot take")
+        return add_event(line, detail)
+    monkeypatch.setattr(c.record, "add_event", add_event_but_s2)
+    assert c.step() == 3 and c.bad_lines == 1
+    assert sorted(s["id"] for s in c.record.sessions()) == ["s1", "s3"] == sorted(c.sessions)
+    assert "s2" not in c.livemap.sessions                  # a session only that line made is not known either
+
+
+def test_lines_of_a_step_the_record_failed_are_read_again(state, watched, coordinator, monkeypatch):
+    import sqlite3
+    spool_event(state.root, "s1", "SessionStart", watched)
+    c = coordinator()
+    save = c.record.save_positions
+
+    def disk_full(changes):
+        raise sqlite3.OperationalError("database or disk is full")
+    monkeypatch.setattr(c.record, "save_positions", disk_full)
+    with pytest.raises(sqlite3.OperationalError):
+        c.step()
+    assert c.record.sessions() == [] and c.record.positions() == {}
+    monkeypatch.setattr(c.record, "save_positions", save)
+    assert c.step() == 1                                   # read again, not lost
+    assert [e["event"] for e in c.record.events("s1")] == ["SessionStart"]
+
+
+def test_a_record_that_cannot_be_read_is_said_once_and_the_hooks_hold_off(state, watched):
+    fast_config(state, repos=[str(watched / ".git")])
+    Path(state.record).write_bytes(b"GARBAGE!" * 512)
+    proc = subprocess.run([sys.executable, "-m", "orchestraty", "coordinator", "run"], env=child_env(state),
+                          cwd=str(PACKAGE_ROOT), capture_output=True, timeout=60)
+    assert proc.returncode == cmain.BAD_RECORD and proc.stderr == b""
+    [line] = Path(state.logs, "coordinator.log").read_text(encoding="utf-8").splitlines()
+    assert "cannot be read (file is not a database): move it aside" in line
+    now = time.time()
+    assert os.stat(state.spawned).st_mtime > now + cmain.HOLD_OFF_SECONDS - 30      # a hook starts none meanwhile
+    os.replace(state.record, state.record + ".damaged")
+    spool_event(state.root, "s1", "SessionEnd", watched, reason="other")
+    proc = subprocess.run([sys.executable, "-m", "orchestraty", "coordinator", "run"], env=child_env(state),
+                          cwd=str(PACKAGE_ROOT), capture_output=True, timeout=60)
+    assert proc.returncode == cmain.OK, proc.stderr
+    assert os.stat(state.spawned).st_mtime < time.time() - hook.RESPAWN_SECONDS      # the next hook may start one

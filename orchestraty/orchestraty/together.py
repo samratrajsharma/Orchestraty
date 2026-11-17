@@ -151,6 +151,15 @@ def unpack(tree, cwd, common_dir, scratch, dest):
 
 
 # ------------------------------------------------------------------------------- one check
+def command_env(scratch):
+    """The environment the user's command runs in: no git variable, and git looks for no
+    repository above the check's folder. The state folder can be inside one (a home folder kept
+    in git), and a command such as git stash or pre-commit must not act on that."""
+    env = usercommand.environment()
+    env["GIT_CEILING_DIRECTORIES"] = scratch
+    return env
+
+
 def state_key(pair, tree_a, tree_b):
     """The pair of sessions and content state a check is about: the same for the same trees."""
     return hashlib.sha1("\0".join([pair, tree_a, tree_b]).encode("utf-8")).hexdigest()[:16]
@@ -183,7 +192,7 @@ def run_check(state, job, done=None):
             dest = os.path.join(scratch, "run-" + ("together" if name == "together" else hashlib.sha1(
                 name.encode("utf-8")).hexdigest()[:8]))
             unpack(which, job["worktrees"][a], job["common_dir"], scratch, dest)
-            ran = usercommand.run(job["command"], dest, job["timeout"])
+            ran = usercommand.run(job["command"], dest, job["timeout"], env=command_env(scratch))
             ran.pop("command", None)
             if name == "together":
                 out["together"] = ran

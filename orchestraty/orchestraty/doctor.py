@@ -7,6 +7,7 @@ line) or ``note`` (worth knowing, not a problem). The checks, in order:
 * the state folder: that it can be written to, and that it is not in a folder a sync service
   copies to other machines (OneDrive, Dropbox, Google Drive, iCloud Drive), where the record
   (SQLite) and the spools would be copied half-written;
+* the record: that SQLite reads every page of it (a damaged one is to be moved aside);
 * the hook script in the state folder: there, and the one this version installs;
 * each agent's hooks (Claude Code, Codex, Antigravity), in the file orch init writes them to:
   the entries this installation writes, or none (a note); no agent with them is a problem, and so
@@ -28,6 +29,7 @@ The exit code is 0 when nothing needs fixing, else 1.
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -41,6 +43,7 @@ from orchestraty.capture import install as hooks
 from orchestraty.coordinator.lock import Lock, touch
 
 NEWER_RECORD = 4                  # the coordinator's exit code for a record a newer Orchestraty wrote
+BAD_RECORD = 6                    # ... and for a record SQLite cannot read (not a database, or damaged)
 
 Check = namedtuple("Check", "kind text fix")
 GIT_NEEDED = (2, 38)
@@ -111,13 +114,49 @@ def state_check(state, environ=None):
                        "takes the hooks of this folder out")
     if not os.path.isdir(state.root):
         return problem(f"state folder: {state.root} does not exist yet", "run orch init")
-    try:
-        with tempfile.TemporaryFile(dir=state.root):
-            pass
-    except OSError as exc:
+    exc = cannot_write(state.root)
+    if exc is not None:
         return problem(f"state folder: {state.root} cannot be written to ({type(exc).__name__})",
                        "give your user write access to it, or set ORCH_HOME to a folder it can write")
     return ok(f"state folder: {state.root}")
+
+
+def cannot_write(folder):
+    """The error that creating and deleting a file in `folder` gives, or None when both work.
+    One try, with a name of its own: tempfile tries again on Windows after a PermissionError
+    for as long as os.access says the folder is writable, which it says whatever the folder's
+    access list denies, so it would try 2**31 names."""
+    probe = os.path.join(folder, f".orch-doctor-{os.getpid()}-{os.urandom(4).hex()}")
+    try:
+        os.close(os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        os.remove(probe)
+    except OSError as exc:
+        return exc
+    return None
+
+
+def record_check(state):
+    """The record: that SQLite reads every page of it (PRAGMA quick_check). Read only, and a
+    record that is not there yet is not made."""
+    if not os.path.exists(state.record):
+        return note(f"record: none yet at {state.record} (the coordinator makes it)")
+    from orchestraty.coordinator.record import Record
+    try:
+        record = Record(state.record, readonly=True)
+        try:
+            found = [row[0] for row in record.db.execute("PRAGMA quick_check")]
+        finally:
+            record.close()
+    except sqlite3.DatabaseError as exc:
+        found = [str(exc)]
+        if type(exc) is not sqlite3.DatabaseError:              # locked, no access: not a damaged file
+            return problem(f"record: {state.record} cannot be read ({exc})",
+                           "see the state folder line above; run orch doctor again once the coordinator is idle")
+    if found == ["ok"]:
+        return ok(f"record: {state.record}")
+    return problem(f"record: {state.record} cannot be read ({found[0][:200]})",
+                   f"run orch coordinator stop, then move {state.record} aside, with its -wal and -shm files: the "
+                   "next hook starts a new record")
 
 
 def hook_script_check(state):
@@ -335,6 +374,9 @@ def coordinator_check(state, seconds=START_SECONDS):
         _stop(state, seconds)
         _reap(proc, seconds)
     shown = f"exited with {proc.returncode}" if proc.returncode is not None else f"did not start within {seconds:.0f} s"
+    if proc.returncode == BAD_RECORD:
+        return problem(f"coordinator: the record {state.record} cannot be read, so it does not start",
+                       f"move {state.record} aside, with its -wal and -shm files: the next hook starts a new record")
     if proc.returncode == NEWER_RECORD:
         return problem("coordinator: the record was written by a newer Orchestraty, which this one cannot read",
                        f"upgrade Orchestraty, or move {state.record} aside to start a new record")
@@ -436,6 +478,7 @@ def checks(state, cwd, index=True, say=None):
     cfg = config.load(state)
     yield python_check()
     yield state_check(state)
+    yield record_check(state)
     yield hook_script_check(state)
     yield from agent_checks(state, cfg)
     yield coordinator_check(state)

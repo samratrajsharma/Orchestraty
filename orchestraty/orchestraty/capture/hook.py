@@ -17,7 +17,8 @@ from anywhere else (a folder not named ``hooks``) it does nothing. It appends on
 Only those fields are copied, each from the payload's own (top-level) members, whatever their
 order: the script walks the bytes and skips each member's value whole, so a key of the same
 name inside a tool's input or output is never read. Values are checked to be valid JSON
-strings, never parsed; a missing or malformed field is left out. ``tool_name`` and
+strings, never parsed; a missing or malformed field (half of a surrogate pair among them,
+which no UTF-8 file can hold) is left out. ``tool_name`` and
 ``tool_use_id`` are read for tool events only, ``file_path`` only for the tools that edit a
 file, from the tool input's own members (NotebookEdit's ``notebook_path`` is recorded as
 ``file_path``), ``source`` for
@@ -50,7 +51,9 @@ most once every few seconds across all hooks: detached, with no handle or stream
 from the state folder (never the agent's folder, whose files must not end up on the
 coordinator's import path), and with no GIT_ or PYTHON variable of the agent's environment.
 ``orch init`` writes the interpreter and the import path to use into ``hooks/launch.txt``.
-Setting ``ORCH_NO_COORDINATOR`` turns the start-up off (tests and measurements).
+A coordinator that could not open its record sets ``coordinator.spawned`` a minute ahead, so
+no hook starts another that would fail the same way. Setting ``ORCH_NO_COORDINATOR`` turns the
+start-up off (tests and measurements).
 
 Notes. The coordinator writes each note in advance into a slot file under
 ``<state>/notes/<session>/``; the hook only takes the slot its event calls for and prints it,
@@ -161,6 +164,10 @@ def _string_token(raw, j):
                 if len(digits) != 4 or any(d not in _HEX for d in digits):
                     return None
                 k += 6
+                if 0xD800 <= int(digits, 16) <= 0xDFFF:     # half of a surrogate pair: no text without the other
+                    if int(digits, 16) > 0xDBFF or not _low_half(raw[k:k + 6]):
+                        return None
+                    k += 6
             else:
                 k += 2
             continue
@@ -168,6 +175,12 @@ def _string_token(raw, j):
             return None
         k += 1
     return None
+
+
+def _low_half(escape):
+    """Whether `escape` is the JSON escape of the low half of a surrogate pair (\\udc00 to \\udfff)."""
+    return (len(escape) == 6 and escape[:2] == b"\\u" and all(d in _HEX for d in escape[2:])
+            and 0xDC00 <= int(escape[2:], 16) <= 0xDFFF)
 
 
 def plain(raw):

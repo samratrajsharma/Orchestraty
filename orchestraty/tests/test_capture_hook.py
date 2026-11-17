@@ -408,3 +408,20 @@ def test_a_payload_that_starts_with_a_byte_order_mark_is_read(hook_script, spool
     run_hook(hook_script, ["claude", "PostToolUse"], b"\xef\xbb\xbf" + body)
     [(name, line)] = spool_lines(spool)
     assert name == "s-bom.jsonl" and (line["session_id"], line["cwd"], line["tool_use_id"]) == ("s-bom", "/w", "toolu_B")
+
+
+@pytest.mark.parametrize("name", ["\\ud800", "\\udc00", "\\ud800x", "\\ud800\\u0041", "\\udbff\\ud800"])
+def test_a_file_with_half_a_surrogate_pair_is_left_out_and_the_event_kept(hook_script, spool, name):
+    data = payload(tool_input={"file_path": "/w/POISON.py"}).replace(b"POISON", name.encode())
+    proc = run_hook(hook_script, ["claude", "PostToolUse"], data)
+    assert proc.returncode == 0 and proc.stdout == b"" and proc.stderr == b""
+    [(_, line)] = spool_lines(spool)
+    assert "file_path" not in line and line["session_id"] == SESSION and line["tool_name"] == "Edit"
+
+
+def test_a_whole_surrogate_pair_is_kept(hook_script, spool):
+    data = payload(tool_input={"file_path": "/w/\U0001F600.py"})          # json.dumps writes 😀
+    assert b"\\ud83d\\ude00" in data
+    run_hook(hook_script, ["claude", "PostToolUse"], data)
+    [(_, line)] = spool_lines(spool)
+    assert line["file_path"] == "/w/\U0001F600.py"

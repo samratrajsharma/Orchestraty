@@ -193,3 +193,53 @@ def test_hooks_of_another_state_folder_are_a_problem(state_root, tmp_path):
     assert doctor.ok(f"Claude Code: hooks in {settings_file}") in lines                 # this folder's are right
     assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
     assert all(line.kind != "fix" for line in doctor.agent_checks(state, config.load(state)))
+
+
+def test_a_state_folder_that_denies_writing_is_said_at_once(state_root, monkeypatch):
+    """On Windows a folder whose access list denies writing still passes os.access, and
+    tempfile then tries name after name (2**31 of them). One try is enough."""
+    state_root.mkdir(parents=True)
+    real_open, tries = os.open, []
+
+    def denied(path, flags, *args, **kwargs):
+        if os.path.dirname(os.path.abspath(path)) == str(state_root) and flags & os.O_CREAT:
+            tries.append(path)
+            if len(tries) > 50:
+                raise OSError("tried too often")
+            raise PermissionError(13, "Access is denied", path)
+        return real_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(os, "open", denied)
+    check = doctor.state_check(State(), {})
+    assert check.kind == "fix" and check.text.endswith("cannot be written to (PermissionError)")
+    assert len(tries) == 1
+
+
+def test_the_state_folder_check_leaves_nothing_behind(state_root):
+    state_root.mkdir(parents=True)
+    assert doctor.state_check(State(), {}).kind == "ok" and os.listdir(state_root) == []
+
+
+def test_a_record_that_cannot_be_read_says_to_move_it_aside(state_root):
+    state_root.mkdir(parents=True)
+    state = State()
+    assert doctor.record_check(state).kind == "note" and not os.path.exists(state.record)    # none made
+    with open(state.record, "wb") as fh:
+        fh.write(b"GARBAGE!" * 512)
+    check = doctor.record_check(state)
+    assert check.kind == "fix" and check.text.endswith("cannot be read (file is not a database)")
+    assert "aside" in check.fix and "orch init" not in check.fix
+
+
+def test_a_coordinator_that_cannot_read_its_record_says_so(state_root, tmp_path):
+    from orchestraty.coordinator import main as cmain
+    assert doctor.BAD_RECORD == cmain.BAD_RECORD
+    broken = tmp_path / "bad" / "orchestraty"
+    broken.mkdir(parents=True)
+    (broken / "__init__.py").write_text("", encoding="utf-8")
+    (broken / "__main__.py").write_text(f"raise SystemExit({cmain.BAD_RECORD})\n", encoding="utf-8")
+    hooks_folder = state_root / "hooks"
+    hooks_folder.mkdir(parents=True)
+    (hooks_folder / "launch.txt").write_text(f"{sys.executable}\n{broken.parent}\n", encoding="utf-8")
+    check = doctor.coordinator_check(State(), seconds=30)
+    assert check.kind == "fix" and "cannot be read" in check.text
+    assert "aside" in check.fix and "orch init" not in check.fix

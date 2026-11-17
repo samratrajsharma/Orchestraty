@@ -1419,4 +1419,10 @@ def main(argv=None):
     if handler is None:
         parser.print_help()
         return 0
-    return handler(args)
+    import sqlite3
+    try:
+        return handler(args)
+    except sqlite3.DatabaseError as exc:                # only the record is SQLite
+        print(f"orch: the record {State().record} cannot be read ({exc}); orch doctor says what to do",
+              file=sys.stderr)
+        return 1

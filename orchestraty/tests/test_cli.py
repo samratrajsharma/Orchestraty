@@ -35,3 +35,14 @@ def test_runs_as_a_module():
                             capture_output=True, text=True, env=env, timeout=60)
     assert result.returncode == 0
     assert result.stdout.strip() == f"orch {__version__}"
+
+
+def test_a_record_that_cannot_be_read_is_one_line_not_a_traceback(tmp_path, capsys):
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "record.sqlite").write_bytes(b"GARBAGE!" * 512)
+    for argv in (["status"], ["status", "--json"], ["findings", "--all"], ["events"]):
+        assert main(argv) == 1, argv
+        err = capsys.readouterr().err
+        assert err.startswith("orch: the record ") and "cannot be read (file is not a database)" in err, err
+        assert err.endswith("; orch doctor says what to do\n") and err.count("\n") == 1

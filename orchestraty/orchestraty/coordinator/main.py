@@ -36,12 +36,13 @@ import logging
 import logging.handlers
 import os
 import re
+import sqlite3
 import sys
 import time
 
 from orchestraty import __version__, claims, config, declarations, feedback, gitio, remote, together
 from orchestraty.coordinator.cloud import CloudBranches, session_id as cloud_session_id
-from orchestraty.coordinator.lock import Heartbeat, Lock
+from orchestraty.coordinator.lock import Heartbeat, Lock, touch
 from orchestraty.coordinator.record import Record, SchemaError, repo_key
 from orchestraty.coordinator.spool import SpoolReader
 from orchestraty.delivery import slots
@@ -64,11 +65,12 @@ WORKING_EVENTS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseF
 IDLE_EVENTS = ("SessionStart", "Stop", "StopFailure")
 DETAIL_FIELDS = ("source", "reason", "stop_hook_active", "len", "took")
 LOCK_WAIT_SECONDS = 3.0
+HOLD_OFF_SECONDS = 60             # no hook starts a coordinator for this long after one could not open its record
 LEVEL0_AGENT = "git"
 CLOUD_AGENT = remote.CLOUD_AGENT
 
 # Exit codes of run()
-OK, ALREADY_RUNNING, NEWER_RECORD, FAILED = 0, 3, 4, 5
+OK, ALREADY_RUNNING, NEWER_RECORD, FAILED, BAD_RECORD = 0, 3, 4, 5, 6
 
 
 class Coordinator:
@@ -163,10 +165,14 @@ class Coordinator:
         """Read and record everything new in the spools; returns the number of lines read."""
         lines = self.reader.poll()
         if lines or self.reader.changed:
-            with self.record.transaction():
-                for agent, _path, raw in lines:
-                    self.handle(agent, raw)
-                self.record.save_positions(self.reader.take_changes())
+            try:
+                with self.record.transaction():
+                    for agent, _path, raw in lines:
+                        self.handle_line(agent, raw)
+                    self.record.save_positions(self.reader.take_changes())
+            except BaseException:
+                self.reader.rewind(self.record.positions())     # nothing of it was saved: read it all again
+                raise
         now = self.now_ns()
         if now - self._last_housekeeping >= HOUSEKEEPING_SECONDS * NS:
             self._last_housekeeping = now
@@ -529,13 +535,31 @@ class Coordinator:
                 for s in sessions:
                     self._end(s, why)
 
+    def handle_line(self, agent, raw):
+        """handle() one spool line in a savepoint of its own. A line that cannot be recorded is
+        set aside (a bad line, logged) and only what it wrote is undone, so the other lines read
+        with it are kept; a session it made is forgotten too. The record failing itself (disk
+        full, a damaged file) fails the whole step instead, whose lines are then read again."""
+        known = set(self.sessions)
+        try:
+            with self.record.savepoint():
+                self.handle(agent, raw)
+        except Exception as exc:
+            if _record_failed(exc):
+                raise
+            self.bad_lines += 1
+            self.log.exception("a spool line of %s was set aside: it could not be recorded", agent)
+            for sid in set(self.sessions) - known:
+                del self.sessions[sid]
+                self.livemap.forget(sid)
+
     def handle(self, agent, raw):
         try:
             line = json.loads(raw)
         except ValueError:
             self.bad_lines += 1
             return
-        if not isinstance(line, dict):
+        if not isinstance(line, dict) or not _storable(line):
             self.bad_lines += 1
             return
         ts = line.get("ts")
@@ -809,6 +833,21 @@ class Coordinator:
                    if s["state"] == "live" and not (hooked_only and s["agent"] in NO_NOTES))
 
 
+def _storable(line):
+    """Whether the record can store every text of a parsed spool line. JSON lets a string hold
+    half of a surrogate pair (\\ud800), which UTF-8, and so SQLite, cannot."""
+    try:
+        json.dumps(line, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _record_failed(exc):
+    """Whether an error is the record's own (disk full, I/O, a damaged file), not one line's."""
+    return isinstance(exc, sqlite3.OperationalError) or type(exc) is sqlite3.DatabaseError
+
+
 def _same(a, b):
     return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
@@ -860,6 +899,45 @@ def _remove(path):
         pass
 
 
+def _not_started(state, log, exc):
+    """A coordinator that could not open its record: why goes to the log, and no hook starts
+    another for HOLD_OFF_SECONDS, which would fail the same way. Returns the exit code."""
+    if isinstance(exc, SchemaError):
+        log.error("%s", exc)
+        code = NEWER_RECORD
+    elif type(exc) is sqlite3.DatabaseError:                 # not a database, or damaged
+        log.error("the record at %s cannot be read (%s): move it aside, with its -wal and -shm files, to start "
+                  "a new record", state.record, exc)
+        code = BAD_RECORD
+    else:
+        log.exception("could not start")
+        code = FAILED
+    _hold_off(state)
+    return code
+
+
+def _hold_off(state, seconds=HOLD_OFF_SECONDS):
+    """Keep the hooks from starting a coordinator for `seconds`. A hook starts none while
+    coordinator.spawned is younger than its respawn gap, so its time is set that far ahead."""
+    later = time.time() + seconds
+    try:
+        touch(state.spawned)
+        os.utime(state.spawned, (later, later))
+    except OSError:
+        pass
+
+
+def _end_hold_off(state):
+    """The record opened: hooks may start a coordinator again as soon as this one leaves (while
+    it runs, its heartbeat keeps them from starting one)."""
+    now = time.time()
+    try:
+        if os.stat(state.spawned).st_mtime > now:
+            os.utime(state.spawned, (now - HOLD_OFF_SECONDS, now - HOLD_OFF_SECONDS))
+    except OSError:
+        pass
+
+
 def run(state, scan_seconds=SCAN_SECONDS):
     """Run the coordinator until it is idle or asked to stop. Returns an exit code."""
     lock = Lock(state.lock)
@@ -876,7 +954,11 @@ def run(state, scan_seconds=SCAN_SECONDS):
     _write_info(state)
     coordinator = None
     try:
-        coordinator = Coordinator(state, log=log)
+        try:
+            coordinator = Coordinator(state, log=log)
+        except Exception as exc:
+            return _not_started(state, log, exc)
+        _end_hold_off(state)
         log.info("started (pid %d, version %s)", os.getpid(), __version__)
         last_event = time.monotonic()
         failures = 0
@@ -908,9 +990,6 @@ def run(state, scan_seconds=SCAN_SECONDS):
                 break
             time.sleep(scan_seconds)
         return OK
-    except SchemaError as exc:
-        log.error("%s", exc)
-        return NEWER_RECORD
     finally:
         heartbeat.stop(remove=True)
         _remove(state.info)

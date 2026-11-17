@@ -209,6 +209,14 @@ class Record:
         if readonly:
             self.db.execute("PRAGMA query_only = ON")
             return
+        try:
+            self._open(path)
+        except BaseException:
+            self.db.close()                     # not held open: on Windows the file could not be moved aside
+            raise
+
+    def _open(self, path):
+        """The writer's journal, and the tables brought to this schema."""
         self.db.execute("PRAGMA journal_mode = WAL")
         self.db.execute("PRAGMA synchronous = NORMAL")
         self.db.executescript(_TABLES)
@@ -217,7 +225,6 @@ class Record:
             self.meta_set("schema", 1)                  # _TABLES is schema 1; the steps below follow
         version = int(found or 1)
         if version > SCHEMA:
-            self.db.close()
             raise SchemaError(f"the record at {path} was written by a newer Orchestraty (schema {found}; this version "
                               f"reads {SCHEMA}): upgrade Orchestraty, or move that file aside to start a new record")
         for step in range(version + 1, SCHEMA + 1):
@@ -238,6 +245,18 @@ class Record:
             self.db.execute("ROLLBACK")
             raise
         self.db.execute("COMMIT")
+
+    @contextmanager
+    def savepoint(self):
+        """Inside a transaction: what the block writes is undone alone when it raises."""
+        self.db.execute("SAVEPOINT one")
+        try:
+            yield
+        except BaseException:
+            self.db.execute("ROLLBACK TO one")
+            self.db.execute("RELEASE one")
+            raise
+        self.db.execute("RELEASE one")
 
     # meta
     def meta_get(self, key):

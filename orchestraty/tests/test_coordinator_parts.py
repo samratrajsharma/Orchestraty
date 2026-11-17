@@ -389,3 +389,37 @@ def test_repo_names_and_keys(tmp_path):
     assert repo_name(os.path.join("x", "Orchestraty", ".git")) == "Orchestraty"
     assert repo_name(os.path.join("x", "bare.git")) == "bare"
     assert repo_key(os.path.join("x", "A", ".git")) == repo_key(os.path.join("x", "A", ".", ".git"))
+
+
+def test_a_rewound_reader_reads_the_lines_again(tmp_path):
+    f = tmp_path / "claude" / "s1.jsonl"
+    f.parent.mkdir(parents=True)
+    f.write_bytes(b'{"a":1}\n')
+    reader = SpoolReader(str(tmp_path))
+    saved = dict(reader.positions)
+    assert lines_of(reader.poll()) == [b'{"a":1}']
+    reader.rewind(saved)                                   # what was read was not saved
+    assert reader.take_changes() == {} and lines_of(reader.poll()) == [b'{"a":1}']
+
+
+def test_a_savepoint_undoes_only_its_own_writes(tmp_path):
+    record = Record(str(tmp_path / "record.sqlite"))
+    try:
+        with record.transaction():
+            record.add_event({"ts": 1, "agent": "claude", "event": "before"})
+            with pytest.raises(ValueError):
+                with record.savepoint():
+                    record.add_event({"ts": 2, "agent": "claude", "event": "undone"})
+                    raise ValueError("this line only")
+            record.add_event({"ts": 3, "agent": "claude", "event": "after"})
+        assert [e["event"] for e in record.events()] == ["before", "after"]
+    finally:
+        record.close()
+
+
+def test_a_record_that_cannot_be_read_is_not_held_open(tmp_path):
+    path = tmp_path / "record.sqlite"
+    path.write_bytes(b"GARBAGE!" * 512)
+    with pytest.raises(sqlite3.DatabaseError):
+        Record(str(path))
+    os.replace(path, tmp_path / "aside.sqlite")            # Windows: an open file could not be moved
