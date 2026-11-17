@@ -3,7 +3,8 @@
 It binds 127.0.0.1 only, on a free port unless ``--port`` names one, and prints a link with
 a token made for this launch (``secrets.token_urlsafe(32)``). The first visit to that link
 sets a cookie (``HttpOnly; SameSite=Strict; Path=/``) and redirects to the page; the link
-works once. Every request without the cookie gets a 403, and so does every request whose
+works once. Every request without the cookie gets a 403 (the cookie is found by its name only,
+whatever other cookies the browser sends for 127.0.0.1), and so does every request whose
 ``Host`` is not ``127.0.0.1:<port>`` or ``localhost:<port>`` (DNS rebinding). Requests that
 change something are POST only, and also need the header ``X-Orch-UI: 1`` and an ``Origin``
 equal to the page's own. Every response carries a Content-Security-Policy that allows only
@@ -37,7 +38,6 @@ again.
 import atexit
 import hashlib
 import hmac
-import http.cookies
 import json
 import os
 import secrets
@@ -107,6 +107,20 @@ def _err(message):
 
 def _same_secret(given, secret):
     return hmac.compare_digest(given.encode("utf-8", "surrogatepass"), secret.encode("ascii"))
+
+
+def cookies(headers, name):
+    """The value of every cookie called `name` in a request's Cookie headers. Read by hand, not
+    with http.cookies, which at a cookie it cannot parse (a JSON value, a space, a name alone)
+    drops the cookies after it, or all of them: any web app on 127.0.0.1, on any port, may have
+    set such a cookie (cookies ignore the port), and the browser sends it with ours."""
+    found = []
+    for header in headers.get_all("Cookie") or []:
+        for pair in header.split(";"):
+            key, eq, value = pair.partition("=")
+            if eq and key.strip() == name:
+                found.append(value.strip())
+    return found
 
 
 class Server(ThreadingHTTPServer):
@@ -245,12 +259,7 @@ class Handler(BaseHTTPRequestHandler):
         return host if host in self.server.hosts else None
 
     def _has_cookie(self):
-        try:
-            jar = http.cookies.SimpleCookie("; ".join(self.headers.get_all("Cookie") or []))
-        except http.cookies.CookieError:
-            return False
-        morsel = jar.get(self.server.cookie)
-        return morsel is not None and _same_secret(morsel.value, self.server.secret)
+        return any(_same_secret(value, self.server.secret) for value in cookies(self.headers, self.server.cookie))
 
     def _redeem(self, token):
         outcome = self.server.redeem(token)

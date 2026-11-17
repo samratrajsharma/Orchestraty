@@ -9,7 +9,7 @@ orch events --follow --json         # the changes from now on, as they come (pol
 orch events --follow --since 10m    # the last ten minutes, then the new ones, as text
 ```
 
-`--since` takes an ISO 8601 time (`2026-10-22T09:30:00Z` in UTC, or without `Z` in local time, or just a date), seconds since the epoch, or a time ago: `30s`, `10m`, `2h`, `1d`. Without `--json`, each event is one line of text: its local time, its kind and what it is about.
+`--since` takes an ISO 8601 time (`2026-10-22T09:30:00Z` in UTC, or without `Z` in local time, or just a date), seconds since the epoch, or a time ago: `30s`, `10m`, `2h`, `1d`. Without `--json`, each event is one line of text: its local time, its kind and what it is about. The JSON is ASCII: other characters are written as `\uXXXX` escapes, so it reads the same whatever encoding a reader assumes.
 
 The record's own write methods log each change as it happens (record schema 3; claims from schema 4), so the stream is in the order the record learned of the changes. A record brought up from an older schema logged the history it already had, in time order, when it was upgraded; withdrawals from before then had no time and are not in it.
 

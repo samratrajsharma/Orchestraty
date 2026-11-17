@@ -391,3 +391,13 @@ def test_orch_init_refuses_an_empty_or_wrong_python_with_exit_2(settings, capsys
             assert cli.main(["init", "--agent", agent, "--yes", "--no-git-hooks", "--python", python]) == 2
             assert "orch init:" in capsys.readouterr().err
     assert not settings.exists() and not (Path(os.environ["CODEX_HOME"]) / "hooks.json").exists()
+
+
+def test_orch_init_and_doctor_with_a_state_folder_named_in_japanese(settings, tmp_path, monkeypatch):
+    from helpers import run_piped
+    monkeypatch.setenv("ORCH_HOME", str(tmp_path / "state 日本"))
+    code, out, err = run_piped(monkeypatch, ["init", "--yes", "--no-git-hooks"])
+    assert code == 0 and b"Traceback" not in err
+    assert "日本" in out.decode("utf-8") and sorted(read(settings)["hooks"]) == sorted(ins.EVENTS)
+    code, out, err = run_piped(monkeypatch, ["doctor", "--no-index"])
+    assert code in (0, 1) and b"Traceback" not in err and "日本" in out.decode("utf-8")

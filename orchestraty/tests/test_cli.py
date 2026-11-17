@@ -46,3 +46,25 @@ def test_a_record_that_cannot_be_read_is_one_line_not_a_traceback(tmp_path, caps
         err = capsys.readouterr().err
         assert err.startswith("orch: the record ") and "cannot be read (file is not a database)" in err, err
         assert err.endswith("; orch doctor says what to do\n") and err.count("\n") == 1
+
+
+def test_a_pipe_gets_utf_8_and_a_terminal_keeps_its_encoding():
+    from helpers import piped
+    from orchestraty.cli import safe_output
+    text = "wt " + chr(0x65E5) + chr(0x672C) + " " + chr(0xFFFD) + chr(10)
+    pipe, terminal, terminal_err = piped(), piped(tty=True), piped(tty=True)
+    safe_output(((pipe, "replace"), (terminal, "replace"), (terminal_err, "backslashreplace")))
+    for stream in (pipe, terminal, terminal_err):
+        stream.write(text)
+        stream.flush()
+    assert pipe.buffer.getvalue() == text.encode("utf-8")
+    assert terminal.encoding == "cp1252" and terminal.buffer.getvalue() == text.encode("cp1252", "replace")
+    assert terminal_err.buffer.getvalue() == text.encode("cp1252", "backslashreplace")
+
+
+def test_no_console_and_a_closed_stream_are_left_alone():
+    from helpers import piped
+    from orchestraty.cli import safe_output
+    closed = piped()
+    closed.close()
+    safe_output(((None, "replace"), (closed, "replace")))     # pythonw has no stdout; neither raises

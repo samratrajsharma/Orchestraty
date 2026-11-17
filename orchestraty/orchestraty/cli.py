@@ -1412,7 +1412,26 @@ def build_parser():
     return parser
 
 
+def safe_output(streams=None):
+    """Let stdout and stderr take any text. On Windows a pipe or a file gets the ANSI code page
+    (cp1252), which has no Japanese and no U+FFFD, so a name or a test's output with one ended
+    the command with a traceback, often after it had done its work: a pipe or a file gets UTF-8,
+    as orch writes its files. A terminal keeps its encoding (a Windows console takes any text);
+    what it cannot show becomes "?" on stdout, and an escape on stderr, as Python has it."""
+    for stream, errors in streams or ((sys.stdout, "replace"), (sys.stderr, "backslashreplace")):
+        if not hasattr(stream, "reconfigure"):
+            continue                                   # None (no console), or not a text stream
+        try:
+            if stream.isatty():
+                stream.reconfigure(errors=errors)
+            else:
+                stream.reconfigure(encoding="utf-8", errors=errors)
+        except (OSError, ValueError):
+            pass                                       # closed: keep it as it is
+
+
 def main(argv=None):
+    safe_output()
     parser = build_parser()
     args = parser.parse_args(argv)
     handler = getattr(args, "handler", None)

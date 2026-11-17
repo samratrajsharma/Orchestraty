@@ -101,3 +101,26 @@ def refuse_writes(monkeypatch, *paths):
         return real(src, dst, *args, **kwargs)
     monkeypatch.setattr(os, "replace", replace)
     return blocked
+
+
+def piped(encoding="cp1252", tty=False):
+    """A text stream such as Windows gives a pipe or a file: in the ANSI code page (cp1252), with
+    no Japanese and no U+FFFD. With `tty`, one that says it is a terminal."""
+    import io
+
+    class Bytes(io.BytesIO):
+        def isatty(self):
+            return tty
+    return io.TextIOWrapper(Bytes(), encoding=encoding, newline="")
+
+
+def run_piped(monkeypatch, argv):
+    """(exit code, stdout bytes, stderr bytes) of orch `argv` with stdout and stderr such pipes."""
+    from orchestraty import cli
+    out, err = piped(), piped()
+    monkeypatch.setattr(sys, "stdout", out)
+    monkeypatch.setattr(sys, "stderr", err)
+    code = cli.main(argv)
+    out.flush()
+    err.flush()
+    return code, out.buffer.getvalue(), err.buffer.getvalue()

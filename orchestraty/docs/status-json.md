@@ -15,7 +15,7 @@ The `schema` field gives the schema number. This page describes schema 1.
 
 **The compatibility promise.** Within one schema number, fields are only added. No field is removed or renamed, and none changes its type or meaning. A change that would do any of that comes with a new schema number. So a reader should check `schema`, and ignore the fields it does not know.
 
-Times are UTC, as `YYYY-MM-DDTHH:MM:SSZ`. Paths of files in a repository are relative to the worktree's top, with `/` on every system. Folders (`worktree`, `common_dir`) are absolute, in the system's own form. A function or class is named `path::Qualified.name`, for example `billing/charge.py::Invoice.total`.
+Times are UTC, as `YYYY-MM-DDTHH:MM:SSZ`. Paths of files in a repository are relative to the worktree's top, with `/` on every system. Folders (`worktree`, `common_dir`) are absolute, in the system's own form. A function or class is named `path::Qualified.name`, for example `billing/charge.py::Invoice.total`. The JSON is ASCII: other characters are written as `\uXXXX` escapes, so it reads the same whatever encoding a reader assumes.
 
 ### The object
 

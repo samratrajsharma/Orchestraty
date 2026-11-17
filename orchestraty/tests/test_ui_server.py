@@ -97,6 +97,45 @@ def test_every_request_needs_the_cookie(srv, path):
     assert code == 403
 
 
+OTHER_APPS = ['prefs={"theme":"dark"}', "cart=a b", "p=C:\\x", "n=caf\u00e9", "path=/", "expires=1", 'x="abc',
+              "novalue", "=v", "orch_ui_1=another-server-s"]
+
+
+@pytest.mark.parametrize("other", OTHER_APPS)
+def test_another_app_s_cookie_on_127_0_0_1_does_not_hide_ours(srv, other):
+    ours = f"{srv.cookie}={srv.secret}"
+    for cookie in (f"{other}; {ours}", f"{ours}; {other}"):
+        for path in ("/", "/app.js", "/api/health"):
+            assert ask(srv, "GET", path, {"Cookie": cookie}, cookie=False)[0] == 200, (cookie, path)
+    assert ask(srv, "GET", "/api/status", {"Cookie": f"{other}; {srv.cookie}=nope"}, cookie=False)[0] == 403
+
+
+def test_ours_counts_in_any_cookie_header_and_beside_a_stale_one(srv):
+    ours = f"{srv.cookie}={srv.secret}"
+    raw = (f"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{srv.port}\r\nCookie: prefs={{\"a\":1}}\r\n"
+           f"Cookie: {ours}\r\nConnection: close\r\n\r\n").encode()
+    with socket.create_connection(("127.0.0.1", srv.port), timeout=30) as sock:
+        sock.sendall(raw)
+        reply = b""
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            reply += chunk
+    assert reply.startswith(b"HTTP/1.1 200")
+    assert ask(srv, "GET", "/api/health", {"Cookie": f"{ours}; {srv.cookie}=stale"}, cookie=False)[0] == 200
+    for cookie in (f"x{srv.cookie}={srv.secret}", f"{srv.cookie}x={srv.secret}", f"other={srv.secret}",
+                   f"{srv.cookie}={srv.secret}x", f"{srv.cookie}", f"{srv.cookie}=", f"{srv.cookie}={srv.secret[:-1]}"):
+        assert ask(srv, "GET", "/api/health", {"Cookie": cookie}, cookie=False)[0] == 403, cookie
+
+
+def test_the_link_still_redirects_a_browser_that_has_ours_beside_another_app_s(srv):
+    assert ask(srv, "GET", "/?token=" + srv.token, cookie=False)[0] == 303
+    code, headers, _ = ask(srv, "GET", "/?token=" + srv.token, {"Cookie": f'prefs={{"a":1}}; {srv.cookie}={srv.secret}'},
+                           cookie=False)
+    assert code == 303 and "set-cookie" not in headers
+
+
 def test_the_link_sets_the_cookie_and_works_once(srv):
     code, headers, _ = ask(srv, "GET", "/?token=" + srv.token, cookie=False)
     assert code == 303 and headers["location"] == "/" and headers["cache-control"] == "no-store"

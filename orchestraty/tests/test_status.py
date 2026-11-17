@@ -119,3 +119,53 @@ def test_a_damaged_config_means_the_defaults(state):
     assert cfg["repos"] == [os.path.abspath("x")]
     assert cfg["idle_seconds"] == config.DEFAULTS["idle_seconds"]
     assert cfg["session_timeout"] == config.DEFAULTS["session_timeout"]
+
+
+JAPANESE = "日本"
+
+
+def test_orch_status_findings_and_events_write_any_name_to_a_pipe(state, repo, git, tmp_path, monkeypatch):
+    from helpers import run_piped
+    config.watch(state, str(repo / ".git"))
+    wt = tmp_path / f"wt ünï {JAPANESE}"
+    git(repo, "worktree", "add", "-q", "-b", "feat-jp", str(wt))
+    record_sessions(state, repo, ("s-jp", "SessionStart", wt), ("s-jp", "UserPromptSubmit", wt))
+    for argv in (["status"], ["status", "--all"], ["findings", "--all"], ["events"], ["claims"], ["merge-order"]):
+        code, out, err = run_piped(monkeypatch, argv)
+        assert code == 0 and b"Traceback" not in err, argv
+        out.decode("utf-8")                                          # UTF-8 through a pipe or a file
+    assert JAPANESE in run_piped(monkeypatch, ["status"])[1].decode("utf-8")
+
+
+def test_json_is_ascii_whatever_the_names(state, repo, git, tmp_path, monkeypatch):
+    from helpers import run_piped
+    config.watch(state, str(repo / ".git"))
+    wt = tmp_path / f"wt {JAPANESE}"
+    git(repo, "worktree", "add", "-q", "-b", "feat-jp", str(wt))
+    record_sessions(state, repo, ("s-jp", "SessionStart", wt))
+    for argv in (["status", "--json"], ["findings", "--json"], ["stats", "--json"], ["events", "--json"]):
+        code, out, _ = run_piped(monkeypatch, argv)
+        assert code == 0 and out.isascii(), argv                     # the same bytes in every encoding
+        [json.loads(line) for line in out.splitlines()] if argv[0] == "events" else json.loads(out)
+    data = json.loads(run_piped(monkeypatch, ["status", "--json"])[1])
+    assert data["repositories"][0]["sessions"][0]["worktree"] == str(wt)
+
+
+def test_a_together_result_with_a_replacement_character_goes_through_a_pipe(state, repo, tmp_path, monkeypatch):
+    import sys
+    from helpers import run_piped
+    from orchestraty import together, usercommand
+    config.watch(state, str(repo / ".git"))
+    record_sessions(state, repo, ("A", "SessionStart", repo), ("B", "SessionStart", repo))
+    script = tmp_path / "check.py"                   # a test run whose output is in the ANSI code page
+    script.write_text('import sys\nsys.stdout.buffer.write(b"test_caf\\xe9 FAILED: caf\\xe9 != cafe\\n")\nsys.exit(1)\n',
+                      encoding="utf-8")
+    ran = usercommand.run(f'"{sys.executable}" "{script}"', str(tmp_path), 60)
+    line = together.first_failing_line(ran["last_lines"])
+    assert "�" in line
+    together.save_settings(state, str(repo / ".git"), command="python -m pytest -q", on=True)
+    together.save_result(state, {"repo": str(repo / ".git"), "sessions": ["A", "B"], "result": "fails together",
+                                 "alone": {"A": {"exit_code": 0}, "B": {"exit_code": 0}}, "first_failing_line": line})
+    code, out, err = run_piped(monkeypatch, ["status"])
+    assert code == 0 and b"Traceback" not in err
+    assert "together it fails: test_caf� FAILED" in out.decode("utf-8")
