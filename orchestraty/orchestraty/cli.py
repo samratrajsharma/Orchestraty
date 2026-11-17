@@ -71,6 +71,9 @@ def cmd_init(args):
     print("orch init will:")
     print(f"  - copy the hook script to {state.hook_script}")
     print(f"  - add hooks for {len(hooks.EVENTS)} Claude Code events to {path}")
+    for root in hooks.other_states(current, state.hook_script):
+        print(f"  - take out of it the hooks and the mod of the state folder {root}, which an orch init with another")
+        print("    ORCH_HOME added, so no event is recorded twice (that folder itself stays)")
     if mod:
         print(f"  - load Orchestraty's Claude Code mod from {state.mod}: a status line, a band for strong")
         print("    overlaps, a pane and /orch (Claude Code 2.1.287 or later; --no-mod leaves it out)")
@@ -90,6 +93,8 @@ def cmd_init(args):
     else:
         print(f"Installed in {path}." + (f" Backup: {saved}" if saved else ""))
         print("Sessions started from now on are seen; restart running sessions to include them.")
+    if args.project:
+        _offer_exclude(state, path, args.yes)
     return _init_rest(args, state, python)
 
 
@@ -106,7 +111,7 @@ def _init_for_plugin(args, state, path, python, wake, current, plugin_id):
     """orch init with Claude Code's Orchestraty plugin installed: the plugin holds the hooks and
     the mod, so none go into the settings file; orch init installs the hook script and turns
     the plugin's hooks on."""
-    earlier = hooks.without_mod(hooks.without_ours(current, state.hook_script), state.mod) != current
+    earlier = hooks.without_orchestraty(current, state.hook_script, state.mod) != current
     print(f"Claude Code's Orchestraty plugin is installed ({plugin_id}). It holds the hooks for "
           f"{len(hooks.EVENTS)} Claude Code events and the mod, so orch init adds no hooks to {path}.")
     print("orch init will:")
@@ -190,13 +195,16 @@ def _init_agent(args):
     try:
         hooks.check_python(python)
         hooks.check_settings_file(path)
-        hooks.load_settings(path)
+        current = hooks.load_settings(path)
     except hooks.Refused as exc:
         return _refuse("init", exc)
     print("orch init will:")
     print(f"  - copy the hook script to {state.hook_script}")
     print(f"  - add hooks for {len(adapter.CAPTURED)} {adapter.TITLE} events to {path}:")
     print("\n".join("      " + line for line in json.dumps(block, indent=2).splitlines()))
+    for root in adapter.other_states(current, state.hook_script):
+        print(f"  - take out of it the hooks of the state folder {root}, which an orch init with another ORCH_HOME")
+        print("    added, so no event is recorded twice (that folder itself stays)")
     if os.path.exists(path):
         print(f"    (other hooks there are kept; the current file is copied to {state.backups} first)")
     print(_agent_scope(args, adapter) + " " + PRIVACY)

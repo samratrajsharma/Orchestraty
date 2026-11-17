@@ -87,3 +87,17 @@ def ag(event, conversation, folders, **fields):
 def ag_tool(event, conversation, folder, name, args, args_first=False):
     call = {"args": args, "name": name} if args_first else {"name": name, "args": args}
     return ag(event, conversation, [folder, "/second/workspace"], toolCall=call, stepIdx=7)
+
+
+def refuse_writes(monkeypatch, *paths):
+    """Make os.replace onto these files fail, as it does on Windows when a file is read-only or
+    another program has it open. Returns the set of blocked paths: clear it to let writes through."""
+    blocked = {os.path.normcase(os.path.abspath(str(p))) for p in paths}
+    real = os.replace
+
+    def replace(src, dst, *args, **kwargs):
+        if os.path.normcase(os.path.abspath(str(dst))) in blocked:
+            raise PermissionError(13, "Access is denied", str(dst))
+        return real(src, dst, *args, **kwargs)
+    monkeypatch.setattr(os, "replace", replace)
+    return blocked

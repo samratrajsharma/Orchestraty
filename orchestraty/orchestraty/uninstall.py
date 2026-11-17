@@ -16,7 +16,8 @@ it looks at:
   then is put back as it was, byte for byte. When it changed since, the copy is put back only
   if the user says so (never with ``--yes``); else only Orchestraty's entries come out. A file
   ``orch init`` created that holds nothing else is deleted.
-* **.git/info/exclude**: the line ``orch init`` added for a workspace's Antigravity hooks file.
+* **.git/info/exclude**: the line ``orch init --project`` added for a workspace's Claude Code
+  settings file or Antigravity hooks file.
 * **Claude Code's Orchestraty plugin**: its hooks are turned off (``plugin.txt``). The plugin
   was installed with Claude Code's own command, and is uninstalled with it, when that command
   is on the PATH; else the command to run is shown.
@@ -28,7 +29,10 @@ it looks at:
 * **Cloud branches**: the shadows in the state folder (and, with ``--keep-state``, each
   repository's cloud branches turned off).
 * **The coordinator**: stopped. Then the state folder (the record, the backups, the settings)
-  is removed after asking, or kept with ``--keep-state``.
+  is removed after asking, or kept with ``--keep-state``. It is kept, too, when a step could not
+  be done or an agent's config file still runs its hook script (one that could not be written,
+  or a link): those hooks would fail without it, and a second run needs its backups. The exit
+  code is then 1.
 
 A second run finds nothing left and changes nothing. Before a file is changed or deleted, a
 copy goes into the state folder's backups, as with ``orch init``; those copies go with the
@@ -49,7 +53,7 @@ from orchestraty.coordinator.lock import Lock, touch
 
 ADAPTERS = {"claude": claude, "codex": codex, "antigravity": antigravity}
 TITLES = {"claude": claude.TITLE, "codex": codex.TITLE, "antigravity": antigravity.TITLE}
-EXCLUDE_SUFFIX = "/.agents/hooks.json"           # the line orch init adds to .git/info/exclude ends so
+EXCLUDE_SUFFIX = ("/.agents/hooks.json", "/.claude/settings.local.json")   # the lines orch init adds to exclude
 STOP_SECONDS = 30.0
 NOWHERE = os.path.join(os.sep, "\u2205", "\u2205")   # a hook script and a mod folder no config names
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -160,9 +164,11 @@ def candidates(state, cfg, environ=None):
 
 # ------------------------------------------------------------------------------ agent files
 def cleaned(kind, data, state):
-    """The config without Orchestraty's entries (and, for Claude Code, without its mod)."""
-    out = ADAPTERS[kind].without_ours(data, state.hook_script)
-    return claude.without_mod(out, state.mod) if kind == "claude" else out
+    """The config without Orchestraty's entries (and, for Claude Code, without its mod, and
+    without the hooks and the mod of another state folder)."""
+    if kind == "claude":
+        return claude.without_orchestraty(data, state.hook_script, state.mod)
+    return ADAPTERS[kind].without_orchestraty(data, state.hook_script)
 
 
 def tidied(kind, data):
@@ -212,6 +218,10 @@ def agent_step(state, path, kind):
     wanted = cleaned(kind, current, state)
     if wanted == tidied(kind, current):
         return None
+    others = ADAPTERS[kind].other_states(current, state.hook_script)
+    if others:
+        title += (f" (with the hooks of the state folder {', '.join(others)}, which an orch init with another "
+                  "ORCH_HOME added)")
     before = original(state, path, kind)
     if before and tidied(kind, _parse(before[1])) == wanted:
         return Step("restore", f"{title}: put back {path} as it was before orch init (it holds nothing else of "
@@ -289,6 +299,26 @@ def plan(state, environ=None, which=shutil.which):
                  "A registration you made by hand stays: claude mcp remove orchestraty, codex mcp remove orchestraty, "
                  "or Antigravity's MCP servers panel.")
     return steps, notes
+
+
+def still_hooked(state, environ=None):
+    """The agent config files that still run this state folder's hook script, or load its mod:
+    removing the folder would make their hooks fail (a link orch uninstall leaves alone, or a
+    file it could not write)."""
+    left = []
+    for path, kind in candidates(state, config.load(state), environ).values():
+        if kind not in ADAPTERS or not os.path.exists(path):
+            continue
+        try:
+            current = hooks.load_settings(path)
+        except hooks.Refused:                       # the agent cannot read it either
+            continue
+        mine = ADAPTERS[kind].without_ours(current, state.hook_script)
+        if kind == "claude":
+            mine = claude.without_mod(mine, state.mod)
+        if mine != tidied(kind, current):
+            left.append(path)
+    return left
 
 
 def hook_alive(state):
@@ -407,19 +437,39 @@ def run(state, keep_state=False, assume_yes=False, ask=None, out=print, environ=
     if not question("Go ahead?"):
         out("Nothing changed.")
         return 1
+    failed = False
     for step in steps:
         try:
             out(do(state, step, lambda text: question(text, default_yes=False), keep_backups=state_there,
                    runner=runner))
         except (OSError, gitio.GitError, hooks.Refused, subprocess.SubprocessError) as exc:
             out(f"Could not: {step.text} ({exc})")
+            failed = True
+    hooked = still_hooked(state, environ)
     if state_there and not keep_state:
-        if question(f"Remove the state folder {state.root}? The record, the backups and the settings go with it."):
-            stop_coordinator(state)
-            gitio.remove_tree(state.root)
-            out(f"Removed {state.root}.")
+        if failed or hooked:
+            why = (f"{', '.join(hooked)} still run{'s' if len(hooked) == 1 else ''} its hook script, which would fail "
+                   "without it" if hooked else "a second run of orch uninstall needs its backups")
+            out(f"Kept {state.root}: {why}.")
+        elif question(f"Remove the state folder {state.root}? The record, the backups and the settings go with it."):
+            failed = not remove_state(state, out)
         else:
             out(f"Kept {state.root}.")
+    if failed or hooked:
+        out("orch uninstall did not finish (see above). Once that is fixed, run orch uninstall again.")
+        return 1
     out("Orchestraty is uninstalled. The orch command itself stays: pipx uninstall orchestraty (or uv tool uninstall "
         "orchestraty) removes it.")
     return 0
+
+
+def remove_state(state, out):
+    """Stop the coordinator and remove the state folder; False when that could not be done."""
+    stop_coordinator(state)
+    try:
+        gitio.remove_tree(state.root)
+    except OSError as exc:
+        out(f"Could not remove {state.root} ({exc}).")
+        return False
+    out(f"Removed {state.root}.")
+    return True

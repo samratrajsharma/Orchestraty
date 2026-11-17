@@ -193,3 +193,29 @@ def test_the_command_line_suits_each_shell():
         "antigravity Stop")
     assert shell.mentions(shell.command_line(argv, windows=False), argv[3])
     assert not shell.mentions("node lint.js", argv[3]) and not shell.mentions(None, argv[3])
+
+
+def test_codex_init_with_another_state_folder_takes_the_earlier_hooks_out(state, tmp_path, capsys, monkeypatch):
+    home = Path(os.environ["CODEX_HOME"])
+    old = tmp_path / "One Drive" / "state"                                  # before doctor's fix for a synced folder
+    monkeypatch.setenv("ORCH_HOME", str(old))
+    assert cli.main(["init", "--agent", "codex", "--yes", "--no-git-hooks"]) == 0
+    monkeypatch.setenv("ORCH_HOME", state.root)
+    from orchestraty import doctor, config
+    [line] = [x for x in doctor.agent_checks(State(), config.load(State())) if "also runs the hooks" in x.text]
+    assert str(old) in line.text and "orch init --agent codex again" in line.fix
+    capsys.readouterr()
+    assert cli.main(["init", "--agent", "codex", "--yes", "--no-git-hooks"]) == 0
+    assert f"take out of it the hooks of the state folder {old}" in capsys.readouterr().out
+    commands = [h["command"] for entries in read(home / "hooks.json")["hooks"].values() for e in entries
+                for h in e["hooks"]]
+    assert len(commands) == len(codex.CAPTURED) and all(shell.mentions(c, state.hook_script) for c in commands)
+    # the forms orch init writes on each system are all recognised as another folder's
+    for argv_script in (str(old / "hooks" / "hook.py"),):
+        for windows in (True, False):
+            line = shell.command_line(["/py/python", "-S", "-I", argv_script, "codex", "Stop"], windows=windows,
+                                      shorten=lambda p: p)
+            config = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": line}]}]}}
+            assert codex.other_states(config, state.hook_script) == [str(old)], line
+            assert codex.without_others(config, state.hook_script) == {}
+

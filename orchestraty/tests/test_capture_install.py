@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import spool_lines, symlinks_work
+from helpers import refuse_writes, spool_lines, symlinks_work
 from orchestraty import cli
 from orchestraty.capture import install as ins
 from orchestraty.paths import State
@@ -285,3 +285,80 @@ def test_orch_restore_from_backup_without_a_backup(settings, capsys):
     write(settings, {"model": "x"})
     assert cli.main(["restore", "--from-backup", "--yes"]) == 1
     assert "No backup" in capsys.readouterr().out
+
+
+def test_a_file_that_cannot_be_written_is_refused_and_no_copy_is_left(state, settings, monkeypatch):
+    write(settings, {"model": "x"})
+    before = settings.read_bytes()
+    refuse_writes(monkeypatch, settings)
+    with pytest.raises(ins.Refused, match="cannot write .*PermissionError.*read-only, or open in another program"):
+        ins.install(state, str(settings), sys.executable)
+    assert settings.read_bytes() == before
+    assert sorted(os.listdir(settings.parent)) == ["settings.json"]          # no settings.json.orch-tmp
+
+
+@pytest.mark.parametrize("command", [["init", "--yes"], ["restore", "--yes"], ["restore", "--from-backup", "--yes"]])
+def test_orch_init_and_restore_say_when_the_settings_file_cannot_be_written(settings, monkeypatch, capsys, command):
+    write(settings, {"model": "x"})
+    if command[0] == "restore":
+        assert cli.main(["init", "--yes"]) == 0
+    before = settings.read_bytes()
+    refuse_writes(monkeypatch, settings)
+    capsys.readouterr()
+    assert cli.main(command) == 2
+    err = capsys.readouterr().err
+    assert err.startswith(f"orch {command[0]}: cannot write {settings} (PermissionError)") and "Traceback" not in err
+    assert settings.read_bytes() == before and sorted(os.listdir(settings.parent)) == ["settings.json"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="elsewhere a read-only file can be replaced: renaming needs the folder")
+def test_a_read_only_settings_file_on_windows(settings, capsys):
+    import stat
+    write(settings, {"model": "x"})
+    os.chmod(settings, stat.S_IREAD)
+    try:
+        assert cli.main(["init", "--yes"]) == 2
+        assert f"cannot write {settings}" in capsys.readouterr().err
+        assert read(settings) == {"model": "x"} and sorted(os.listdir(settings.parent)) == ["settings.json"]
+    finally:
+        os.chmod(settings, stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_orch_init_project_offers_to_keep_the_local_settings_out_of_git(repo, git, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    assert cli.main(["init", "--project", "--yes", "--no-git-hooks"]) == 0
+    assert "never committed or shared" in capsys.readouterr().out
+    exclude = repo / ".git" / "info" / "exclude"
+    assert exclude.read_text(encoding="utf-8").splitlines().count("/.claude/settings.local.json") == 1
+    assert git(repo, "status", "--porcelain") == ""                          # out of git
+    assert cli.main(["init", "--project", "--yes", "--no-git-hooks"]) == 0
+    assert exclude.read_text(encoding="utf-8").splitlines().count("/.claude/settings.local.json") == 1
+
+
+def test_orch_init_takes_out_the_hooks_and_mod_of_another_state_folder(tmp_path, settings, state, monkeypatch, capsys):
+    old = tmp_path / "OneDrive" / "state"
+    monkeypatch.setenv("ORCH_HOME", str(old))                                # before doctor's fix for a synced folder
+    write(settings, {"model": "x"})
+    assert cli.main(["init", "--yes"]) == 0
+    monkeypatch.setenv("ORCH_HOME", state.root)
+    capsys.readouterr()
+    assert cli.main(["init", "--yes"]) == 0
+    assert f"the hooks and the mod of the state folder {old}" in capsys.readouterr().out
+    data = read(settings)
+    scripts = {h["args"][2] for entries in data["hooks"].values() for e in entries for h in e["hooks"]}
+    assert scripts == {state.hook_script}
+    assert data["env"][ins.PLUGIN_DIRS] == state.mod
+    assert old.is_dir()                                                      # that folder itself stays
+
+
+def test_only_the_shape_orch_init_writes_counts_as_another_state_folders(state):
+    other = os.path.join(os.path.dirname(state.root), "elsewhere", "hooks", "hook.py")
+
+    def settings(args):
+        return {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": sys.executable, "args": args}]}]}}
+    assert ins.other_states(settings(["-S", "-I", other, "claude", "Stop"]), state.hook_script) == [
+        os.path.dirname(os.path.dirname(other))]
+    assert ins.other_states(settings(["-S", "-I", state.hook_script, "claude", "Stop"]), state.hook_script) == []
+    for args in (["-S", "-I", other, "codex", "Stop"], ["-S", other, "claude", "Stop"], ["-S", "-I", "hook.py", "claude"],
+                 ["-S", "-I", other.replace("hook.py", "mine.py"), "claude", "Stop"]):
+        assert ins.other_states(settings(args), state.hook_script) == [], args

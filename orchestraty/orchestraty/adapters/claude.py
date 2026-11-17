@@ -26,7 +26,8 @@ the hooks run in every worktree, including ones made after installing; a project
 ``.claude/settings.local.json`` covers only that folder. Each entry is in exec form (no shell):
 ``command`` is an absolute Python and ``args`` is ``["-S", "-I", <hook script>, "claude",
 <event>]``. Other settings and other hooks are kept; our entries (those that run our hook
-script) are replaced, so installing twice changes nothing. The file work (refusing a link or a
+script, and those of another state folder in the same shape) are replaced, so installing twice
+changes nothing and a new ``ORCH_HOME`` does not double them. The file work (refusing a link or a
 file that is not JSON, a backup before every change) is ``capture/install``'s.
 """
 import json
@@ -166,6 +167,49 @@ def without_ours(settings, script):
     return settings
 
 
+def _shaped_script(hook):
+    """The hook script a hook runs when it has the shape orch init writes, ``<python> -S -I
+    <state folder>/hooks/hook.py claude <event>``, whatever the state folder; else None."""
+    args = hook.get("args") if isinstance(hook, dict) else None
+    if not (isinstance(args, list) and len(args) == 5 and args[:2] == ["-S", "-I"] and args[3] == AGENT
+            and isinstance(args[2], str) and os.path.isabs(args[2])):
+        return None
+    folder, name = os.path.split(os.path.normpath(args[2]))
+    if os.path.normcase(name) == "hook.py" and os.path.normcase(os.path.basename(folder)) == "hooks":
+        return args[2]
+    return None
+
+
+def other_states(settings, script):
+    """The state folders, other than the one `script` is in, whose hook script the settings'
+    hooks run: an orch init with another ORCH_HOME wrote them. Each once, in the order found."""
+    hooks = settings.get("hooks") if isinstance(settings.get("hooks"), dict) else {}
+    found = []
+    for entries in hooks.values():
+        for entry in entries if isinstance(entries, list) else ():
+            runs = entry.get("hooks") if isinstance(entry, dict) else None
+            for hook in runs if isinstance(runs, list) else ():
+                other = _shaped_script(hook)
+                root = os.path.dirname(os.path.dirname(os.path.normpath(other))) if other else None
+                if root and not _same(other, script) and not any(_same(root, r) for r in found):
+                    found.append(root)
+    return found
+
+
+def without_others(settings, script):
+    """The settings without the hooks and the mod of every other state folder (`other_states`)."""
+    for root in other_states(settings, script):
+        settings = without_ours(settings, os.path.join(root, "hooks", "hook.py"))
+        settings = without_mod(settings, os.path.join(root, "mod"))
+    return settings
+
+
+def without_orchestraty(settings, script, mod_dir):
+    """The settings with nothing of Orchestraty's: no hooks that run `script`, no mod from
+    `mod_dir`, and none of another state folder's."""
+    return without_mod(without_ours(without_others(settings, script), script), mod_dir)
+
+
 def _plugin_dirs(env):
     sep = ";" if os.name == "nt" else ":"
     return sep, [p for p in str(env.get(PLUGIN_DIRS, "")).split(sep) if p]
@@ -222,8 +266,9 @@ def install_mod(state):
 
 
 def merged_settings(settings, python, script, wake=False):
-    """The settings with our entries added after any others (earlier ones of ours replaced)."""
-    settings = without_ours(settings, script)
+    """The settings with our entries added after any others (earlier ones of ours, and those of
+    another state folder, replaced)."""
+    settings = without_ours(without_others(settings, script), script)
     hooks = dict(settings.get("hooks") or {})
     for event in EVENTS:
         entries = hooks.get(event)

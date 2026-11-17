@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import symlinks_work
+from helpers import refuse_writes, symlinks_work
 from orchestraty import cli, config, plugin, uninstall
 from orchestraty.adapters import claude
 from orchestraty.paths import State
@@ -245,3 +245,85 @@ def test_a_file_orch_init_wrote_is_found_where_it_was_written(tmp_path, state_ro
     assert cli.main(["uninstall", "--yes"]) == 0
     assert f"Codex: delete {first / 'hooks.json'}" in capsys.readouterr().out
     assert not (first / "hooks.json").exists()
+
+
+def test_a_settings_file_that_cannot_be_written_keeps_the_state_folder(tmp_path, state_root, repo, monkeypatch,
+                                                                       capsys):
+    settings = tmp_path / "claude-config" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text('{"theme": "dark"}\n', encoding="utf-8")
+    monkeypatch.chdir(repo)
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
+    installed = settings.read_bytes()
+    blocked = refuse_writes(monkeypatch, settings)                          # read-only, or held by another program
+    capsys.readouterr()
+    assert cli.main(["uninstall", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert f"Could not: Claude Code: put back {settings}" in out and f"cannot write {settings}" in out
+    assert f"Kept {state_root}: {settings} still runs its hook script" in out
+    assert "Orchestraty is uninstalled" not in out and "did not finish" in out
+    assert settings.read_bytes() == installed and sorted(os.listdir(settings.parent)) == ["settings.json"]
+    assert (state_root / "hooks" / "hook.py").is_file()                     # the hooks still work
+    blocked.clear()                                                          # once it can be written: a second run
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert settings.read_text(encoding="utf-8") == '{"theme": "dark"}\n'     # the backup from before orch init
+    assert not state_root.exists()
+
+
+def test_a_step_that_fails_keeps_the_state_folder(scene, monkeypatch, capsys):
+    s = scene
+    refuse_writes(monkeypatch, s["exclude"])
+    assert cli.main(["uninstall", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert "Could not: git: take the line orch init added" in out
+    assert f"Kept {s['state']}: a second run of orch uninstall needs its backups." in out
+    assert s["state"].is_dir() and s["claude"].read_text(encoding="utf-8") == CLAUDE_BEFORE
+
+
+def test_the_hooks_of_another_state_folder_come_out_too(tmp_path, state_root, repo, monkeypatch, capsys):
+    settings = tmp_path / "claude-config" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text('{"theme": "dark"}\n', encoding="utf-8")
+    monkeypatch.chdir(repo)
+    old = tmp_path / "OneDrive" / "state"
+    monkeypatch.setenv("ORCH_HOME", str(old))
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
+    monkeypatch.setenv("ORCH_HOME", str(state_root))
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
+    data = read(settings)                                     # both folders' hooks, as orch init left them before
+    data["hooks"]["Stop"].insert(0, claude.hook_entry(sys.executable, str(old / "hooks" / "hook.py"), "Stop"))
+    data["env"][claude.PLUGIN_DIRS] = (";" if os.name == "nt" else ":").join([str(old / "mod"),
+                                                                              data["env"][claude.PLUGIN_DIRS]])
+    settings.write_text(json.dumps(data), encoding="utf-8")
+    capsys.readouterr()
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert f"with the hooks of the state folder {old}" in capsys.readouterr().out
+    assert read(settings) == {"theme": "dark"} and not state_root.exists()
+
+
+def test_the_exclude_line_for_claude_codes_project_settings_goes_too(repo, git, monkeypatch):
+    monkeypatch.chdir(repo)
+    exclude = repo / ".git" / "info" / "exclude"
+    before = exclude.read_bytes()
+    assert cli.main(["init", "--project", "--yes", "--no-git-hooks"]) == 0
+    assert exclude.read_bytes() != before
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert exclude.read_bytes() == before and not (repo / ".claude").exists()
+    assert git(repo, "status", "--porcelain") == ""
+
+
+def test_a_linked_settings_file_that_runs_the_hook_script_keeps_the_state_folder(tmp_path, state_root, capsys):
+    if not symlinks_work(tmp_path):
+        pytest.skip("symbolic links are not available here")
+    state = State()
+    (state_root / "hooks").mkdir(parents=True)
+    real = tmp_path / "dotfiles" / "settings.json"
+    real.parent.mkdir()
+    real.write_text(json.dumps({"hooks": claude.hook_block(sys.executable, state.hook_script)}), encoding="utf-8")
+    link = tmp_path / "claude-config" / "settings.json"
+    link.parent.mkdir()
+    os.symlink(real, link)
+    assert cli.main(["uninstall", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert f"{link} is a link" in out and f"Kept {state_root}: {link} still runs its hook script" in out
+    assert state_root.is_dir()

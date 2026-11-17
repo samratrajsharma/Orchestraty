@@ -42,6 +42,7 @@ config.toml at all.
 """
 import json
 import os
+import re
 
 from orchestraty.adapters import claude, shell
 
@@ -125,12 +126,50 @@ def without_ours(config, script):
     return config
 
 
+# The line orch init writes, whatever the state folder: <python> -S -I <folder>/hooks/hook.py codex <event>,
+# the script plain (or in its 8.3 form), or quoted with ' (sh, PowerShell) or " (cmd).
+_SHAPE = re.compile(r"""\s-S\s-I\s(?P<q>['"]?)(?P<script>[^'"]*?[\\/]hooks[\\/]hook\.py)(?P=q)\s""" + NAME
+                    + r"""\s[A-Za-z]+\s*$""")
+
+
+def other_states(config, script):
+    """The state folders, other than the one `script` is in, whose hook script the config's hooks
+    run: an orch init with another ORCH_HOME wrote them. Each once, in the order found."""
+    hooks = config.get("hooks") if isinstance(config.get("hooks"), dict) else {}
+    found = []
+    for entries in hooks.values():
+        for entry in entries if isinstance(entries, list) else ():
+            runs = entry.get("hooks") if isinstance(entry, dict) else None
+            for hook in runs if isinstance(runs, list) else ():
+                command = hook.get("command") if isinstance(hook, dict) else None
+                shaped = _SHAPE.search(command) if isinstance(command, str) else None
+                if shaped and not shell.mentions(command, script):
+                    root = os.path.dirname(os.path.dirname(shaped.group("script")))
+                    if root not in found:
+                        found.append(root)
+    return found
+
+
+def without_others(config, script):
+    """The config without the hooks of every other state folder (`other_states`)."""
+    for root in other_states(config, script):
+        config = without_ours(config, os.path.join(root, "hooks", "hook.py"))
+    return config
+
+
+def without_orchestraty(config, script):
+    """The config with nothing of Orchestraty's: no hooks that run `script`, and none of another
+    state folder's."""
+    return without_ours(without_others(config, script), script)
+
+
 def merged(config, python, script):
-    """The config with our entries added after any others (earlier ones of ours replaced).
-    Raises ValueError when its hooks are not an object (Codex would not read it either)."""
+    """The config with our entries added after any others (earlier ones of ours replaced, and
+    those of another state folder taken out). Raises ValueError when its hooks are not an object
+    (Codex would not read it either)."""
     if not isinstance(config.get("hooks", {}), dict):
         raise ValueError("its hooks are not a JSON object")
-    config = without_ours(config, script)
+    config = without_orchestraty(config, script)
     hooks = dict(config.get("hooks") or {})
     for event in CAPTURED:
         entries = hooks.get(event)

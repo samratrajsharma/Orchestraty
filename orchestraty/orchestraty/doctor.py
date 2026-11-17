@@ -9,7 +9,8 @@ line) or ``note`` (worth knowing, not a problem). The checks, in order:
   (SQLite) and the spools would be copied half-written;
 * the hook script in the state folder: there, and the one this version installs;
 * each agent's hooks (Claude Code, Codex, Antigravity), in the file orch init writes them to:
-  the entries this installation writes, or none (a note); no agent with them is a problem. For
+  the entries this installation writes, or none (a note); no agent with them is a problem, and so
+  are the hooks of another state folder in the same file. For
   Claude Code, which setup runs them: that file's entries, or Orchestraty's Claude Code plugin
   (``orchestraty/plugin``), never both, and what the plugin needs (its switch's interpreter, the
   hooks this version writes, Git Bash on Windows);
@@ -106,7 +107,8 @@ def state_check(state, environ=None):
     if service:
         return problem(f"state folder: {state.root} is in a folder {service} syncs, which would copy the record "
                        "and the spools to other machines half-written",
-                       "set ORCH_HOME to a folder outside it (only on this machine), then run orch init again")
+                       "set ORCH_HOME to a folder outside it (only on this machine), then run orch init again: it "
+                       "takes the hooks of this folder out")
     if not os.path.isdir(state.root):
         return problem(f"state folder: {state.root} does not exist yet", "run orch init")
     try:
@@ -132,7 +134,8 @@ def hook_script_check(state):
 
 # ------------------------------------------------------------------------------ the agents' hooks
 def _agents(state, cfg):
-    """(title, the file orch init writes its hooks to, how to install them, {python: wanted config})."""
+    """(title, the file orch init writes its hooks to, how to install them, its adapter, {python: wanted
+    config})."""
     from orchestraty.adapters import antigravity, claude, codex
     python = hooks.hook_python()
     script = state.hook_script
@@ -142,10 +145,10 @@ def _agents(state, cfg):
         wanted["hooks"] = claude.merged_settings(current, python, script, cfg["wake"])["hooks"]
         return wanted
     return [
-        (claude.TITLE, cfg["settings"] or claude.settings_path(), "orch init", claude.without_ours, claude_wanted),
-        (codex.TITLE, codex.config_path(), "orch init --agent codex", codex.without_ours,
+        (claude.TITLE, cfg["settings"] or claude.settings_path(), "orch init", claude, claude_wanted),
+        (codex.TITLE, codex.config_path(), "orch init --agent codex", codex,
          lambda current: codex.merged(current, python, script)),
-        (antigravity.TITLE, antigravity.config_path(), "orch init --agent antigravity", antigravity.without_ours,
+        (antigravity.TITLE, antigravity.config_path(), "orch init --agent antigravity", antigravity,
          lambda current: antigravity.merged(current, python, script)),
     ]
 
@@ -175,12 +178,19 @@ def agent_checks(state, cfg):
     """One line for each agent (for Claude Code, which setup runs its hooks), and a problem when
     none has Orchestraty's hooks."""
     out, installed = [], 0
-    for title, path, how, without, wanted in _agents(state, cfg):
+    for title, path, how, adapter, wanted in _agents(state, cfg):
+        without = adapter.without_ours
         try:
             current = hooks.load_settings(path)
         except hooks.Refused as exc:
             out.append(problem(f"{title}: {exc}", f"fix the file, then run {how} again"))
             continue
+        others = adapter.other_states(current, state.hook_script)
+        if others:
+            out.append(problem(f"{title}: {path} also runs the hooks of the state folder {', '.join(others)}, which an "
+                               "orch init with another ORCH_HOME added, so every event is recorded there too",
+                               f"run {how} again: it takes them out"))
+            current = adapter.without_others(current, state.hook_script)
         ours = without(current, state.hook_script) != current
         if title == claude.TITLE:
             lines, on = claude_checks(state, path, current, ours,

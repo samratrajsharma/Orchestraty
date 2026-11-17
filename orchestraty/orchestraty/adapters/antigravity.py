@@ -113,6 +113,22 @@ def _runs(item, script):
         isinstance(h, dict) and shell.mentions(h.get("command"), script) for h in hooks)
 
 
+def other_states(config, script):
+    """None: Orchestraty's Antigravity hook has its own name, which without_ours takes out
+    whatever state folder it runs."""
+    return []
+
+
+def without_orchestraty(config, script):
+    """The config with nothing of Orchestraty's (see without_ours)."""
+    return without_ours(config, script)
+
+
+def without_others(config, script):
+    """The config as it is: see other_states."""
+    return config
+
+
 def without_ours(config, script):
     """The config without our hook, and without any other handler that runs our hook script
     (other hooks kept; one left with no event is dropped)."""

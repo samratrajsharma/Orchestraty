@@ -5,7 +5,8 @@ import os
 import sys
 import time
 
-from orchestraty import cli, doctor
+from orchestraty import cli, config, doctor
+from orchestraty.adapters import claude
 from orchestraty.capture import hook
 from orchestraty.coordinator.lock import Lock
 from orchestraty.paths import State
@@ -174,3 +175,21 @@ def test_a_repository_over_the_file_cap_says_what_is_not_analysed(repo, monkeypa
     assert check.kind == "note" and ": 1 files in " in check.text
     assert "reads at most 1 files of a commit, and this one has more: files after a.py in path order are not " \
            "analysed" in check.text
+
+
+def test_hooks_of_another_state_folder_are_a_problem(state_root, tmp_path):
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
+    settings_file = tmp_path / "claude-config" / "settings.json"
+    settings = json.loads(settings_file.read_text(encoding="utf-8"))
+    old = tmp_path / "OneDrive" / "state"                                    # an orch init with another ORCH_HOME
+    for event, entries in claude.hook_block(sys.executable, str(old / "hooks" / "hook.py")).items():
+        settings["hooks"][event] = entries + settings["hooks"][event]
+    settings_file.write_text(json.dumps(settings), encoding="utf-8")
+    state = State()
+    lines = doctor.agent_checks(state, config.load(state))
+    assert doctor.problem(f"Claude Code: {settings_file} also runs the hooks of the state folder {old}, which an orch "
+                          "init with another ORCH_HOME added, so every event is recorded there too",
+                          "run orch init again: it takes them out") in lines
+    assert doctor.ok(f"Claude Code: hooks in {settings_file}") in lines                 # this folder's are right
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
+    assert all(line.kind != "fix" for line in doctor.agent_checks(state, config.load(state)))

@@ -5,7 +5,8 @@ Which entries go where is the agent's adapter's business (``orchestraty/adapters
 does the file work for every agent: the hook script copied into the state folder's ``hooks``
 folder, the file copied to the state folder's ``backups`` before every change, written whole
 (never edited in place), and a config file that is not valid JSON, or that is a link, refused and
-left alone. Claude Code's entries (``adapters/claude``) are installed by ``install``; its names
+left alone, as is one that cannot be written (read-only, or open in another program): no copy of
+it is left beside it. Claude Code's entries (``adapters/claude``) are installed by ``install``; its names
 are kept here too, where the rest of Orchestraty finds them. With Claude Code's Orchestraty
 plugin installed, the plugin holds those hooks: ``install_for_plugin`` turns them on
 (``orchestraty/plugin``) and adds none to the settings file.
@@ -19,8 +20,8 @@ import time
 from orchestraty import plugin
 from orchestraty.adapters.claude import (AGENT, EDIT_MATCHER, EVENTS, MATCHERS, MOD_SOURCE, PLUGIN_DIRS,  # noqa: F401
                                          TIMEOUT_SECONDS, WAKE_TIMEOUT_SECONDS, hook_block, hook_entry,
-                                         install_mod, merged_settings, mod_in, settings_path, wake_entry,
-                                         with_mod, without_mod, without_ours)
+                                         install_mod, merged_settings, mod_in, other_states, settings_path,
+                                         wake_entry, with_mod, without_mod, without_orchestraty, without_ours)
 
 HOOK_SOURCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook.py")
 BACKUP_NAME = "settings.json"
@@ -81,13 +82,31 @@ def load_settings(path):
     return data
 
 
+def _discard(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def _write_atomic(path, data):
+    """Write the file whole: a copy beside it, then the copy put in its place. When that cannot be
+    done (the file is read-only, or on Windows another program has it open), the copy is deleted
+    and the file is left as it was."""
     tmp = path + ".orch-tmp"
-    with open(tmp, "wb") as fh:
-        fh.write(data)
-    os.replace(tmp, path)
-    with open(path, "rb") as fh:              # read back once, so a scanner's first look is off the hot path
-        fh.read()
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    except OSError as exc:
+        _discard(tmp)
+        raise Refused(f"cannot write {path} ({type(exc).__name__}): it may be read-only, or open in another "
+                      "program; it was left as it was") from exc
+    try:
+        with open(path, "rb") as fh:          # read back once, so a scanner's first look is off the hot path
+            fh.read()
+    except OSError:
+        pass
 
 
 def _dump(settings):
@@ -198,7 +217,7 @@ def install_for_plugin(state, path, python, wake=False):
     current = load_settings(path)
     install_script(state)
     write_launch(state)
-    wanted = without_mod(without_ours(current, state.hook_script), state.mod)
+    wanted = without_orchestraty(current, state.hook_script, state.mod)
     changed, saved = False, None
     if wanted != current:
         saved = backup(state, path, "install")
@@ -214,7 +233,7 @@ def uninstall(state, path):
     """Remove our entries from the settings file at `path`. Returns (changed, backup folder)."""
     check_settings_file(path)
     current = load_settings(path)
-    wanted = without_mod(without_ours(current, state.hook_script), state.mod)
+    wanted = without_orchestraty(current, state.hook_script, state.mod)
     if wanted == current:
         return False, None
     saved = backup(state, path, "uninstall")
@@ -243,11 +262,11 @@ def install_agent(state, adapter, path, python):
 
 
 def uninstall_agent(state, adapter, path):
-    """Take an agent's entries out of its config file (its adapter's ``without_ours``). Returns
-    (changed, backup folder or None)."""
+    """Take an agent's entries out of its config file (its adapter's ``without_orchestraty``: also
+    those of another state folder). Returns (changed, backup folder or None)."""
     check_settings_file(path)
     current = load_settings(path)
-    wanted = adapter.without_ours(current, state.hook_script)
+    wanted = adapter.without_orchestraty(current, state.hook_script)
     if not os.path.exists(path) or wanted == current:
         return False, None
     saved = backup(state, path, "uninstall")
