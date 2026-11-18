@@ -4,10 +4,11 @@ Each check gives one line: ``ok``, ``fix`` (a problem, with what to do about it 
 line) or ``note`` (worth knowing, not a problem). The checks, in order:
 
 * the Python running orch: 3.10 or later;
-* the state folder: that it can be written to, and that it is not in a folder a sync service
-  copies to other machines (OneDrive, Dropbox, Google Drive, iCloud Drive), where the record
-  (SQLite) and the spools would be copied half-written;
-* the record: that SQLite reads every page of it (a damaged one is to be moved aside);
+* the state folder: that files can be made and deleted in it, and that it is not in a folder a
+  sync service copies to other machines (OneDrive, Dropbox, Google Drive, iCloud Drive), where
+  the record (SQLite) and the spools would be copied half-written;
+* the record: that SQLite opens it and reads every page of it (a damaged one is to be moved
+  aside), and that it is not read-only;
 * the hook script in the state folder: there, and the one this version installs;
 * each agent's hooks (Claude Code, Codex, Antigravity), in the file orch init writes them to:
   the entries this installation writes, or none (a note); no agent with them is a problem, and so
@@ -17,9 +18,14 @@ line) or ``note`` (worth knowing, not a problem). The checks, in order:
   hooks this version writes, Git Bash on Windows);
 * the coordinator: that it starts with what a hook starts it with, the interpreter and import
   path in ``hooks/launch.txt`` (one that is running already counts, unless it runs another
-  version: one that started before an update); one that doctor starts is stopped again;
+  version: one that started before an update); one that doctor starts is stopped again, and one
+  that does not start leaves the hooks free to start the next at once;
 * git: on the PATH, and 2.38 or later, which the together check needs (``merge-tree
   --write-tree``);
+* inside a repository with the push line, only when there is a problem: its folder is gone
+  while ``core.hooksPath`` still names it, its pre-push runs a hook script that is not there (a
+  state folder moved or deleted), or a hook added to the earlier hooks folder is not run yet
+  (``orch init`` again in that repository fixes each);
 * the engine: that it imports;
 * inside a repository, the time its first index takes: the engine reading every file at HEAD
   with no cache, as the coordinator does before the first note about that repository can come.
@@ -43,7 +49,10 @@ from orchestraty.capture import install as hooks
 from orchestraty.coordinator.lock import Lock, touch
 
 NEWER_RECORD = 4                  # the coordinator's exit code for a record a newer Orchestraty wrote
-BAD_RECORD = 6                    # ... and for a record SQLite cannot read (not a database, or damaged)
+FAILED = 5                        # ... for any other start that failed
+BAD_RECORD = 6                    # ... and for a record SQLite cannot open or read (not a database, damaged, a folder)
+NEW_RECORD = "the next hook starts a new record within a minute, or run orch doctor again to start it now"
+_PROBE = re.compile(r"\.orch-doctor-\d+-[0-9a-f]{8}")       # the files cannot_write makes
 
 Check = namedtuple("Check", "kind text fix")
 GIT_NEEDED = (2, 38)
@@ -114,32 +123,60 @@ def state_check(state, environ=None):
                        "takes the hooks of this folder out")
     if not os.path.isdir(state.root):
         return problem(f"state folder: {state.root} does not exist yet", "run orch init")
-    exc = cannot_write(state.root)
-    if exc is not None:
-        return problem(f"state folder: {state.root} cannot be written to ({type(exc).__name__})",
+    failed = cannot_write(state.root)
+    if failed and failed[0] == "write":
+        return problem(f"state folder: {state.root} cannot be written to ({type(failed[1]).__name__})",
                        "give your user write access to it, or set ORCH_HOME to a folder it can write")
+    if failed:
+        return problem(f"state folder: {state.root} can be written to, but files cannot be deleted in it "
+                       f"({type(failed[1]).__name__})",
+                       "give your user the right to delete files in it (the coordinator replaces and removes files "
+                       "there), or set ORCH_HOME to a folder where it can")
     return ok(f"state folder: {state.root}")
 
 
 def cannot_write(folder):
-    """The error that creating and deleting a file in `folder` gives, or None when both work.
-    One try, with a name of its own: tempfile tries again on Windows after a PermissionError
-    for as long as os.access says the folder is writable, which it says whatever the folder's
-    access list denies, so it would try 2**31 names."""
+    """How making a file in `folder` and deleting it again fails: ("write", error) or ("delete",
+    error), or None when both work. One try, with a name of its own: tempfile tries again on
+    Windows after a PermissionError for as long as os.access says the folder is writable, which
+    it says whatever the folder's access list denies, so it would try 2**31 names. The probe
+    files of earlier runs that could not delete them are deleted first, where that works now."""
+    _remove_old_probes(folder)
     probe = os.path.join(folder, f".orch-doctor-{os.getpid()}-{os.urandom(4).hex()}")
     try:
         os.close(os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
-        os.remove(probe)
     except OSError as exc:
-        return exc
+        return "write", exc
+    try:
+        os.remove(probe)
+    except FileNotFoundError:                   # another doctor run took it away just now
+        pass
+    except OSError as exc:
+        return "delete", exc
     return None
 
 
+def _remove_old_probes(folder):
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return
+    for name in names:
+        if _PROBE.fullmatch(name):
+            try:
+                os.remove(os.path.join(folder, name))
+            except OSError:
+                pass
+
+
 def record_check(state):
-    """The record: that SQLite reads every page of it (PRAGMA quick_check). Read only, and a
-    record that is not there yet is not made."""
+    """The record: that SQLite opens it and reads every page of it (PRAGMA quick_check), and
+    that its files are not read-only (the coordinator opens such a record, then fails every
+    step). Read only, and a record that is not there yet is not made."""
     if not os.path.exists(state.record):
         return note(f"record: none yet at {state.record} (the coordinator makes it)")
+    if os.path.isdir(state.record):
+        return problem(f"record: {state.record} is a folder, not a file", f"move it aside: {NEW_RECORD}")
     from orchestraty.coordinator.record import Record
     try:
         record = Record(state.record, readonly=True)
@@ -149,14 +186,24 @@ def record_check(state):
             record.close()
     except sqlite3.DatabaseError as exc:
         found = [str(exc)]
-        if type(exc) is not sqlite3.DatabaseError:              # locked, no access: not a damaged file
-            return problem(f"record: {state.record} cannot be read ({exc})",
-                           "see the state folder line above; run orch doctor again once the coordinator is idle")
-    if found == ["ok"]:
-        return ok(f"record: {state.record}")
-    return problem(f"record: {state.record} cannot be read ({found[0][:200]})",
-                   f"run orch coordinator stop, then move {state.record} aside, with its -wal and -shm files: the "
-                   "next hook starts a new record")
+        if type(exc) is not sqlite3.DatabaseError:              # not a damaged file
+            if "locked" in str(exc):
+                return problem(f"record: {state.record} cannot be read now ({exc})",
+                               "run orch doctor again once the coordinator is idle")
+            return problem(f"record: {state.record} cannot be opened ({exc})",
+                           "give your user read and write access to it, then run orch doctor again; or move it "
+                           "aside, with its -wal and -shm files, to start a new record")
+    if found != ["ok"]:
+        return problem(f"record: {state.record} cannot be read ({found[0][:200]})",
+                       f"run orch coordinator stop, then move {state.record} aside, with its -wal and -shm files: "
+                       f"{NEW_RECORD}")
+    read_only = [path for path in (state.record, state.record + "-wal", state.record + "-shm")
+                 if os.path.exists(path) and not os.access(path, os.W_OK)]
+    if read_only:
+        return problem(f"record: {' and '.join(read_only)} cannot be written to (read-only)",
+                       "give your user write access to it (on Windows, clear its read-only attribute), then run "
+                       "orch coordinator stop and orch doctor again")
+    return ok(f"record: {state.record}")
 
 
 def hook_script_check(state):
@@ -365,18 +412,23 @@ def coordinator_check(state, seconds=START_SECONDS):
     while time.monotonic() - started < seconds and proc.poll() is None:
         if hook.coordinator_alive(state.root, time.time()) and os.path.exists(state.info):
             took = time.monotonic() - started
-            if _stop(state, seconds):
-                _reap(proc, seconds)
+            if not _stop(state, seconds):
+                return ok(f"coordinator: starts ({took:.1f} s); it stops by itself when idle")
+            _reap(proc, seconds)
+            # It touches its heartbeat and writes its info file before it opens the record.
+            if proc.returncode not in (BAD_RECORD, NEWER_RECORD, FAILED):
                 return ok(f"coordinator: starts ({took:.1f} s), and was stopped again")
-            return ok(f"coordinator: starts ({took:.1f} s); it stops by itself when idle")
+            break
         time.sleep(0.1)
     if proc.poll() is None:
         _stop(state, seconds)
         _reap(proc, seconds)
+    if proc.returncode in (BAD_RECORD, NEWER_RECORD, FAILED):
+        _end_hold_off(state)
     shown = f"exited with {proc.returncode}" if proc.returncode is not None else f"did not start within {seconds:.0f} s"
     if proc.returncode == BAD_RECORD:
         return problem(f"coordinator: the record {state.record} cannot be read, so it does not start",
-                       f"move {state.record} aside, with its -wal and -shm files: the next hook starts a new record")
+                       f"move {state.record} aside, with its -wal and -shm files: {NEW_RECORD}")
     if proc.returncode == NEWER_RECORD:
         return problem("coordinator: the record was written by a newer Orchestraty, which this one cannot read",
                        f"upgrade Orchestraty, or move {state.record} aside to start a new record")
@@ -390,6 +442,18 @@ def _reap(proc, seconds):
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
+
+
+def _end_hold_off(state):
+    """A coordinator that does not start keeps the hooks from starting another for a minute
+    (coordinator.spawned set that far ahead). Doctor's own start is no reason for that: the
+    user is about to act on what doctor says, and the next hook should then start one."""
+    now = time.time()
+    try:
+        if os.stat(state.spawned).st_mtime > now:
+            os.utime(state.spawned, (now - 2 * hook.RESPAWN_SECONDS, now - 2 * hook.RESPAWN_SECONDS))
+    except OSError:
+        pass
 
 
 # ------------------------------------------------------------------------------ git and the engine
@@ -417,18 +481,32 @@ def git_check(output=None):
 
 
 def git_hooks_check(cwd):
-    """A problem when the repository holding `cwd` has the push line and a hook added since that
-    its chain does not run yet (``githooks.unchained``); else None."""
+    """A problem when the repository holding `cwd` has the push line and its chain folder is gone
+    (``githooks.lost``), its pre-push runs a hook script that is not there
+    (``githooks.missing_script``: a state folder moved or deleted since), or a hook added since
+    is not run yet (``githooks.unchained``); else None."""
     from orchestraty import gitio
     from orchestraty.capture import githooks
+    again = "run orch init again in this repository"
     try:
-        missing = githooks.unchained(cwd) if gitio.worktree_info(cwd) else []
+        if not gitio.worktree_info(cwd):
+            return None
+        if githooks.lost(cwd):
+            chain = githooks.chain_folder(cwd)
+            what = f"has lost its {githooks.ORIGINAL_FILE}" if os.path.isdir(chain) else "is gone"
+            return problem(f"git hooks: core.hooksPath names the push line's folder {chain}, which {what}, so "
+                           "this repository's own hooks may not run", again)
+        script = githooks.missing_script(cwd)
+        missing = githooks.unchained(cwd)
     except (gitio.GitError, gitio.UntrustedRepositoryError):
         return None
+    if script:
+        return problem(f"git hooks: the push line runs {script}, which is not there (its state folder was moved or "
+                       "deleted), so each push prints an error", again)
     if not missing:
         return None
     return problem(f"git hooks: {', '.join(missing)} added since the push line was, so git does not run "
-                   f"{'it' if len(missing) == 1 else 'them'}", "run orch init again in this repository")
+                   f"{'it' if len(missing) == 1 else 'them'}", again)
 
 
 def engine_check():

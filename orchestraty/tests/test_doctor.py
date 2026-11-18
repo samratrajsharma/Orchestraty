@@ -5,6 +5,8 @@ import os
 import sys
 import time
 
+import pytest
+
 from orchestraty import cli, config, doctor
 from orchestraty.adapters import claude
 from orchestraty.capture import hook
@@ -243,3 +245,97 @@ def test_a_coordinator_that_cannot_read_its_record_says_so(state_root, tmp_path)
     check = doctor.coordinator_check(State(), seconds=30)
     assert check.kind == "fix" and "cannot be read" in check.text
     assert "aside" in check.fix and "orch init" not in check.fix
+
+
+def test_a_record_that_cannot_be_written_is_a_problem(state_root):
+    """The coordinator opens a read-only record and then fails every step, so the record reading
+    whole is not enough."""
+    import stat
+    from orchestraty.coordinator.record import Record
+    state_root.mkdir(parents=True)
+    state = State()
+    Record(state.record).close()
+    os.chmod(state.record, stat.S_IREAD)
+    try:
+        if os.access(state.record, os.W_OK):
+            pytest.skip("this user writes read-only files")
+        check = doctor.record_check(state)
+        assert check.kind == "fix" and check.text == f"record: {state.record} cannot be written to (read-only)"
+        assert "write access" in check.fix and "orch init" not in check.fix
+    finally:
+        os.chmod(state.record, stat.S_IREAD | stat.S_IWRITE)
+    assert doctor.record_check(state).kind == "ok"
+
+
+def test_a_record_that_cannot_be_opened_is_named_itself(state_root):
+    state_root.mkdir(parents=True)
+    state = State()
+    os.makedirs(state.record)
+    assert doctor.state_check(state, {}).kind == "ok"               # so no line above is to blame
+    check = doctor.record_check(state)
+    assert check.kind == "fix" and check.text == f"record: {state.record} is a folder, not a file"
+    assert "aside" in check.fix and "state folder" not in check.fix and "orch init" not in check.fix
+
+
+def _fake_coordinator(state_root, tmp_path, source):
+    """launch.txt's import path leads to an orchestraty whose __main__ is `source`."""
+    fake = tmp_path / "fake" / "orchestraty"
+    fake.mkdir(parents=True)
+    (fake / "__init__.py").write_text("", encoding="utf-8")
+    (fake / "__main__.py").write_text(source, encoding="utf-8")
+    hooks_folder = state_root / "hooks"
+    hooks_folder.mkdir(parents=True)
+    (hooks_folder / "launch.txt").write_text(f"{sys.executable}\n{fake.parent}\n", encoding="utf-8")
+
+
+def test_a_coordinator_that_cannot_read_its_record_after_it_seemed_to_start(state_root, tmp_path):
+    """run() touches its heartbeat and writes coordinator.json before it opens the record, so
+    doctor can see both, stop it, and must still look at how it exited."""
+    from orchestraty.coordinator import main as cmain
+    _fake_coordinator(state_root, tmp_path, (
+        "import os, time\n"
+        "names = [os.path.join(os.environ['ORCH_HOME'], n) for n in ('coordinator.alive', 'coordinator.json')]\n"
+        "for name in names:\n"
+        "    open(name, 'w').close()\n"
+        "time.sleep(1)\n"
+        "for name in names:\n"
+        "    os.remove(name)\n"
+        f"raise SystemExit({cmain.BAD_RECORD})\n"))
+    check = doctor.coordinator_check(State(), seconds=30)
+    assert check.kind == "fix" and "cannot be read" in check.text, check
+
+
+def test_doctor_ends_the_hold_off_its_own_start_caused(state_root):
+    """The coordinator doctor starts on a damaged record holds the hooks off for a minute. That
+    start was doctor's, not a hook's: once the record is moved aside, the next hook starts one."""
+    from orchestraty.capture import install
+    state_root.mkdir(parents=True)
+    state = State()
+    install.write_launch(state)
+    with open(state.record, "wb") as fh:
+        fh.write(b"GARBAGE!" * 512)
+    check = doctor.coordinator_check(state, seconds=30)
+    assert check.kind == "fix" and "cannot be read" in check.text
+    assert os.stat(state.spawned).st_mtime < time.time() - hook.RESPAWN_SECONDS
+    assert "within a minute" in check.fix and "orch doctor again" in check.fix       # a hook may have tried since
+
+
+def test_a_state_folder_where_files_cannot_be_deleted_says_so(state_root, monkeypatch):
+    """Where files can be made there but not deleted, the probe file stays behind: doctor says
+    what is wrong, and removes the probe files earlier runs left once it can."""
+    state_root.mkdir(parents=True)
+    (state_root / ".orch-doctor-notes").write_text("not doctor's", encoding="utf-8")
+    real_remove = os.remove
+
+    def denied(path, *args, **kwargs):
+        if os.path.dirname(os.path.abspath(path)) == str(state_root):
+            raise PermissionError(13, "Access is denied", path)
+        return real_remove(path, *args, **kwargs)
+    monkeypatch.setattr(os, "remove", denied)
+    check = doctor.state_check(State(), {})
+    assert check.kind == "fix" and check.text.endswith("files cannot be deleted in it (PermissionError)")
+    assert "delete" in check.fix
+    assert len(os.listdir(state_root)) == 2                          # the probe file stayed
+    monkeypatch.setattr(os, "remove", real_remove)
+    assert doctor.state_check(State(), {}).kind == "ok"
+    assert os.listdir(state_root) == [".orch-doctor-notes"]          # gone now, and nothing else

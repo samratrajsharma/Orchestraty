@@ -127,7 +127,7 @@ def test_orch_init_replaces_a_read_only_copy_of_the_mod(state, tmp_path, monkeyp
     from orchestraty.adapters import claude
     src = tmp_path / "mod-source"
     shutil.copytree(install.MOD_SOURCE, src, ignore=shutil.ignore_patterns("__pycache__"))
-    paths = [os.path.join(root, n) for root, dirs, files in os.walk(src) for n in dirs + files]
+    paths = [str(src)] + [os.path.join(root, n) for root, dirs, files in os.walk(src) for n in dirs + files]
     for p in paths:
         os.chmod(p, stat.S_IREAD | (stat.S_IEXEC if os.path.isdir(p) else 0))
     monkeypatch.setattr(claude, "MOD_SOURCE", str(src))
@@ -135,6 +135,8 @@ def test_orch_init_replaces_a_read_only_copy_of_the_mod(state, tmp_path, monkeyp
         assert install.install_mod(state) == state.mod
         assert install.install_mod(state) == state.mod                 # the first copy is replaced
         assert os.access(os.path.join(state.mod, "hooks", "register.js"), os.W_OK)
+        shutil.rmtree(state.mod)                                     # the copied folder itself too: the
+        assert not os.path.exists(state.mod)                         # state folder can be deleted
     finally:
         for p in paths:
             os.chmod(p, stat.S_IREAD | stat.S_IWRITE | (stat.S_IEXEC if os.path.isdir(p) else 0))

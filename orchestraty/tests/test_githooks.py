@@ -1,12 +1,13 @@
 """The git hook chain for the push line, on synthetic repositories with a bare remote."""
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from orchestraty import cli, config
+from orchestraty import cli, config, doctor
 from orchestraty.capture import githooks, install
 from orchestraty.delivery import slots
 from orchestraty.paths import State
@@ -206,3 +207,142 @@ def test_a_pass_through_whose_hook_is_gone_and_that_git_would_obey_is_taken_out_
     githooks.install(str(repo), sys.executable, str(hook_script))
     assert not (chain / "push-to-checkout").exists() and (chain / "commit-msg").exists()
     assert (chain / githooks.ORIGINAL_FILE).exists()
+
+
+# --------------------------------------------------------------------------------------- #
+# What orch init again leaves, rebuilds and rewrites; what uninstall puts back
+# --------------------------------------------------------------------------------------- #
+def commit(cwd):
+    return subprocess.run(["git", "-c", "user.name=T", "-c", "user.email=t@e", "commit", "-q", "--allow-empty", "-m",
+                           "c"], cwd=cwd, capture_output=True, timeout=120)
+
+
+def local_hooks_path(repo):
+    return subprocess.run(["git", "config", "--local", "--get", "core.hooksPath"], cwd=repo, capture_output=True,
+                          text=True).stdout.strip()
+
+
+def test_orch_init_again_leaves_the_hooks_a_manager_wrote_into_the_chain_folder(state, repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    assert cli.main(["init", "--yes"]) == 0
+    chain = Path(githooks.chain_folder(str(repo)))
+    write_hook(chain / "pre-commit", "echo manager >&2\nexit 1\n")       # lefthook install writes into core.hooksPath
+    write_hook(chain / "post-index-change", "exit 0\n")                  # not wanted by the chain: not ours to remove
+    before = {name: (chain / name).read_bytes() for name in ("pre-commit", "post-index-change")}
+    capsys.readouterr()
+    assert cli.main(["init", "--yes"]) == 0
+    assert {name: (chain / name).read_bytes() for name in before} == before
+    assert "Left as found" in capsys.readouterr().out
+    assert commit(repo).returncode != 0, "the manager's pre-commit still runs and decides"
+    assert b"# Orchestraty:" in (chain / "pre-push").read_bytes()
+
+
+def test_orch_init_says_when_it_cannot_write_the_chain(state, repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    assert cli.main(["init", "--yes"]) == 0
+
+    def denied(*args):
+        raise PermissionError("denied")
+    monkeypatch.setattr(githooks, "install", denied)
+    capsys.readouterr()
+    assert cli.main(["init", "--yes"]) == 0
+    assert "Could not write the push line" in capsys.readouterr().err
+
+
+def test_a_chain_folder_that_is_gone_is_named_by_doctor_and_rebuilt_by_orch_init(state, repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    assert cli.main(["init", "--yes"]) == 0
+    write_hook(repo / ".git" / "hooks" / "pre-commit", "exit 1\n")
+    chain = Path(githooks.chain_folder(str(repo)))
+    shutil.rmtree(chain)
+    assert commit(repo).returncode == 0                                  # core.hooksPath names nothing: no hook runs
+    problem = doctor.git_hooks_check(str(repo))
+    assert problem.kind == "fix" and "gone" in problem.text and "orch init again" in problem.fix
+    capsys.readouterr()
+    assert cli.main(["init", "--yes"]) == 0
+    assert "Rebuilt" in capsys.readouterr().out
+    assert (chain / githooks.ORIGINAL_FILE).exists() and githooks.installed(str(repo))
+    assert commit(repo).returncode != 0, ".git/hooks runs again"
+    assert doctor.git_hooks_check(str(repo)) is None
+    shutil.rmtree(chain)
+    assert githooks.uninstall(str(repo)) is True and local_hooks_path(repo) == ""
+
+
+def test_only_the_names_git_runs_as_hooks_are_passed_through_or_named(state, repo, hook_script):
+    githooks.install(str(repo), sys.executable, str(hook_script))
+    hooks = repo / ".git" / "hooks"
+    write_hook(hooks / "README", "notes\n")
+    write_hook(hooks / "run-tests-helper", "exit 1\n")
+    assert githooks.unchained(str(repo)) == [] and doctor.git_hooks_check(str(repo)) is None
+    chain = Path(githooks.install(str(repo), sys.executable, str(hook_script)))
+    assert not (chain / "README").exists() and not (chain / "run-tests-helper").exists()
+
+
+def test_a_relative_hooks_path_runs_each_worktrees_own_copy(state, repo, hook_script, tmp_path, git):
+    log = tmp_path / "ran.log"
+    wt = tmp_path / "wt-b"
+    git(repo, "worktree", "add", "-q", "-b", "feat-b", str(wt))
+    subprocess.run(["git", "config", "core.hooksPath", ".githooks"], cwd=repo, check=True)
+    for top, name in ((repo, "main"), (wt, "wt-b")):
+        write_hook(top / ".githooks" / "pre-commit", f'echo {name} >> "{log.as_posix()}"\n')
+    githooks.install(str(repo), sys.executable, str(hook_script))
+    assert commit(wt).returncode == 0 and log.read_text(encoding="utf-8").split() == ["wt-b"]
+    assert commit(repo).returncode == 0 and log.read_text(encoding="utf-8").split() == ["wt-b", "main"]
+    write_hook(wt / ".githooks" / "pre-commit", "exit 1\n")
+    assert commit(wt).returncode != 0, "a linked worktree's own hook decides there"
+    assert githooks.uninstall(str(wt)) is True and local_hooks_path(repo) == ".githooks"
+
+
+def test_a_hooks_path_set_for_one_worktree_is_refused_and_uninstall_still_takes_ours_out(state, repo, hook_script,
+                                                                                       monkeypatch, capsys):
+    chain = Path(githooks.install(str(repo), sys.executable, str(hook_script)))
+    subprocess.run(["git", "config", "extensions.worktreeConfig", "true"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "--worktree", "core.hooksPath", ".husky/_"], cwd=repo, check=True)
+    assert not githooks.installed(str(repo))                             # this worktree's value comes first
+    assert githooks.uninstall(str(repo)) is True
+    assert local_hooks_path(repo) == "" and not chain.exists()
+    with pytest.raises(githooks.Refused):
+        githooks.install(str(repo), sys.executable, str(hook_script))
+    monkeypatch.chdir(repo)
+    assert cli.main(["init", "--yes"]) == 0
+    assert "git config --worktree" in capsys.readouterr().out
+    assert local_hooks_path(repo) == "" and not chain.exists()
+
+
+@pytest.mark.parametrize("earlier", ["global", "relative"])
+def test_uninstall_of_a_chain_from_before_the_scope_was_kept(state, repo, hook_script, earlier):
+    if earlier == "global":                                              # a value from the global config, since changed
+        value = (Path(os.environ["HOME"]) / "ghooks-v").as_posix()
+        subprocess.run(["git", "config", "--global", "core.hooksPath", value], cwd=repo, check=True)
+    else:
+        value = ".husky/_"
+        subprocess.run(["git", "config", "core.hooksPath", value], cwd=repo, check=True)
+    chain = Path(githooks.install(str(repo), sys.executable, str(hook_script)))
+    (chain / githooks.ORIGINAL_FILE).write_text(value + "\n", encoding="utf-8", newline="\n")   # one line: no scope
+    githooks.install(str(repo), sys.executable, str(hook_script))       # orch init again
+    assert (chain / githooks.ORIGINAL_FILE).read_text(encoding="utf-8").splitlines() == [value, ""]
+    if earlier == "global":
+        changed = (Path(os.environ["HOME"]) / "ghooks-w").as_posix()
+        subprocess.run(["git", "config", "--global", "core.hooksPath", changed], cwd=repo, check=True)
+    assert githooks.uninstall(str(repo)) is True
+    assert local_hooks_path(repo) == ("" if earlier == "global" else value)
+
+
+def test_the_refresh_keeps_the_scope_it_recorded(state, repo, hook_script):
+    subprocess.run(["git", "config", "core.hooksPath", ".husky/_"], cwd=repo, check=True)
+    chain = Path(githooks.install(str(repo), sys.executable, str(hook_script)))
+    githooks.install(str(repo), sys.executable, str(hook_script))
+    assert (chain / githooks.ORIGINAL_FILE).read_text(encoding="utf-8").splitlines() == [".husky/_", "local"]
+
+
+def test_doctor_names_a_push_line_whose_hook_script_is_gone_and_orch_init_rewrites_it(state, repo, monkeypatch,
+                                                                                      tmp_path):
+    gone = tmp_path / "old state" / "hooks" / "hook.py"                 # an earlier ORCH_HOME, deleted since
+    githooks.install(str(repo), sys.executable, str(gone))
+    problem = doctor.git_hooks_check(str(repo))
+    assert problem.kind == "fix" and gone.as_posix() in problem.text and "orch init again" in problem.fix
+    monkeypatch.chdir(repo)
+    assert cli.main(["init", "--yes"]) == 0
+    assert doctor.git_hooks_check(str(repo)) is None
+    pre_push = (Path(githooks.chain_folder(str(repo))) / "pre-push").read_text(encoding="utf-8")
+    assert Path(state.hook_script).as_posix() in pre_push and gone.as_posix() not in pre_push

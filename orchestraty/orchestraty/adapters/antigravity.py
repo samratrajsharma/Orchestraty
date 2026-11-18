@@ -113,10 +113,29 @@ def _runs(item, script):
         isinstance(h, dict) and shell.mentions(h.get("command"), script) for h in hooks)
 
 
+def _commands(hook):
+    """Every command line of a named hook's handlers."""
+    found = []
+    for items in hook.values() if isinstance(hook, dict) else ():
+        for item in items if isinstance(items, list) else ():
+            if isinstance(item, dict):
+                found.append(item.get("command"))
+                found += [h.get("command") for h in item.get("hooks") or [] if isinstance(h, dict)]
+    return [c for c in found if isinstance(c, str)]
+
+
 def other_states(config, script):
-    """None: Orchestraty's Antigravity hook has its own name, which without_ours takes out
-    whatever state folder it runs."""
-    return []
+    """The state folders, other than the one `script` is in, whose hook script Orchestraty's
+    named hook runs: an orch init with another ORCH_HOME wrote it. orch init replaces it whatever
+    the folder; a backup taken before can still hold it. Each once, in the order found."""
+    found = []
+    for command in _commands(config.get(HOOK_NAME)):
+        other = shell.shaped_script(command, NAME)
+        if other and not shell.mentions(command, script):
+            root = shell.long_path(os.path.dirname(os.path.dirname(other)))
+            if root not in found:
+                found.append(root)
+    return found
 
 
 def without_orchestraty(config, script):
@@ -125,7 +144,9 @@ def without_orchestraty(config, script):
 
 
 def without_others(config, script):
-    """The config as it is: see other_states."""
+    """The config without Orchestraty's named hook when it runs another state folder's script."""
+    if other_states(config, script):
+        return {name: hook for name, hook in config.items() if name != HOOK_NAME}
     return config
 
 

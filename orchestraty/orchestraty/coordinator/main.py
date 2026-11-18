@@ -65,7 +65,8 @@ WORKING_EVENTS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseF
 IDLE_EVENTS = ("SessionStart", "Stop", "StopFailure")
 DETAIL_FIELDS = ("source", "reason", "stop_hook_active", "len", "took")
 LOCK_WAIT_SECONDS = 3.0
-HOLD_OFF_SECONDS = 60             # no hook starts a coordinator for this long after one could not open its record
+HOLD_OFF_SECONDS = 60             # no hook starts a coordinator for this long after one could not open its
+                                  # record, or failed MAX_FAILURES steps in a row
 LEVEL0_AGENT = "git"
 CLOUD_AGENT = remote.CLOUD_AGENT
 
@@ -163,6 +164,7 @@ class Coordinator:
     # one pass
     def step(self):
         """Read and record everything new in the spools; returns the number of lines read."""
+        saved = dict(self.reader.positions)     # what the record holds: going back to it reads nothing
         lines = self.reader.poll()
         if lines or self.reader.changed:
             try:
@@ -171,7 +173,7 @@ class Coordinator:
                         self.handle_line(agent, raw)
                     self.record.save_positions(self.reader.take_changes())
             except BaseException:
-                self.reader.rewind(self.record.positions())     # nothing of it was saved: read it all again
+                self.reader.rewind(saved)       # nothing of it was saved: read it all again
                 raise
         now = self.now_ns()
         if now - self._last_housekeeping >= HOUSEKEEPING_SECONDS * NS:
@@ -539,7 +541,8 @@ class Coordinator:
         """handle() one spool line in a savepoint of its own. A line that cannot be recorded is
         set aside (a bad line, logged) and only what it wrote is undone, so the other lines read
         with it are kept; a session it made is forgotten too. The record failing itself (disk
-        full, a damaged file) fails the whole step instead, whose lines are then read again."""
+        full, a damaged file), or memory running out, fails the whole step instead, whose lines
+        are then read again."""
         known = set(self.sessions)
         try:
             with self.record.savepoint():
@@ -844,8 +847,9 @@ def _storable(line):
 
 
 def _record_failed(exc):
-    """Whether an error is the record's own (disk full, I/O, a damaged file), not one line's."""
-    return isinstance(exc, sqlite3.OperationalError) or type(exc) is sqlite3.DatabaseError
+    """Whether an error is the record's own (disk full, I/O, a damaged file) or a lack of memory
+    (sqlite3 reports SQLITE_NOMEM as a MemoryError), not one line's."""
+    return isinstance(exc, (sqlite3.OperationalError, MemoryError)) or type(exc) is sqlite3.DatabaseError
 
 
 def _same(a, b):
@@ -908,6 +912,10 @@ def _not_started(state, log, exc):
     elif type(exc) is sqlite3.DatabaseError:                 # not a database, or damaged
         log.error("the record at %s cannot be read (%s): move it aside, with its -wal and -shm files, to start "
                   "a new record", state.record, exc)
+        code = BAD_RECORD
+    elif isinstance(exc, sqlite3.Error):                     # a folder, no access, read-only, ...
+        log.error("the record at %s cannot be opened (%s): give your user read and write access to it, or move it "
+                  "aside, with its -wal and -shm files, to start a new record", state.record, exc)
         code = BAD_RECORD
     else:
         log.exception("could not start")
@@ -974,7 +982,10 @@ def run(state, scan_seconds=SCAN_SECONDS):
             except Exception:
                 failures += 1
                 log.exception("step failed (%d in a row)", failures)
-                if failures >= MAX_FAILURES:
+                if failures >= MAX_FAILURES:       # a read-only or damaged record, a full disk: the next would fail too
+                    log.error("leaving after %d failed steps; no hook starts another for %d s", failures,
+                              HOLD_OFF_SECONDS)
+                    _hold_off(state)
                     return FAILED
                 time.sleep(1)
                 continue

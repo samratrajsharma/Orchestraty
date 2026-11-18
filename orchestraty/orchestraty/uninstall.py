@@ -16,8 +16,10 @@ it looks at:
   then is put back as it was, byte for byte. When it changed since, the copy is put back only
   if the user says so (never with ``--yes``); else only Orchestraty's entries come out. A file
   ``orch init`` created that holds nothing else is deleted.
-* **.git/info/exclude**: the line ``orch init --project`` added for a workspace's Claude Code
-  settings file or Antigravity hooks file.
+* **.git/info/exclude**: the lines ``orch init --project`` added for a workspace's Claude Code
+  settings file or Antigravity hooks file, every one since the first ``orch init``. When nothing
+  else in the file changed, the copy from before is put back byte for byte; a file ``orch init``
+  made is deleted.
 * **Claude Code's Orchestraty plugin**: its hooks are turned off (``plugin.txt``). The plugin
   was installed with Claude Code's own command, and is uninstalled with it, when that command
   is on the PATH; else the command to run is shown.
@@ -30,9 +32,10 @@ it looks at:
   repository's cloud branches turned off).
 * **The coordinator**: stopped. Then the state folder (the record, the backups, the settings)
   is removed after asking, or kept with ``--keep-state``. It is kept, too, when a step could not
-  be done or an agent's config file still runs its hook script (one that could not be written,
-  or a link): those hooks would fail without it, and a second run needs its backups. The exit
-  code is then 1.
+  be done, the coordinator did not stop (the folder is not removed from under it), or an agent's
+  config file still runs its hook script (one that could not be written, or a link): those
+  hooks would fail without it, and a second run needs its backups. The exit code is then 1,
+  with ``--keep-state`` too.
 
 A second run finds nothing left and changes nothing. Before a file is changed or deleted, a
 copy goes into the state folder's backups, as with ``orch init``; those copies go with the
@@ -57,6 +60,7 @@ EXCLUDE_SUFFIX = ("/.agents/hooks.json", "/.claude/settings.local.json")   # the
 STOP_SECONDS = 30.0
 NOWHERE = os.path.join(os.sep, "\u2205", "\u2205")   # a hook script and a mod folder no config names
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+UNFINISHED = "orch uninstall did not finish (see above). Once that is fixed, run orch uninstall again."
 
 # One thing to do: what the plan says, and how (`kind` and its fields).
 Step = namedtuple("Step", "kind text path data extra")
@@ -180,16 +184,21 @@ def tidied(kind, data):
     return claude.without_mod(out, NOWHERE) if kind == "claude" else out
 
 
+def install_copies(state, path):
+    """[(backup folder, its bytes)] of the copies of `path` taken before an orch init changed
+    it, oldest first."""
+    out = []
+    for folder, source, reason in backups(state):
+        if reason == "install" and _same(source, path):
+            with open(os.path.join(folder, hooks.BACKUP_NAME), "rb") as fh:
+                out.append((folder, fh.read()))
+    return out
+
+
 def original(state, path, kind):
     """(backup folder, its bytes) of the file as it was before orch init first changed it: the
     newest backup taken before an install that holds none of Orchestraty's entries; or None."""
-    for folder, source, reason in reversed(backups(state)):
-        if reason != "install" or not _same(source, path):
-            continue
-        with open(os.path.join(folder, hooks.BACKUP_NAME), "rb") as fh:
-            data = fh.read()
-        if kind == "exclude":
-            return folder, data
+    for folder, data in reversed(install_copies(state, path)):
         try:
             parsed = json.loads(data.decode("utf-8-sig") or "{}")
         except ValueError:
@@ -237,21 +246,32 @@ def agent_step(state, path, kind):
 
 
 def exclude_step(state, path):
-    """The step for a .git/info/exclude with the line orch init added, or None."""
+    """The step for a .git/info/exclude with the lines orch init added, or None. Its lines are
+    the ones not in the oldest copy, the file before any orch init. When nothing else changed
+    since a copy was taken, the file goes back to that copy's bytes; one left with nothing in
+    it (orch init made it: its copy is empty) is deleted."""
     try:
         with open(path, "rb") as fh:
             current = fh.read()
     except OSError:
         return None
-    before = original(state, path, "exclude")
-    kept = set(before[1].decode("utf-8", "replace").splitlines()) if before else set()
+    copies = install_copies(state, path)
+    kept = set(copies[0][1].decode("utf-8", "replace").splitlines()) if copies else set()
     lines = current.decode("utf-8", "replace").splitlines(keepends=True)
     ours = [line for line in lines if line.strip().startswith("/") and line.strip().endswith(EXCLUDE_SUFFIX)
             and line.rstrip("\r\n") not in kept]
     if not ours:
         return None
-    rest = "".join(line for line in lines if line not in ours).encode("utf-8")
-    return Step("exclude", f"git: take the line orch init added ({ours[0].strip()}) out of {path}", path, rest, None)
+    added = "".join(ours).encode("utf-8")
+    back = next((data for _, data in copies         # orch init adds a newline first when the file ends without one
+                 if current == data + (b"\n" if data and not data.endswith(b"\n") else b"") + added), None)
+    if back is None:
+        back = "".join(line for line in lines if line not in ours).encode("utf-8")
+    if not back:
+        return Step("delete", f"git: delete {path}, which orch init made and which holds nothing else", path,
+                    None, None)
+    return Step("exclude", f"git: take the line{'s' if len(ours) > 1 else ''} orch init added "
+                           f"({', '.join(line.strip() for line in ours)}) out of {path}", path, back, None)
 
 
 # ------------------------------------------------------------------------------ the plan
@@ -274,11 +294,10 @@ def plan(state, environ=None, which=shutil.which):
         elif step:
             steps.append(step)
     for common in repositories(state, cfg):
-        if os.path.isdir(os.path.join(common, githooks.CHAIN_DIR)):
-            tops = worktrees(common)
-            if tops:
-                steps.append(Step("githooks", f"git: take the push line out of the hooks of {tops[0]} (core.hooksPath "
-                                              "goes back to what it was)", tops[0], None, None))
+        tops = worktrees(common)
+        if tops and (os.path.isdir(os.path.join(common, githooks.CHAIN_DIR)) or _chain_lost(tops[0])):
+            steps.append(Step("githooks", f"git: take the push line out of the hooks of {tops[0]} (core.hooksPath "
+                              "goes back to what it was)", tops[0], None, None))
     if hook_alive(state):
         steps.append(Step("stop", "stop the coordinator", None, None, None))
     exe = which("claude")
@@ -299,6 +318,15 @@ def plan(state, environ=None, which=shutil.which):
                  "A registration you made by hand stays: claude mcp remove orchestraty, codex mcp remove orchestraty, "
                  "or Antigravity's MCP servers panel.")
     return steps, notes
+
+
+def _chain_lost(top):
+    """Whether core.hooksPath still names the push line's folder there, which is gone: git then
+    runs none of the repository's hooks, so it is taken out too."""
+    try:
+        return githooks.lost(top)
+    except (gitio.GitError, gitio.UntrustedRepositoryError, OSError):
+        return False
 
 
 def still_hooked(state, environ=None):
@@ -334,7 +362,7 @@ def _write(state, path, data, backed):
 
 
 def _remove_empty(folder):
-    if os.path.basename(folder) in (".claude", ".agents"):
+    if os.path.basename(folder) in (".claude", ".agents", "info"):
         try:
             os.rmdir(folder)                        # only when empty
         except OSError:
@@ -401,7 +429,9 @@ def do(state, step, ask, keep_backups, runner=subprocess.run):
             config.save(state, cfg)
         return "Removed the cloud branches' shadows; cloud branches are off."
     if step.kind == "stop":
-        return "Stopped the coordinator." if stop_coordinator(state) else "The coordinator did not stop in time."
+        if not stop_coordinator(state):
+            raise TimeoutError("it did not stop in time")
+        return "Stopped the coordinator."
     raise ValueError(step.kind)
 
 
@@ -416,10 +446,18 @@ def run(state, keep_state=False, assume_yes=False, ask=None, out=print, environ=
     steps, notes = plan(state, environ, which)
     state_there = os.path.isdir(state.root)
     if not steps and not (state_there and not keep_state):
-        out("Nothing of Orchestraty's is left to take out." + (f" Its state folder {state.root} is kept."
-                                                               if state_there else ""))
+        hooked = still_hooked(state, environ)
+        kept = f" Its state folder {state.root} is kept." if state_there else ""
+        if hooked:
+            out(f"{', '.join(hooked)} still run{'s' if len(hooked) == 1 else ''} Orchestraty's hook script, and orch "
+                f"uninstall cannot take those hooks out.{kept}")
+        else:
+            out("Nothing of Orchestraty's is left to take out." + kept)
         for line in notes[:-1]:
             out("  " + line)
+        if hooked:
+            out(UNFINISHED)
+            return 1
         return 0
     out("orch uninstall will:")
     for step in steps:
@@ -437,35 +475,54 @@ def run(state, keep_state=False, assume_yes=False, ask=None, out=print, environ=
     if not question("Go ahead?"):
         out("Nothing changed.")
         return 1
-    failed = False
+    failed = stuck = False
     for step in steps:
         try:
             out(do(state, step, lambda text: question(text, default_yes=False), keep_backups=state_there,
                    runner=runner))
-        except (OSError, gitio.GitError, hooks.Refused, subprocess.SubprocessError) as exc:
+        except (OSError, gitio.GitError, gitio.UntrustedRepositoryError, hooks.Refused,
+                subprocess.SubprocessError) as exc:
             out(f"Could not: {step.text} ({exc})")
             failed = True
+            stuck = stuck or step.kind == "stop"
     hooked = still_hooked(state, environ)
     if state_there and not keep_state:
         if failed or hooked:
-            why = (f"{', '.join(hooked)} still run{'s' if len(hooked) == 1 else ''} its hook script, which would fail "
-                   "without it" if hooked else "a second run of orch uninstall needs its backups")
+            if hooked:
+                why = (f"{', '.join(hooked)} still run{'s' if len(hooked) == 1 else ''} its hook script, which would "
+                       "fail without it")
+            else:
+                why = _stuck(state) if stuck else "a second run of orch uninstall needs its backups"
             out(f"Kept {state.root}: {why}.")
         elif question(f"Remove the state folder {state.root}? The record, the backups and the settings go with it."):
             failed = not remove_state(state, out)
         else:
             out(f"Kept {state.root}.")
     if failed or hooked:
-        out("orch uninstall did not finish (see above). Once that is fixed, run orch uninstall again.")
+        out(UNFINISHED)
         return 1
     out("Orchestraty is uninstalled. The orch command itself stays: pipx uninstall orchestraty (or uv tool uninstall "
         "orchestraty) removes it.")
     return 0
 
 
+def _stuck(state):
+    """Why the state folder stays when the coordinator did not stop (with the pid it wrote)."""
+    try:
+        with open(state.info, "r", encoding="utf-8") as fh:
+            pid = json.load(fh).get("pid")
+    except (OSError, ValueError, AttributeError):
+        pid = None
+    return (f"the coordinator{f' (pid {pid})' if isinstance(pid, int) else ''} did not stop, and the folder is not "
+            "removed from under it")
+
+
 def remove_state(state, out):
-    """Stop the coordinator and remove the state folder; False when that could not be done."""
-    stop_coordinator(state)
+    """Stop the coordinator and remove the state folder; False when that could not be done. A
+    coordinator that does not stop keeps the folder: it would be removed from under it."""
+    if not stop_coordinator(state):
+        out(f"Kept {state.root}: {_stuck(state)}.")
+        return False
     try:
         gitio.remove_tree(state.root)
     except OSError as exc:

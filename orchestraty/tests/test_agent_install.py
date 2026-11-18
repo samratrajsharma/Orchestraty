@@ -221,6 +221,94 @@ def test_codex_init_with_another_state_folder_takes_the_earlier_hooks_out(state,
             assert codex.without_others(config, state.hook_script) == {}
 
 
+def test_codex_takes_out_an_earlier_folders_hooks_whose_hook_script_is_gone(state, tmp_path, capsys, monkeypatch):
+    home = Path(os.environ["CODEX_HOME"])
+    old = tmp_path / "old state"                            # a space: on Windows its lines hold the short (8.3) form
+    monkeypatch.setenv("ORCH_HOME", str(old))
+    assert cli.main(["init", "--agent", "codex", "--yes", "--no-git-hooks"]) == 0
+    (old / "hooks" / "hook.py").unlink()                    # the folder stays, so it has a long form, the script none
+    monkeypatch.setenv("ORCH_HOME", state.root)
+    capsys.readouterr()
+    assert cli.main(["init", "--agent", "codex", "--yes", "--no-git-hooks"]) == 0
+    assert f"take out of it the hooks of the state folder {old}" in capsys.readouterr().out
+    commands = [h["command"] for entries in read(home / "hooks.json")["hooks"].values() for e in entries
+                for h in e["hooks"]]
+    assert len(commands) == len(codex.CAPTURED) and all(shell.mentions(c, state.hook_script) for c in commands)
+    assert cli.main(["init", "--agent", "codex", "--yes", "--no-git-hooks"]) == 0
+    out = capsys.readouterr().out
+    assert "nothing changed" in out and "take out of it" not in out
+    from orchestraty import doctor, config
+    assert not [x for x in doctor.agent_checks(State(), config.load(State())) if "also runs the hooks" in x.text]
+
+
+def test_an_earlier_folders_short_form_line_is_taken_out_as_it_is_written(state, tmp_path, monkeypatch):
+    long_root, short_root = str(tmp_path / "old state"), str(tmp_path / "OLDSTA~1")
+    monkeypatch.setattr(shell, "long_path", lambda p: long_root if p == short_root else p)   # the folder is there
+    line = shell.command_line(["/py/python", "-S", "-I", os.path.join(short_root, "hooks", "hook.py"), "codex", "Stop"],
+                              windows=True, shorten=lambda p: p)
+    config = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": line}]}]}}
+    assert codex.other_states(config, state.hook_script) == [long_root]
+    assert codex.without_others(config, state.hook_script) == {}
+    assert codex.without_orchestraty(config, state.hook_script) == {}
+
+
+def test_an_earlier_state_folder_whose_path_has_an_apostrophe_is_found_in_every_form(state, tmp_path):
+    for name, python in (("Jo O'Neil", "/py/python"), ("Jo O'Neil $x", "/py/python"), ("Jo O'Neil", "/py thon/python"),
+                         ("o''neil", "/py/python")):
+        old = tmp_path / name / "old"
+        for windows in (True, False):          # double quotes, PowerShell's '' and sh's '"'"'
+            line = shell.command_line([python, "-S", "-I", str(old / "hooks" / "hook.py"), "codex", "Stop"],
+                                      windows=windows, shorten=lambda p: p)
+            config = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": line}]}]}}
+            assert codex.other_states(config, state.hook_script) == [str(old)], line
+            assert codex.without_others(config, state.hook_script) == {}, line
+
+
+def test_codex_restore_from_backup_leaves_out_an_earlier_state_folders_hooks(state, tmp_path, capsys, monkeypatch):
+    home = Path(os.environ["CODEX_HOME"])
+    old = tmp_path / "OneDrive" / "state"
+    monkeypatch.setenv("ORCH_HOME", str(old))
+    assert cli.main(["init", "--agent", "codex", "--yes", "--no-git-hooks"]) == 0
+    monkeypatch.setenv("ORCH_HOME", state.root)
+    assert cli.main(["init", "--agent", "codex", "--yes", "--no-git-hooks"]) == 0     # its backup holds old's hooks
+    shutil.rmtree(old)                                                                  # README: it can be deleted
+    capsys.readouterr()
+    assert cli.main(["restore", "--agent", "codex", "--from-backup", "--yes"]) == 0
+    assert f"without the hooks of the state folder {old}" in capsys.readouterr().out
+    assert read(home / "hooks.json") == {}                    # no line left that runs a script that is gone
+
+
+
+def test_antigravity_restore_from_backup_leaves_out_an_earlier_state_folders_hook(state, tmp_path, capsys,
+                                                                                 monkeypatch):
+    folder = Path(os.environ["HOME"]) / ".gemini" / "config"
+    folder.mkdir(parents=True)
+    (folder / "hooks.json").write_text(json.dumps({"lint": {"Stop": [{"command": "echo done"}]}}), encoding="utf-8")
+    old = tmp_path / "OneDrive" / "state"
+    monkeypatch.setenv("ORCH_HOME", str(old))
+    assert cli.main(["init", "--agent", "antigravity", "--yes", "--no-git-hooks"]) == 0
+    monkeypatch.setenv("ORCH_HOME", state.root)
+    assert cli.main(["init", "--agent", "antigravity", "--yes", "--no-git-hooks"]) == 0  # its backup holds old's hook
+    assert antigravity.other_states(read(folder / "hooks.json"), state.hook_script) == []
+    shutil.rmtree(old)                                                                    # README: it can be deleted
+    capsys.readouterr()
+    assert cli.main(["restore", "--agent", "antigravity", "--from-backup", "--yes"]) == 0
+    assert f"without the hooks of the state folder {old}" in capsys.readouterr().out
+    assert read(folder / "hooks.json") == {"lint": {"Stop": [{"command": "echo done"}]}}   # nothing that runs a gone script
+
+def test_the_plan_says_when_the_line_it_shows_is_written_in_short_form(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ORCH_HOME", str(tmp_path / "fresh plan state"))     # not there yet: no short form yet
+    home = Path(os.environ["CODEX_HOME"])
+    assert cli.main(["init", "--agent", "codex", "--yes", "--no-git-hooks"]) == 0
+    out = capsys.readouterr().out
+    written = read(home / "hooks.json")["hooks"]["Stop"][0]["hooks"][0]["command"]
+    assert json.dumps(written) in out or "short 8.3 form" in out           # the line shown, or a word that it changes
+    assert ("short 8.3 form" in out) == (os.name == "nt")
+    assert cli.main(["init", "--agent", "codex", "--yes", "--no-git-hooks"]) == 0
+    out = capsys.readouterr().out
+    assert json.dumps(written) in out and "short 8.3 form" not in out       # the script is there: the line is the one
+
+
 def test_the_command_line_quotes_in_double_quotes_when_the_program_needs_none():
     script = r"C:\Users\Jo O'Neil\.orchestraty\hooks\hook.py"
     argv = [r"C:\Python312\python.exe", "-S", "-I", script, "codex", "Stop"]

@@ -57,6 +57,26 @@ def command_line(argv, windows=None, shorten=short_path):
     return "& " + " ".join(a if _plain(a) else "'" + a.replace("'", "''") + "'" for a in args)
 
 
+# The line orch init writes for an agent, whatever the state folder: <python> -S -I <folder>/hooks/hook.py
+# <agent> <event>, the script plain (or in its 8.3 form), in double quotes (cmd and PowerShell), or in single
+# quotes: PowerShell's, which write ' as '', or sh's, which write it '"'"'.
+_SHAPED = r"""\s-S\s-I\s(?:"(?P<dq>[^"]+)"|'(?P<sq>(?:'"'"'|''|[^'])+)'|(?P<plain>[^\s'"]+))\s{agent}\s[A-Za-z]+\s*$"""
+_SCRIPT = re.compile(r"[\\/]hooks[\\/]hook\.py$")
+
+
+def shaped_script(command, agent):
+    """The hook script a command line runs, unquoted, when it has the shape orch init writes for
+    `agent` (whatever the state folder); else None."""
+    shaped = re.search(_SHAPED.replace("{agent}", re.escape(agent)), command) if isinstance(command, str) else None
+    if not shaped:
+        return None
+    script = shaped.group("dq") or shaped.group("plain")
+    if script is None:                       # a " in them is sh's: no Windows path has one
+        quoted = shaped.group("sq")
+        script = quoted.replace("'\"'\"'", "'") if '"' in quoted else quoted.replace("''", "'")
+    return script if _SCRIPT.search(script) else None
+
+
 def mentions(command, path):
     """Whether a command line names the file at `path`, in any form command_line writes it."""
     if not isinstance(command, str) or not path:

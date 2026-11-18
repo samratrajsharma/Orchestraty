@@ -5,14 +5,16 @@ backups come back where that loses nothing, other entries stay, and a second run
 nothing."""
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
 import pytest
 
 from helpers import refuse_writes, symlinks_work
-from orchestraty import cli, config, plugin, uninstall
+from orchestraty import cli, config, gitio, plugin, uninstall
 from orchestraty.adapters import claude
+from orchestraty.coordinator.lock import Lock, touch
 from orchestraty.paths import State
 
 CLAUDE_BEFORE = ('{\n    "model": "their-model",\n    "env": {"THEIRS": "1"},\n    "hooks": {"PreToolUse": [\n'
@@ -210,9 +212,10 @@ def test_a_linked_settings_file_is_left_alone(tmp_path, state_root, capsys):
     link.parent.mkdir()
     os.symlink(real, link)
     before = real.read_bytes()
-    assert cli.main(["uninstall", "--yes"]) == 0
+    assert cli.main(["uninstall", "--yes"]) == 1                            # its hooks stay: not finished
     out = capsys.readouterr().out
     assert f"{link} is a link, which orch uninstall does not replace" in out
+    assert f"{link} still runs Orchestraty's hook script" in out and "did not finish" in out
     assert real.read_bytes() == before and link.is_symlink()
 
 
@@ -301,6 +304,26 @@ def test_the_hooks_of_another_state_folder_come_out_too(tmp_path, state_root, re
     assert read(settings) == {"theme": "dark"} and not state_root.exists()
 
 
+def test_codex_lines_of_another_state_folder_whose_hook_script_is_gone_come_out_too(tmp_path, state_root, monkeypatch,
+                                                                                    capsys):
+    hooks_json = tmp_path / "codex-home" / "hooks.json"
+    old = tmp_path / "old state"                              # a space: on Windows its lines hold the short form
+    monkeypatch.setenv("ORCH_HOME", str(old))
+    assert cli.main(["init", "--yes", "--agent", "codex", "--no-git-hooks"]) == 0
+    earlier = read(hooks_json)
+    (old / "hooks" / "hook.py").unlink()                      # the folder stays
+    monkeypatch.setenv("ORCH_HOME", str(state_root))
+    assert cli.main(["init", "--yes", "--agent", "codex", "--no-git-hooks"]) == 0
+    data = read(hooks_json)                                   # both folders' lines, as orch init left them before
+    for event, entries in earlier["hooks"].items():
+        data["hooks"][event] = entries + data["hooks"][event]
+    hooks_json.write_text(json.dumps(data), encoding="utf-8")
+    capsys.readouterr()
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert f"with the hooks of the state folder {old}" in capsys.readouterr().out
+    assert not hooks_json.exists() and not state_root.exists()   # orch init made the file: nothing else in it
+
+
 def test_the_exclude_line_for_claude_codes_project_settings_goes_too(repo, git, monkeypatch):
     monkeypatch.chdir(repo)
     exclude = repo / ".git" / "info" / "exclude"
@@ -327,3 +350,127 @@ def test_a_linked_settings_file_that_runs_the_hook_script_keeps_the_state_folder
     out = capsys.readouterr().out
     assert f"{link} is a link" in out and f"Kept {state_root}: {link} still runs its hook script" in out
     assert state_root.is_dir()
+
+
+def test_a_repository_git_refuses_is_said_and_keeps_the_state_folder(scene, monkeypatch, capsys):
+    s = scene
+    real = gitio.check_ownership
+
+    def dubious(returncode, stderr, cwd):                   # as git says it of a folder another user owns
+        if cwd and "repo" in Path(cwd).parts:
+            returncode, stderr = 128, f"fatal: detected dubious ownership in repository at '{s['repo']}'\n"
+        real(returncode, stderr, cwd)
+    monkeypatch.setattr(gitio, "check_ownership", dubious)
+    assert cli.main(["uninstall", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert f"Could not: git: take the push line out of the hooks of {s['repo']} (core.hooksPath" in out
+    assert "(git's safe.directory check)" in out
+    assert f"Kept {s['state']}: a second run of orch uninstall needs its backups." in out
+    assert "did not finish" in out
+    assert s["state"].is_dir() and s["claude"].read_text(encoding="utf-8") == CLAUDE_BEFORE
+
+
+def test_keep_state_says_a_linked_file_still_runs_the_hook_script(tmp_path, state_root, capsys):
+    if not symlinks_work(tmp_path):
+        pytest.skip("symbolic links are not available here")
+    state = State()
+    (state_root / "hooks").mkdir(parents=True)
+    real = tmp_path / "dotfiles" / "settings.json"
+    real.parent.mkdir()
+    real.write_text(json.dumps({"hooks": claude.hook_block(sys.executable, state.hook_script)}), encoding="utf-8")
+    link = tmp_path / "claude-config" / "settings.json"
+    link.parent.mkdir()
+    os.symlink(real, link)
+    assert cli.main(["uninstall", "--yes", "--keep-state"]) == 1
+    out = capsys.readouterr().out
+    assert "Nothing of Orchestraty's is left" not in out
+    assert f"{link} still runs Orchestraty's hook script" in out and f"{link} is a link" in out
+    assert f"Its state folder {state_root} is kept." in out and "did not finish" in out
+    assert state_root.is_dir()
+
+
+@pytest.fixture
+def stuck(tmp_path, state_root, repo, monkeypatch, capsys):
+    """Orchestraty installed, and a coordinator that holds its lock and does not stop."""
+    settings = tmp_path / "claude-config" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text('{"theme": "dark"}\n', encoding="utf-8")
+    monkeypatch.chdir(repo)
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
+    state = State()
+    (state_root / "coordinator.json").write_text(json.dumps({"pid": 4242}), encoding="utf-8")
+    real = uninstall.stop_coordinator
+    monkeypatch.setattr(uninstall, "stop_coordinator", lambda state, seconds=0.3: real(state, seconds))
+    lock = Lock(state.lock)
+    assert lock.acquire()
+    capsys.readouterr()
+    yield settings, lock
+    lock.release()
+
+
+@pytest.mark.parametrize("alive", [True, False], ids=["seen-running", "lock-held"])
+def test_a_coordinator_that_does_not_stop_keeps_the_state_folder(stuck, state_root, alive, capsys):
+    settings, lock = stuck
+    if alive:                                                # its heartbeat is fresh: the plan stops it first
+        touch(State().alive)
+    assert cli.main(["uninstall", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert f"Kept {state_root}: the coordinator (pid 4242) did not stop" in out
+    assert "did not finish" in out and "Removed" not in out
+    for name in ("config.json", "backups", os.path.join("hooks", "hook.py")):
+        assert (state_root / name).exists(), name
+    assert settings.read_text(encoding="utf-8") == '{"theme": "dark"}\n'
+    lock.release()                                            # once it has stopped: a second run
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert not state_root.exists()
+
+
+@pytest.mark.parametrize("second", ["antigravity", "subfolder"])
+def test_every_exclude_line_goes_after_two_project_inits(repo, git, monkeypatch, capsys, second):
+    monkeypatch.chdir(repo)
+    exclude = repo / ".git" / "info" / "exclude"
+    before = exclude.read_bytes()
+    assert cli.main(["init", "--project", "--yes", "--no-git-hooks"]) == 0
+    if second == "antigravity":
+        assert cli.main(["init", "--agent", "antigravity", "--project", "--yes", "--no-git-hooks"]) == 0
+    else:
+        (repo / "sub").mkdir()
+        monkeypatch.chdir(repo / "sub")
+        assert cli.main(["init", "--project", "--yes", "--no-git-hooks"]) == 0
+    assert len(exclude.read_bytes().splitlines()) == len(before.splitlines()) + 2
+    capsys.readouterr()
+    assert cli.main(["uninstall", "--yes"]) == 0
+    added = "/.agents/hooks.json" if second == "antigravity" else "/sub/.claude/settings.local.json"
+    out = capsys.readouterr().out
+    assert f"git: take the lines orch init added (/.claude/settings.local.json, {added}) out of" in out
+    assert exclude.read_bytes() == before
+    assert git(repo, "status", "--porcelain") == ""
+
+
+@pytest.mark.parametrize("twice", [False, True], ids=["one-init", "two-inits"])
+@pytest.mark.parametrize("before", [b"# mine\nbuild/", None], ids=["no-last-newline", "no-file"])
+def test_exclude_goes_back_byte_for_byte(repo, git, monkeypatch, before, twice):
+    monkeypatch.chdir(repo)
+    info = repo / ".git" / "info"
+    exclude = info / "exclude"
+    if before is None:                                       # as git init --template= leaves it
+        shutil.rmtree(info)
+    else:
+        exclude.write_bytes(before)
+    assert cli.main(["init", "--project", "--yes", "--no-git-hooks"]) == 0
+    if twice:
+        assert cli.main(["init", "--agent", "antigravity", "--project", "--yes", "--no-git-hooks"]) == 0
+    assert b"/.claude/settings.local.json\n" in exclude.read_bytes()
+    assert cli.main(["uninstall", "--yes"]) == 0
+    if before is None:
+        assert not exclude.exists() and not info.exists()
+    else:
+        assert exclude.read_bytes() == before
+    assert git(repo, "status", "--porcelain") == ""
+
+
+def test_a_push_line_whose_folder_is_gone_comes_out_too(scene, git, capsys):
+    shutil.rmtree(scene["repo"] / ".git" / "orch-hooks")                   # core.hooksPath still names it
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert f"git: take the push line out of the hooks of {scene['repo']}" in capsys.readouterr().out
+    assert "core.hookspath" not in git(scene["repo"], "config", "--local", "--list").lower()

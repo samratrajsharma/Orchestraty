@@ -116,9 +116,9 @@ def test_restore_from_backup_puts_back_the_exact_file_from_before_install(state,
     original = settings.read_bytes()
     ins.install(state, str(settings), sys.executable)
     assert settings.read_bytes() != original
-    folder = ins.restore_backup(state, str(settings))
-    assert folder and settings.read_bytes() == original
-    assert ins.restore_backup(state, str(settings)) == folder   # the same one again, never a toggle
+    folder, others = ins.restore_backup(state, str(settings))
+    assert folder and others == [] and settings.read_bytes() == original
+    assert ins.restore_backup(state, str(settings)) == (folder, [])   # the same one again, never a toggle
     assert settings.read_bytes() == original
 
 
@@ -134,7 +134,7 @@ def test_restore_from_backup_uses_the_last_install(state, settings):
 
 def test_restore_from_backup_without_one(state, settings):
     write(settings, {"model": "x"})
-    assert ins.restore_backup(state, str(settings)) is None
+    assert ins.restore_backup(state, str(settings)) == (None, [])
     assert read(settings) == {"model": "x"}
 
 
@@ -336,6 +336,24 @@ def test_orch_init_project_offers_to_keep_the_local_settings_out_of_git(repo, gi
     assert exclude.read_text(encoding="utf-8").splitlines().count("/.claude/settings.local.json") == 1
 
 
+def test_an_exclude_that_cannot_be_written_is_said_and_init_goes_on(repo, git, monkeypatch, capsys):
+    import stat
+    monkeypatch.chdir(repo)
+    exclude = repo / ".git" / "info" / "exclude"
+    before = exclude.read_bytes()
+    os.chmod(exclude, stat.S_IREAD)
+    try:
+        if os.access(exclude, os.W_OK):
+            pytest.skip("this user can write a read-only file")
+        assert cli.main(["init", "--project", "--yes", "--no-git-hooks"]) == 0
+        out = capsys.readouterr().out
+        assert f"Not added: {exclude} cannot be written (PermissionError)" in out
+        assert "Watching repo" in out                                       # init went on
+        assert exclude.read_bytes() == before
+    finally:
+        os.chmod(exclude, stat.S_IREAD | stat.S_IWRITE)
+
+
 def test_orch_init_takes_out_the_hooks_and_mod_of_another_state_folder(tmp_path, settings, state, monkeypatch, capsys):
     old = tmp_path / "OneDrive" / "state"
     monkeypatch.setenv("ORCH_HOME", str(old))                                # before doctor's fix for a synced folder
@@ -350,6 +368,21 @@ def test_orch_init_takes_out_the_hooks_and_mod_of_another_state_folder(tmp_path,
     assert scripts == {state.hook_script}
     assert data["env"][ins.PLUGIN_DIRS] == state.mod
     assert old.is_dir()                                                      # that folder itself stays
+
+
+def test_restore_from_backup_leaves_out_the_hooks_and_mod_of_another_state_folder(tmp_path, settings, state,
+                                                                                 monkeypatch, capsys):
+    old = tmp_path / "OneDrive" / "state"
+    monkeypatch.setenv("ORCH_HOME", str(old))
+    write(settings, {"model": "x"})
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0
+    monkeypatch.setenv("ORCH_HOME", state.root)
+    assert cli.main(["init", "--yes", "--no-git-hooks"]) == 0         # the copy it took holds old's hooks and mod
+    shutil.rmtree(old)                                                  # README: that folder can then be deleted
+    capsys.readouterr()
+    assert cli.main(["restore", "--from-backup", "--yes"]) == 0
+    assert f"without the hooks and the mod of the state folder {old}" in capsys.readouterr().out
+    assert read(settings) == {"model": "x"}                            # no hook left that runs a script that is gone
 
 
 def test_only_the_shape_orch_init_writes_counts_as_another_state_folders(state):

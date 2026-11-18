@@ -35,14 +35,14 @@ Config writer. Codex reads ``hooks.json`` in its home folder (``CODEX_HOME``, by
 ``~/.codex``): ``{"hooks": {<event>: [{"matcher": ..., "hooks": [{"type": "command", "command":
 ..., "timeout": <seconds>}]}]}}``. It runs each ``command`` through a shell, with the payload on
 stdin (``shell`` writes the line), and gives a SessionEnd hook at most 3 seconds. Our entries
-(those whose command runs our hook script) are replaced, others kept, so installing twice
-changes nothing. Codex runs a hook only after the person has reviewed and trusted it with
-``/hooks``, and records that trust in its config.toml: nothing here writes the trust, or
-config.toml at all.
+(those whose command runs our hook script, and those of another state folder whose line has the
+shape orch init writes, matched as written) are replaced, others kept, so installing twice
+changes nothing and a new ``ORCH_HOME`` does not double them. Codex runs a hook only after the
+person has reviewed and trusted it with ``/hooks``, and records that trust in its config.toml:
+nothing here writes the trust, or config.toml at all.
 """
 import json
 import os
-import re
 
 from orchestraty.adapters import claude, shell
 
@@ -98,14 +98,14 @@ def hook_block(python, script):
     return {"hooks": {event: [hook_entry(python, script, event)] for event in CAPTURED}}
 
 
-def _ours(entry, script):
+def _runs(entry, test):
+    """Whether one of an entry's hooks has a command for which test(command) is true."""
     hooks = entry.get("hooks") if isinstance(entry, dict) else None
-    return isinstance(hooks, list) and any(isinstance(h, dict) and shell.mentions(h.get("command"), script)
-                                           for h in hooks)
+    return isinstance(hooks, list) and any(isinstance(h, dict) and test(h.get("command")) for h in hooks)
 
 
-def without_ours(config, script):
-    """The config with every entry that runs our hook script removed (other entries kept; an
+def _without(config, drop):
+    """The config with every entry for which drop(entry) is true removed (other entries kept; an
     event left with no entries, and an empty hooks object, are dropped)."""
     config = dict(config)
     hooks = config.get("hooks")
@@ -116,7 +116,7 @@ def without_ours(config, script):
         if not isinstance(entries, list):
             kept[event] = entries
             continue
-        rest = [e for e in entries if not _ours(e, script)]
+        rest = [e for e in entries if not drop(e)]
         if rest or not entries:
             kept[event] = rest
     if kept:
@@ -126,10 +126,17 @@ def without_ours(config, script):
     return config
 
 
-# The line orch init writes, whatever the state folder: <python> -S -I <folder>/hooks/hook.py codex <event>,
-# the script plain (or in its 8.3 form), or quoted with ' (sh, PowerShell) or " (cmd).
-_SHAPE = re.compile(r"""\s-S\s-I\s(?P<q>['"]?)(?P<script>[^'"]*?[\\/]hooks[\\/]hook\.py)(?P=q)\s""" + NAME
-                    + r"""\s[A-Za-z]+\s*$""")
+def without_ours(config, script):
+    """The config with every entry that runs our hook script removed (other entries kept; an
+    event left with no entries, and an empty hooks object, are dropped)."""
+    return _without(config, lambda entry: _runs(entry, lambda command: shell.mentions(command, script)))
+
+
+def _another(command, script):
+    """The hook script of another state folder than `script`'s that a command line runs
+    (unquoted), or None."""
+    other = shell.shaped_script(command, NAME)
+    return other if other and not shell.mentions(command, script) else None
 
 
 def other_states(config, script):
@@ -142,19 +149,19 @@ def other_states(config, script):
             runs = entry.get("hooks") if isinstance(entry, dict) else None
             for hook in runs if isinstance(runs, list) else ():
                 command = hook.get("command") if isinstance(hook, dict) else None
-                shaped = _SHAPE.search(command) if isinstance(command, str) else None
-                if shaped and not shell.mentions(command, script):
-                    root = shell.long_path(os.path.dirname(os.path.dirname(shaped.group("script"))))
+                other = _another(command, script)
+                if other:
+                    root = shell.long_path(os.path.dirname(os.path.dirname(other)))
                     if root not in found:
                         found.append(root)
     return found
 
 
 def without_others(config, script):
-    """The config without the hooks of every other state folder (`other_states`)."""
-    for root in other_states(config, script):
-        config = without_ours(config, os.path.join(root, "hooks", "hook.py"))
-    return config
+    """The config without the hooks of every other state folder (`other_states`): the entries
+    whose lines it found, as they are written (a folder whose hook script is gone has no short
+    form to match them by)."""
+    return _without(config, lambda entry: _runs(entry, lambda command: _another(command, script) is not None))
 
 
 def without_orchestraty(config, script):

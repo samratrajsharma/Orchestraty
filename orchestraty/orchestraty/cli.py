@@ -184,6 +184,7 @@ def _agent_scope(args, adapter):
 def _init_agent(args):
     """orch init --agent codex|antigravity: show the entries, ask, back the file up, write it."""
     from orchestraty import adapters
+    from orchestraty.adapters import shell
     state = State()
     adapter = adapters.get(args.agent)
     path = _agent_target(args)
@@ -202,6 +203,9 @@ def _init_agent(args):
     print(f"  - copy the hook script to {state.hook_script}")
     print(f"  - add hooks for {len(adapter.CAPTURED)} {adapter.TITLE} events to {path}:")
     print("\n".join("      " + line for line in json.dumps(block, indent=2).splitlines()))
+    if os.name == "nt" and not os.path.exists(state.hook_script) and not shell._plain(state.hook_script):
+        print("    (the hook script's path is written in its short 8.3 form, which needs no quotes, where the volume")
+        print("    keeps one: a path has it only once the script is there)")
     for root in adapter.other_states(current, state.hook_script):
         print(f"  - take out of it the hooks of the state folder {root}, which an orch init with another ORCH_HOME")
         print("    added, so no event is recorded twice (that folder itself stays)")
@@ -265,30 +269,57 @@ def _offer_exclude(state, path, assume_yes):
     if not confirm("Add it?", assume_yes):
         print(f"Not added; {rel} shows in git status until you ignore it.")
         return
-    hooks.backup(state, exclude, "install")
-    os.makedirs(os.path.dirname(exclude), exist_ok=True)
     try:
-        with open(exclude, "rb") as fh:
-            before = fh.read()
-    except FileNotFoundError:
-        before = b""
-    with open(exclude, "ab") as fh:
-        fh.write((b"" if not before or before.endswith(b"\n") else b"\n") + ("/" + rel + "\n").encode("utf-8"))
+        _append_exclude(state, exclude, rel)
+    except (OSError, hooks.Refused) as exc:
+        print(f"Not added: {exclude} cannot be written ({type(exc).__name__}); {rel} shows in git status until "
+              "you ignore it.")
+        return
     print(f"Added /{rel} to {exclude}.")
 
 
+def _append_exclude(state, exclude, rel):
+    """Add the line, after a copy of the file goes into the backups. A file that is not there is
+    made empty first, so its copy is empty: orch uninstall then deletes it."""
+    os.makedirs(os.path.dirname(exclude), exist_ok=True)
+    with open(exclude, "ab"):
+        pass
+    hooks.backup(state, exclude, "install")
+    with open(exclude, "rb") as fh:
+        before = fh.read()
+    with open(exclude, "ab") as fh:
+        fh.write((b"" if not before or before.endswith(b"\n") else b"\n") + ("/" + rel + "\n").encode("utf-8"))
+
+
 def _git_chain_here(state, python, assume_yes):
-    """Offer the push line: a pre-push hook chained in front of the repository's own hooks."""
+    """Offer the push line: a pre-push hook chained in front of the repository's own hooks. Where
+    it is in already, write it again: hooks added since get a pass-through, the pre-push runs this
+    state folder's hook script, and a chain folder that is gone is rebuilt."""
     from orchestraty import gitio
     from orchestraty.capture import githooks
+    here = os.getcwd()
     try:
-        if gitio.worktree_info(os.getcwd()) is None:
+        if gitio.worktree_info(here) is None:
             return
-        if githooks.installed(os.getcwd()):
-            githooks.install(os.getcwd(), python, state.hook_script)    # again: passes through hooks added since
-            print("The push line is already in this repository's git hooks.")
+        if githooks.installed(here):
+            lost = githooks.lost(here)
+            chain = githooks.install(here, python, state.hook_script)
+            if lost:
+                earlier = os.path.join(os.path.dirname(chain), "hooks")
+                print(f"Rebuilt the push line's folder {chain}, which was gone or incomplete. The hooks folder "
+                      f"before it is not known, so it runs the hooks in {earlier}.")
+            else:
+                print("The push line is already in this repository's git hooks.")
+            _say_left(chain)
             return
+        why = githooks.refusal(here)
     except (gitio.GitError, gitio.UntrustedRepositoryError):
+        return
+    except OSError as exc:
+        print(f"Could not write the push line into this repository's git hooks: {exc}", file=sys.stderr)
+        return
+    if why:
+        print(f"No git hooks changed: {why}.")
         return
     print("The push line: before each push, git prints one line when this push leaves callers of a")
     print("changed function behind. It sets core.hooksPath in this repository's own git config to a")
@@ -297,8 +328,22 @@ def _git_chain_here(state, python, assume_yes):
     if not confirm("Add it?", assume_yes):
         print("No git hooks changed (orch init --no-git-hooks skips this question).")
         return
-    chain = githooks.install(os.getcwd(), python, state.hook_script)
+    try:
+        chain = githooks.install(here, python, state.hook_script)
+    except (gitio.GitError, gitio.UntrustedRepositoryError, githooks.Refused, OSError) as exc:
+        print(f"Could not add the push line to this repository's git hooks: {exc}", file=sys.stderr)
+        return
     print(f"Added: {chain}")
+    _say_left(chain)
+
+
+def _say_left(chain):
+    """Name the hooks in the chain folder that orch init left as they are: another tool's."""
+    from orchestraty.capture import githooks
+    left = githooks.others(chain)
+    if left:
+        print(f"Left as found in {chain}: {', '.join(left)}, which orch init did not write"
+              + ("; the push line does not run while that pre-push is there" if "pre-push" in left else "") + ".")
 
 
 def _watch_here(state, path, quiet_outside=False):
@@ -1072,8 +1117,8 @@ def cmd_restore(args):
                 print(f"No backup of {path} from before an install; run orch restore without --from-backup.")
                 return 1
             switched = plugin.remove_switch(state)
-            folder = hooks.restore_backup(state, path)
-            print(f"Put back {path} from {folder}.")
+            folder, others = hooks.restore_backup(state, path)
+            _put_back(path, folder, others, "the hooks and the mod")
             _plugin_left(switched, found)
             return 0
         switched = plugin.remove_switch(state)
@@ -1086,6 +1131,15 @@ def cmd_restore(args):
         print(f"No Orchestraty hooks in {path}; nothing changed.")
     _plugin_left(switched, found)
     return 0
+
+
+def _put_back(path, folder, others, what):
+    """What orch restore --from-backup says it did."""
+    if others:
+        print(f"Put back {path} from {folder}, without {what} of the state folder {', '.join(others)}: an orch init "
+              "with another ORCH_HOME added them, and the last orch init took them out.")
+    else:
+        print(f"Put back {path} from {folder}.")
 
 
 def _plugin_left(switched, found):
@@ -1123,11 +1177,11 @@ def _restore_agent(args):
         return 1
     try:
         if args.from_backup:
-            folder = hooks.restore_backup(state, path)
+            folder, others = hooks.restore_backup(state, path, adapter)
             if folder is None:
                 print(f"No backup of {path} from before an install; run orch restore without --from-backup.")
                 return 1
-            print(f"Put back {path} from {folder}.")
+            _put_back(path, folder, others, "the hooks")
             return 0
         changed, saved = hooks.uninstall_agent(state, adapter, path)
     except hooks.Refused as exc:

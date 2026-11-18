@@ -20,6 +20,7 @@ import sys
 import time
 
 from orchestraty import plugin
+from orchestraty.adapters import claude
 from orchestraty.adapters.claude import (AGENT, EDIT_MATCHER, EVENTS, MATCHERS, MOD_SOURCE, PLUGIN_DIRS,  # noqa: F401
                                          TIMEOUT_SECONDS, WAKE_TIMEOUT_SECONDS, hook_block, hook_entry,
                                          install_mod, merged_settings, mod_in, other_states, settings_path,
@@ -297,16 +298,33 @@ def uninstall_agent(state, adapter, path):
     return True, saved
 
 
-def restore_backup(state, path):
+def restore_backup(state, path, adapter=claude):
     """Put back the file as it was before the last install (the current file is backed up
-    first). Returns the backup folder used, or None when there is none."""
+    first), but for the hooks (and Claude Code's mod) of another state folder in it (the
+    `adapter`'s other_states): an orch init with another ORCH_HOME added those and the last
+    install took them out, and once that folder is deleted they fail on every event. Returns
+    (the backup folder used, those other state folders), or (None, []) when there is none."""
     check_settings_file(path)
     folder = latest_backup(state, path)
     if folder is None:
-        return None
+        return None, []
     with open(os.path.join(folder, BACKUP_NAME), "rb") as fh:
         data = fh.read()
+    data, others = _without_others(data, adapter, state.hook_script)
     backup(state, path, "restore")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     _write_atomic(path, data)
-    return folder
+    return folder, others
+
+
+def _without_others(data, adapter, script):
+    """A backup's bytes without the entries of another state folder, and those folders: the bytes
+    as they are when it holds none (or is not JSON)."""
+    try:
+        parsed = json.loads(data.decode("utf-8-sig") or "{}")
+    except ValueError:
+        return data, []
+    others = adapter.other_states(parsed, script) if isinstance(parsed, dict) else []
+    if not others:
+        return data, []
+    return _dump(adapter.without_others(parsed, script)), others

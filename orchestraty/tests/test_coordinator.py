@@ -406,3 +406,78 @@ def test_a_record_that_cannot_be_read_is_said_once_and_the_hooks_hold_off(state,
                           cwd=str(PACKAGE_ROOT), capture_output=True, timeout=60)
     assert proc.returncode == cmain.OK, proc.stderr
     assert os.stat(state.spawned).st_mtime < time.time() - hook.RESPAWN_SECONDS      # the next hook may start one
+
+
+def test_a_record_that_cannot_be_opened_at_all_is_said_once_too(state, watched):
+    fast_config(state, repos=[str(watched / ".git")])
+    os.makedirs(state.record)                              # a folder where the record should be
+    proc = subprocess.run([sys.executable, "-m", "orchestraty", "coordinator", "run"], env=child_env(state),
+                          cwd=str(PACKAGE_ROOT), capture_output=True, timeout=60)
+    assert proc.returncode == cmain.BAD_RECORD and proc.stderr == b""
+    [line] = Path(state.logs, "coordinator.log").read_text(encoding="utf-8").splitlines()
+    assert f"the record at {state.record} cannot be opened (" in line and "move it aside" in line
+    assert os.stat(state.spawned).st_mtime > time.time() + cmain.HOLD_OFF_SECONDS - 30
+
+
+def test_a_record_that_cannot_be_written_holds_the_hooks_off_too(state, watched):
+    """A record that opens and then fails every step (read-only here; a damaged page or a full
+    disk do the same): the coordinator leaves after MAX_FAILURES steps in a row, and no hook
+    starts another for a minute, which would fail the same way."""
+    import stat
+    from orchestraty.coordinator.record import Record
+    fast_config(state, repos=[str(watched / ".git")])
+    spool_event(state.root, "s1", "SessionStart", watched)
+    Record(state.record).close()
+    os.chmod(state.record, stat.S_IREAD)
+    try:
+        if os.access(state.record, os.W_OK):
+            pytest.skip("this user writes read-only files")
+        run = ("import sys; from orchestraty.coordinator import main; from orchestraty.paths import State; "
+               "main.MAX_FAILURES = 2; sys.exit(main.run(State()))")
+        proc = subprocess.run([sys.executable, "-c", run], env=child_env(state), cwd=str(PACKAGE_ROOT),
+                              capture_output=True, timeout=60)
+        assert proc.returncode == cmain.FAILED, proc.stderr
+        assert "readonly database" in Path(state.logs, "coordinator.log").read_text(encoding="utf-8")
+        assert os.stat(state.spawned).st_mtime > time.time() + cmain.HOLD_OFF_SECONDS - 30
+    finally:
+        os.chmod(state.record, stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_a_line_that_runs_out_of_memory_fails_the_step_and_is_read_again(state, watched, coordinator, monkeypatch):
+    """sqlite3 reports SQLITE_NOMEM as a MemoryError: a lack of memory, not the line's fault."""
+    for sid in ("s1", "s2"):
+        spool_event(state.root, sid, "SessionStart", watched)
+    c = coordinator()
+    add_event = c.record.add_event
+
+    def no_memory_for_s2(line, detail=None):
+        if line.get("session_id") == "s2":
+            raise MemoryError()
+        return add_event(line, detail)
+    monkeypatch.setattr(c.record, "add_event", no_memory_for_s2)
+    with pytest.raises(MemoryError):
+        c.step()
+    assert c.bad_lines == 0 and c.record.sessions() == []
+    monkeypatch.setattr(c.record, "add_event", add_event)
+    assert c.step() == 2                                   # read again, not set aside
+    assert sorted(s["id"] for s in c.record.sessions()) == ["s1", "s2"]
+
+
+def test_a_failed_step_is_read_again_without_asking_the_record_where(state, watched, coordinator, monkeypatch):
+    """The rewind goes back to where the reader stood before the step, which is what the record
+    saved: asking the record could fail the same way the step did."""
+    import sqlite3
+    spool_event(state.root, "s1", "SessionStart", watched)
+    c = coordinator()
+    save, positions = c.record.save_positions, c.record.positions
+
+    def io_error(*args):
+        raise sqlite3.OperationalError("disk I/O error")
+    monkeypatch.setattr(c.record, "save_positions", io_error)
+    monkeypatch.setattr(c.record, "positions", io_error)
+    with pytest.raises(sqlite3.OperationalError):
+        c.step()
+    monkeypatch.setattr(c.record, "save_positions", save)
+    monkeypatch.setattr(c.record, "positions", positions)
+    assert c.step() == 1                                   # read again, not skipped
+    assert [e["event"] for e in c.record.events("s1")] == ["SessionStart"]

@@ -258,8 +258,9 @@ def install_mod(state):
     if os.path.isdir(target):
         gitio.remove_tree(target)          # an older copy may carry a read-only attribute (Windows)
     shutil.copytree(MOD_SOURCE, target, ignore=shutil.ignore_patterns("__pycache__", "*.test.ts"))
+    os.chmod(target, os.stat(target).st_mode | stat.S_IWRITE)   # the folder too: copytree copies its attribute
     for root, dirs, files in os.walk(target):  # the copy stays writable, so the next copy can replace it
-        for name in dirs + files:
+        for name in dirs + files:              # (and the state folder can be deleted)
             p = os.path.join(root, name)
             os.chmod(p, os.stat(p).st_mode | stat.S_IWRITE)
     return target
