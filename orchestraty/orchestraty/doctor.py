@@ -177,6 +177,14 @@ def record_check(state):
         return note(f"record: none yet at {state.record} (the coordinator makes it)")
     if os.path.isdir(state.record):
         return problem(f"record: {state.record} is a folder, not a file", f"move it aside: {NEW_RECORD}")
+    # Before opening it: SQLite makes the -wal and -shm files with the record's own permissions,
+    # so opening a read-only record would leave read-only ones behind (POSIX).
+    read_only = [path for path in (state.record, state.record + "-wal", state.record + "-shm")
+                 if os.path.exists(path) and not os.access(path, os.W_OK)]
+    if read_only:
+        return problem(f"record: {' and '.join(read_only)} cannot be written to (read-only)",
+                       "give your user write access to it (on Windows, clear its read-only attribute), then run "
+                       "orch coordinator stop and orch doctor again")
     from orchestraty.coordinator.record import Record
     try:
         record = Record(state.record, readonly=True)
@@ -197,12 +205,6 @@ def record_check(state):
         return problem(f"record: {state.record} cannot be read ({found[0][:200]})",
                        f"run orch coordinator stop, then move {state.record} aside, with its -wal and -shm files: "
                        f"{NEW_RECORD}")
-    read_only = [path for path in (state.record, state.record + "-wal", state.record + "-shm")
-                 if os.path.exists(path) and not os.access(path, os.W_OK)]
-    if read_only:
-        return problem(f"record: {' and '.join(read_only)} cannot be written to (read-only)",
-                       "give your user write access to it (on Windows, clear its read-only attribute), then run "
-                       "orch coordinator stop and orch doctor again")
     return ok(f"record: {state.record}")
 
 

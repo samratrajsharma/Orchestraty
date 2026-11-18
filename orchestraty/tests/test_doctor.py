@@ -262,6 +262,7 @@ def test_a_record_that_cannot_be_written_is_a_problem(state_root):
         check = doctor.record_check(state)
         assert check.kind == "fix" and check.text == f"record: {state.record} cannot be written to (read-only)"
         assert "write access" in check.fix and "orch init" not in check.fix
+        assert not os.path.exists(state.record + "-wal") and not os.path.exists(state.record + "-shm")  # none made
     finally:
         os.chmod(state.record, stat.S_IREAD | stat.S_IWRITE)
     assert doctor.record_check(state).kind == "ok"
