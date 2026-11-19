@@ -1,0 +1,12 @@
+Coordinator: not running (a hook starts it with the next event)
+
+repo  (<tmp>/repo/.git)
+  session  agent   worktree  branch  base       last event  state
+  A        claude  wt-a      feat-a  7542b35e7  1m ago      working
+    files: a.py; contracts: charge [breaking: parameter currency removed]
+  B        claude  wt-b      feat-b  7542b35e7  1m ago      working
+    files: c.py
+  overlaps:
+    strong  O3  charge (a.py): breaking change in A, used in c.py by B
+    strong  O6  charge (a.py): 1 caller left behind by A
+  merge order: merge feat-a first: feat-b uses charge in a.py, which feat-a changed.

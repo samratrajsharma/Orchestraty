@@ -1,0 +1,204 @@
+{
+  "coordinator": {
+    "running": false
+  },
+  "repositories": [
+    {
+      "cloud": {
+        "agents_told": false,
+        "branches": [],
+        "fetch": null,
+        "on": false,
+        "patterns": [
+          "claude/*",
+          "codex/*",
+          "copilot/*"
+        ],
+        "remote": "origin"
+      },
+      "common_dir": "<tmp>/repo/.git",
+      "merge_order": [
+        {
+          "first": "A",
+          "line": "merge feat-a first: feat-b uses charge in a.py, which feat-a changed.",
+          "sessions": [
+            "A",
+            "B"
+          ],
+          "symbols": [
+            "a.py::charge"
+          ]
+        }
+      ],
+      "name": "repo",
+      "overlaps": [
+        {
+          "changer": "A",
+          "detail": {
+            "kind": "modified",
+            "latent": false,
+            "moved_to": "",
+            "reasons": [
+              "parameter currency removed"
+            ],
+            "symbol": "a.py::charge",
+            "uses": [
+              {
+                "lines": [
+                  5
+                ],
+                "symbol": "c.py::use"
+              }
+            ]
+          },
+          "file": "c.py",
+          "key": "O3|a.py::charge|A|B|c.py",
+          "receiver": "B",
+          "rule": "O3",
+          "sessions": [
+            "A",
+            "B"
+          ],
+          "strength": "strong",
+          "symbol": "a.py::charge"
+        },
+        {
+          "changer": "A",
+          "detail": {
+            "kind": "modified",
+            "left": [
+              {
+                "file": "b.py",
+                "lines": [
+                  5
+                ],
+                "symbol": "b.py::pay"
+              }
+            ],
+            "reasons": [
+              "parameter currency removed"
+            ],
+            "symbol": "a.py::charge"
+          },
+          "file": "a.py",
+          "key": "O6|a.py::charge|A",
+          "receiver": "",
+          "rule": "O6",
+          "sessions": [
+            "A"
+          ],
+          "strength": "strong",
+          "symbol": "a.py::charge"
+        }
+      ],
+      "sessions": [
+        {
+          "agent": "claude",
+          "base_commit": "7542b35e74b03b7a5e6e789123ba90648497affb",
+          "base_guessed": false,
+          "branch": "feat-a",
+          "changes": {
+            "files": {
+              "a.py": "M"
+            },
+            "not_compared": {},
+            "symbols": [
+              {
+                "change": "signature",
+                "contract": "breaking",
+                "file": "a.py",
+                "heuristic": false,
+                "kind": "modified",
+                "language": "python",
+                "lines": [
+                  1,
+                  2
+                ],
+                "moved_from": "",
+                "reasons": [
+                  "parameter currency removed"
+                ],
+                "symbol": "a.py::charge"
+              }
+            ],
+            "unattributed": []
+          },
+          "claims": [],
+          "declared": [],
+          "hears": [
+            "edit",
+            "next",
+            "stop",
+            "wake"
+          ],
+          "id": "A",
+          "last_event": "2026-11-18T11:06:42Z",
+          "note": "",
+          "seconds_since_last_event": 98,
+          "started": "2026-11-18T11:06:40Z",
+          "state": "live",
+          "turn": "working",
+          "worktree": "<tmp>/wt-a"
+        },
+        {
+          "agent": "claude",
+          "base_commit": "7542b35e74b03b7a5e6e789123ba90648497affb",
+          "base_guessed": false,
+          "branch": "feat-b",
+          "changes": {
+            "files": {
+              "c.py": "A"
+            },
+            "not_compared": {},
+            "symbols": [
+              {
+                "change": "",
+                "contract": "compatible",
+                "file": "c.py",
+                "heuristic": false,
+                "kind": "added",
+                "language": "python",
+                "lines": [
+                  4,
+                  5
+                ],
+                "moved_from": "",
+                "reasons": [],
+                "symbol": "c.py::use"
+              }
+            ],
+            "unattributed": []
+          },
+          "claims": [],
+          "declared": [],
+          "hears": [
+            "edit",
+            "next",
+            "stop",
+            "wake"
+          ],
+          "id": "B",
+          "last_event": "2026-11-18T11:06:43Z",
+          "note": "",
+          "seconds_since_last_event": 97,
+          "started": "2026-11-18T11:06:41Z",
+          "state": "live",
+          "turn": "working",
+          "worktree": "<tmp>/wt-b"
+        }
+      ],
+      "together": {
+        "command": "",
+        "on": false,
+        "results": [],
+        "timeout": 120
+      },
+      "typescript": {
+        "on": false,
+        "runs": [],
+        "timeout": 300
+      }
+    }
+  ],
+  "schema": 1
+}
