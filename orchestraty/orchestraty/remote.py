@@ -23,8 +23,9 @@ relied on (an object it found in the user's store at fetch time), reading the sh
 shadow is then marked broken and fetched afresh.
 
 The shadow can also fetch any list of refspecs (given to git on stdin), push one ref to a remote
-with a lease, and prune its own objects. Team sync, in later versions, is built on these; for now
-nothing calls them. A push, like a fetch, never prompts: it fails instead.
+with a lease, prune its own objects, and read one file at a fetched ref, never reading a file
+larger than its reader takes. Team sync, in later versions, is built on these; for now only the
+team policy reader calls them. A push, like a fetch, never prompts: it fails instead.
 """
 import hashlib
 import json
@@ -91,6 +92,14 @@ def parse_push(returncode, stdout, stderr, dst):
 
 class RemoteError(Exception):
     """A fetch, or a setting, that cannot be done; the message says why."""
+
+
+class TooLarge(Exception):
+    """A file in the shadow is larger than its reader takes, so it was not read."""
+
+    def __init__(self, size):
+        super().__init__(f"the file is {size} bytes")
+        self.size = size
 
 
 class ShadowBroken(Exception):
@@ -356,9 +365,9 @@ class Shadow:
                 raise gitio.GitError(f"git {args[0]} failed in the shadow")
 
     # reading: local git only
-    def _git(self, args, timeout=None):
-        """(returncode, stdout) of a git command in the shadow that needs no network. Raises
-        ShadowBroken when git says an object is missing."""
+    def _git(self, args, timeout=None, raw=False):
+        """(returncode, stdout) of a git command in the shadow that needs no network; stdout is
+        bytes when `raw`. Raises ShadowBroken when git says an object is missing."""
         argv, env = git_command(args, self.path)
         env["GIT_OPTIONAL_LOCKS"] = "0"
         try:
@@ -369,7 +378,31 @@ class Shadow:
         err = proc.stderr.decode("utf-8", "replace")
         if proc.returncode != 0 and broken_error(err):
             raise ShadowBroken(_clean_error(err))
-        return proc.returncode, proc.stdout.decode("utf-8", "replace")
+        return proc.returncode, proc.stdout if raw else proc.stdout.decode("utf-8", "replace")
+
+    def read_file(self, ref, path, max_bytes):
+        """The bytes of the file `path` (a plain file, not a link or a folder) at `ref` in the
+        shadow, or None when the shadow, the ref or such a file is not there. Raises TooLarge,
+        without reading the file, when it is larger than `max_bytes`."""
+        if not self.exists():
+            return None
+        rc, tip = self._git(["rev-parse", "--verify", "--quiet", ref + "^{commit}"])
+        if rc != 0:
+            return None
+        rc, out = self._git(["ls-tree", "-l", "-z", tip.strip(), "--", path])
+        if rc != 0:
+            raise gitio.GitError("ls-tree failed in the shadow")
+        for entry in out.split("\0"):
+            meta, tab, name = entry.partition("\t")
+            fields = meta.split()
+            if tab and name == path and len(fields) == 4 and fields[0] in ("100644", "100755") and fields[1] == "blob":
+                if int(fields[3]) > max_bytes:
+                    raise TooLarge(int(fields[3]))
+                rc, data = self._git(["cat-file", "blob", fields[2]], raw=True)
+                if rc != 0:
+                    raise gitio.GitError("cat-file failed in the shadow")
+                return data
+        return None
 
     def refs(self, remote):
         """({branch: tip}, the default branch's tip or "") as last fetched."""
