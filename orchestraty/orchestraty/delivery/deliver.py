@@ -61,13 +61,13 @@ import os
 import shutil
 import time
 
-from orchestraty import adapters, claims
+from orchestraty import adapters, claims, sessionkinds
 from orchestraty.delivery import notes as templates
 from orchestraty.delivery import slots
 
 NS = 1_000_000_000
 MAX_SLOT_TEXT = 9000              # Claude Code saves longer hook text to a file instead
-NO_NOTES = ("git", "cloud")       # no hooks here (plain git, a cloud agent's branch): nothing can be delivered
+NO_NOTES = sessionkinds.NO_NOTES   # no hooks here (plain git, a branch read from elsewhere): nothing can be delivered
 
 
 def _rel(state, path):
@@ -387,8 +387,8 @@ class Deliverer:
         folder = os.path.join(self.state.root, "push")
         wanted = {}
         for s in sessions.values():
-            if s["state"] != "live" or not s["worktree"]:
-                continue                                  # a cloud branch has no worktree to push from
+            if s["state"] != "live" or not s["worktree"] or s["agent"] in sessionkinds.NO_COPY:
+                continue                                  # a branch read from elsewhere has no worktree to push from
             mine = [f for f in open_findings if f["rule"] == "O6" and f["changer"] == s["id"]]
             line = templates.push_line(mine)
             if line:

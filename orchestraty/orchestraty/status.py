@@ -16,13 +16,13 @@ import json
 import os
 import time
 
-from orchestraty import adapters, claims as claiming, config, mergeorder, remote, together as checking
+from orchestraty import adapters, claims as claiming, config, mergeorder, remote, sessionkinds, together as checking
 from orchestraty.coordinator.lock import is_fresh
 from orchestraty.coordinator.record import Record, repo_key, repo_name
 from orchestraty.delivery.notes import printable
 
 STATUS_SCHEMA = 1
-LEVEL0_AGENT = "git"
+LEVEL0_AGENT = sessionkinds.LEVEL0
 STALE_SECONDS = 10.0
 NS = 1_000_000_000
 
@@ -45,8 +45,8 @@ def _coordinator(state, now):
 
 
 def _hears(agent):
-    """The kinds of note a session of this agent can be handed: none for plain git and cloud branches."""
-    return [] if agent in (LEVEL0_AGENT, remote.CLOUD_AGENT) else list(adapters.hears(agent))
+    """The kinds of note a session of this agent can be handed: none for one with no hooks."""
+    return [] if agent in sessionkinds.NO_NOTES else list(adapters.hears(agent))
 
 
 def _claim(c):
@@ -98,8 +98,8 @@ def collect(state, include_ended=False, now=None):
     for common_dir in cfg["repos"]:
         row = repo_rows.get(repo_key(common_dir))
         sessions = sessions_by_repo.get(row["id"], []) if row else []
-        local = [s for s in sessions if s["agent"] != remote.CLOUD_AGENT]
-        cloud = [s for s in sessions if s["agent"] == remote.CLOUD_AGENT]
+        local = [s for s in sessions if s["agent"] not in sessionkinds.REMOTE]
+        cloud = [s for s in sessions if s["agent"] == sessionkinds.CLOUD]
         data["repositories"].append({
             "name": repo_name(common_dir), "common_dir": common_dir,
             "sessions": [_session(s, now, changes.get(s["id"], ({}, [], [], {})),

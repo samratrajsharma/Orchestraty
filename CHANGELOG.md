@@ -2,6 +2,12 @@
 
 Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestraty`.
 
+## Unreleased
+
+### Changed
+
+- The coordinator drops a declaration for a cloud agent's branch, as it already dropped a claim for one: nobody works in that branch here, so there is nothing to declare.
+
 ## 0.1.1 (19 November 2026)
 
 Fixes from an external audit of 0.1.0, in three parts: the notes are right (findings worked out again after every change that matters, no false or missed notes, nothing lost across a restart), no session's words reach another (what agents declare, the MCP tools' answers, notes and the hook's payload readers hold names only), and install and lifecycle leave no mess (uninstall, settings files that cannot be written, a moved state folder, git hooks, a damaged record, output through a pipe).

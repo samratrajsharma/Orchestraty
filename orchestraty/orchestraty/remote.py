@@ -31,11 +31,11 @@ import time
 
 from orch_engine.ingest import git_command
 
-from orchestraty import config, gitio
+from orchestraty import config, gitio, sessionkinds
 from orchestraty.coordinator.lock import Lock
 from orchestraty.coordinator.record import repo_key
 
-CLOUD_AGENT = "cloud"
+CLOUD_AGENT = sessionkinds.CLOUD
 DEFAULT_REMOTE = "origin"
 DEFAULT_PATTERNS = ("claude/*", "codex/*", "copilot/*")
 REF_ROOT = "refs/orch"

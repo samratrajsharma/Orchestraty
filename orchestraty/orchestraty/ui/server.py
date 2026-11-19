@@ -414,7 +414,7 @@ class Handler(BaseHTTPRequestHandler):
     def _claim(self, body):
         """{"session": id, "target": path or function, "minutes": n, "hard": bool}, as orch claim
         resolves and records it: the target is read from the session's worktree."""
-        from orchestraty import claims, config
+        from orchestraty import claims, config, sessionkinds
         sid, target = body.get("session"), body.get("target")
         minutes, hard = body.get("minutes"), body.get("hard", False)
         if not isinstance(sid, str) or not sid or not isinstance(target, str) or not target.strip()                 or len(target) > 300 or not isinstance(hard, bool)                 or (minutes is not None and (isinstance(minutes, bool) or not isinstance(minutes, int)
@@ -425,7 +425,7 @@ class Handler(BaseHTTPRequestHandler):
         with data._record(state) as record:
             s = record.session(sid) if record else None
             repos = {r["id"]: r["common_dir"] for r in record.repos()} if record else {}
-        if s is None or s["state"] != "live" or s["agent"] == "cloud":
+        if s is None or s["state"] != "live" or s["agent"] in sessionkinds.NO_COPY:
             return 404, _err("no live session has this id")
         top, common_dir = s["worktree"], repos.get(s["repo_id"], "")
         cfg = config.load(state)

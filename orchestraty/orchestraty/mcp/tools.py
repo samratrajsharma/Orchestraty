@@ -24,12 +24,12 @@ import calendar
 import os
 import time
 
-from orchestraty import adapters, claims as claiming, config, declarations, feedback, gitio, status
+from orchestraty import adapters, claims as claiming, config, declarations, feedback, gitio, sessionkinds, status
 from orchestraty.coordinator.record import Record, repo_key
 from orchestraty.delivery import notes as templates
 
 NS = 1_000_000_000
-LEVEL0_AGENT = "git"
+LEVEL0_AGENT = sessionkinds.LEVEL0
 CHANGED_KINDS = ("modified", "moved", "removed")
 STRENGTH_ORDER = {"strong": 0, "medium": 1, "weak": 2}
 SCOPE = ("Files come from git and the agents' edit events, functions and their contracts from Python files, as of the "

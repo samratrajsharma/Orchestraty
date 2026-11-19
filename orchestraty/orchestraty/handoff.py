@@ -17,7 +17,7 @@ import os
 import secrets
 import time
 
-from orchestraty import gitio, usercommand
+from orchestraty import gitio, sessionkinds, usercommand
 from orchestraty.coordinator.record import Record
 from orchestraty.delivery import notes as templates
 
@@ -25,7 +25,7 @@ PACKET_SCHEMA = 1
 NS = 1_000_000_000
 MAX_TASK = 500
 TEST_TIMEOUT = 600
-CLOUD_AGENT = "cloud"
+CLOUD_AGENT = sessionkinds.CLOUD
 
 
 class Refused(Exception):
@@ -137,7 +137,7 @@ def pick_session(state, ref, cwd):
         raise Refused("the record is empty: no session has been seen yet")
     record = Record(state.record, readonly=True)
     try:
-        sessions = [s for s in record.sessions() if s["agent"] != CLOUD_AGENT]
+        sessions = [s for s in record.sessions() if s["agent"] not in sessionkinds.NO_COPY]
     finally:
         record.close()
     if ref:
@@ -150,7 +150,7 @@ def pick_session(state, ref, cwd):
         raise Refused(f"{cwd} is not inside a git worktree: run it in the session's worktree, or pass --session")
     here = [s for s in sessions if s["worktree"] and _same(s["worktree"], info["top"])]
     live = [s for s in here if s["state"] == "live"]
-    chosen = [s for s in live if s["agent"] != "git"] or live or sorted(here, key=lambda s: s["last_seen"])[-1:]
+    chosen = [s for s in live if s["agent"] != sessionkinds.LEVEL0] or live or sorted(here, key=lambda s: s["last_seen"])[-1:]
     if not chosen:
         raise Refused(f"no session has worked in {info['top']}: pass --session")
     if len(chosen) > 1:

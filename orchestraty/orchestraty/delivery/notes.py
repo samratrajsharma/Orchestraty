@@ -15,7 +15,7 @@ import os
 import re
 import time
 
-from orchestraty import usercommand
+from orchestraty import sessionkinds, usercommand
 # Claude Code's hook outputs, under the names they had here. Each agent's own are in its adapter.
 from orchestraty.adapters.claude import post_tool_output, pre_tool_output, stop_output  # noqa: F401
 
@@ -44,7 +44,7 @@ _FAILED_TEST = re.compile(r"(?:FAIL(?:ED)?|ERROR):?\s+([A-Za-z0-9_./-]+\.[A-Za-z
 _AT_LINE = re.compile(r"([A-Za-z0-9_./-]+\.[A-Za-z0-9]+):([0-9]+):")
 _ERROR_NAME = re.compile(r"(?:E\s+)?(?:[A-Za-z_][\w.]*\.)?([A-Z][A-Za-z0-9_]*(?:Error|Exception))(?=:|\s*$)", re.ASCII)
 AGENTS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "git": "plain-git"}
-CLOUD = "cloud"             # a cloud agent's branch: its agent works elsewhere and is never told
+CLOUD = sessionkinds.CLOUD  # a cloud agent's branch: its agent works elsewhere and is never told
 
 
 def clean(value, limit=MAX_VALUE):
@@ -114,7 +114,7 @@ def describe(session):
     where = f"worktree {clean(os.path.basename(session.get('worktree', '')) or '?', 60)}"
     if session.get("branch"):
         where += f", branch {clean(session['branch'], 60)}"
-    if agent == "git":
+    if agent == sessionkinds.LEVEL0:
         return f"changes made outside any agent session ({where})"
     return f"another {AGENTS.get(agent, clean(agent, 30))} session ({where})"
 
@@ -180,7 +180,7 @@ def for_changer(finding, user, told=None):
     uses = _list(d.get("uses", []), lambda u: _name(u["symbol"]) + _lines(u.get("lines", [])))
     how = "removed" if finding["rule"] == "O4" else f"changed ({_reasons(d.get('reasons', []))})"
     if told is None:
-        told = user.get("agent") not in ("git", CLOUD)
+        told = user.get("agent") not in sessionkinds.NO_NOTES
     if user.get("agent") == CLOUD:
         then = "The agent on that branch works elsewhere and is not told; mention it to your user."
     elif told == "next":
@@ -227,7 +227,7 @@ def same_route(finding, me, other):
     if other.get("agent") == CLOUD:
         who, settle = "that branch", ("The agent on that branch works elsewhere and is not told: settle the route "
                                       "with your user before either is merged.")
-    elif other.get("agent") == "git":
+    elif other.get("agent") == sessionkinds.LEVEL0:
         who, settle = "they", "No session with Orchestraty works there, so nobody there is told; mention it to your user."
     else:
         who, settle = "that session", "Agree with that session on the route's method and path before either of you merges."
@@ -266,7 +266,7 @@ def reserved(claim):
 
 def _who(session):
     """Another session, as a note names it; a plain-git one is someone outside any agent session."""
-    if session.get("agent") == "git":
+    if session.get("agent") == sessionkinds.LEVEL0:
         return "someone working outside any agent session (" + describe(session).split(" (", 1)[-1]
     return describe(session)
 

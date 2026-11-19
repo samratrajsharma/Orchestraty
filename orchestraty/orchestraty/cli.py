@@ -5,7 +5,7 @@ import os
 import sys
 import time
 
-from orchestraty import __version__, plugin
+from orchestraty import __version__, plugin, sessionkinds
 from orchestraty.capture import install as hooks
 from orchestraty.paths import State
 
@@ -531,7 +531,7 @@ def _live_sessions(state):
         return [], {}
     record = Record(state.record, readonly=True)
     try:
-        return ([s for s in record.sessions(states=("live",)) if s["agent"] != "cloud"],
+        return ([s for s in record.sessions(states=("live",)) if s["agent"] not in sessionkinds.REMOTE],
                 {r["id"]: r["common_dir"] for r in record.repos()})
     finally:
         record.close()
@@ -572,7 +572,7 @@ def _claim_session(state, ref):
         if ref:
             return [s for s in sessions if s["id"] == ref] or [s for s in sessions if s["id"].startswith(ref)]
         here = [s for s in sessions if _same_folder(s["worktree"], info["top"])]
-        return [s for s in here if s["agent"] != "git"] or here
+        return [s for s in here if s["agent"] != sessionkinds.LEVEL0] or here
 
     sessions, repos = _live_sessions(state)
     deadline = time.monotonic() + CLAIM_CATCH_UP

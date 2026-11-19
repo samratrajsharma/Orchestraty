@@ -41,7 +41,7 @@ import os
 import statistics
 import time
 
-from orchestraty import __version__, config
+from orchestraty import __version__, config, sessionkinds
 from orchestraty.coordinator.record import Record
 from orchestraty.feedback import VERDICTS
 
@@ -52,8 +52,8 @@ MAX_COMMENT = 4000
 NS = 1_000_000_000
 DAY = 86400
 WEEK = 7
-LEVEL0_AGENT = "git"
-CLOUD_AGENT = "cloud"
+LEVEL0_AGENT = sessionkinds.LEVEL0
+CLOUD_AGENT = sessionkinds.CLOUD
 RULES = ("O1", "O2", "O3", "O4", "O5", "O6", "O7", "W1")
 STRENGTHS = ("strong", "medium", "weak")
 KINDS = ("edit", "next", "stop", "wake")
@@ -168,7 +168,7 @@ def per_session_day(lo, hi, agents, notes):
 def _week(n, start, end, rec, window_ns):
     lo, hi = int(start * NS), int(end * NS)
     live = [s for s in rec["sessions"].values() if s["started"] < hi and s["last_seen"] >= lo]
-    agents = [s for s in live if s["agent"] not in (LEVEL0_AGENT, CLOUD_AGENT)]
+    agents = [s for s in live if s["agent"] not in sessionkinds.NO_NOTES]
     pairs = sum(1 for i, a in enumerate(agents) for b in agents[i + 1:]
                 if a["repo_id"] == b["repo_id"]
                 and max(a["started"], b["started"], lo) <= min(a["last_seen"], b["last_seen"], hi))

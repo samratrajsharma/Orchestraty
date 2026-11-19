@@ -40,13 +40,13 @@ import sqlite3
 import sys
 import time
 
-from orchestraty import __version__, claims, config, declarations, feedback, gitio, remote, together
+from orchestraty import __version__, claims, config, declarations, feedback, gitio, remote, sessionkinds, together
 from orchestraty.coordinator.cloud import CloudBranches, session_id as cloud_session_id
 from orchestraty.coordinator.lock import Heartbeat, Lock, touch
 from orchestraty.coordinator.record import Record, SchemaError, repo_key
 from orchestraty.coordinator.spool import SpoolReader
 from orchestraty.delivery import slots
-from orchestraty.delivery.deliver import NO_NOTES, Deliverer
+from orchestraty.delivery.deliver import Deliverer
 from orchestraty.livemap import changes as git_changes
 from orchestraty.livemap import typescript
 from orchestraty.livemap.map import LiveMap
@@ -67,8 +67,9 @@ DETAIL_FIELDS = ("source", "reason", "stop_hook_active", "len", "took")
 LOCK_WAIT_SECONDS = 3.0
 HOLD_OFF_SECONDS = 60             # no hook starts a coordinator for this long after one could not open its
                                   # record, or failed MAX_FAILURES steps in a row
-LEVEL0_AGENT = "git"
-CLOUD_AGENT = remote.CLOUD_AGENT
+LEVEL0_AGENT = sessionkinds.LEVEL0
+CLOUD_AGENT = sessionkinds.CLOUD
+NO_NOTES = sessionkinds.NO_NOTES
 
 # Exit codes of run()
 OK, ALREADY_RUNNING, NEWER_RECORD, FAILED, BAD_RECORD = 0, 3, 4, 5, 6
@@ -110,7 +111,7 @@ class Coordinator:
         self._together_due = {}            # (session, session) -> the check to queue once its minute is up
         self._together_queued = {}         # (session, session) -> when its last check was queued (monotonic)
         for session in self.sessions.values():
-            if session["agent"] != CLOUD_AGENT:            # cloud branches are tracked by scan_cloud, from their tips
+            if session["agent"] not in sessionkinds.REMOTE:  # branches read from elsewhere are tracked by their scans
                 self._track(session)
 
     def close(self):
@@ -337,7 +338,8 @@ class Coordinator:
                 continue
             a, b = f.sessions
             sa, sb = self.sessions.get(a), self.sessions.get(b)
-            if (not sa or not sb or CLOUD_AGENT in (sa["agent"], sb["agent"]) or not sa["worktree"]
+            if (not sa or not sb or sa["agent"] in sessionkinds.NO_COPY or sb["agent"] in sessionkinds.NO_COPY
+                    or not sa["worktree"]
                     or not sb["worktree"] or _same(sa["worktree"], sb["worktree"])):
                 continue                                     # no working copies of their own to run
             job = self._together_due.get((a, b))
@@ -632,6 +634,8 @@ class Coordinator:
             self.bad_lines += 1
         elif self.record.session(item["session_id"]) is None:
             self.log.info("a declaration for a session the record does not have was dropped")
+        elif self.record.session(item["session_id"])["agent"] in sessionkinds.NO_COPY:
+            self.log.info("a declaration for a session with no working copy here was dropped")
         else:
             ts = self._made(ts)
             self.record.add_declaration(item["session_id"], item["paths"], item["symbols"], item["task"], ts,
@@ -662,7 +666,7 @@ class Coordinator:
         repo_id = self.record.repo_id(item["repo"])
         if item["event"] == "claim":
             s = self.sessions.get(item["session_id"])
-            if s is None or s["state"] != "live" or s["repo_id"] != repo_id or s["agent"] == CLOUD_AGENT:
+            if s is None or s["state"] != "live" or s["repo_id"] != repo_id or s["agent"] in sessionkinds.NO_COPY:
                 self.log.info("a claim for a session not live in that repository was dropped")
                 return
             ts = self._made(ts)
@@ -768,8 +772,8 @@ class Coordinator:
         """End live sessions with no event for longer than the session timeout, and the claims
         whose time ran out."""
         limit = now - self.cfg["session_timeout"] * NS
-        stale = [s for s in self.sessions.values()        # a cloud branch lives as long as the branch does
-                 if s["state"] == "live" and s["last_seen"] < limit and s["agent"] != CLOUD_AGENT]
+        stale = [s for s in self.sessions.values()        # a branch read from elsewhere lives as long as it does
+                 if s["state"] == "live" and s["last_seen"] < limit and s["agent"] not in sessionkinds.REMOTE]
         if stale:
             with self.record.transaction():
                 for s in stale:
@@ -830,8 +834,8 @@ class Coordinator:
                     self.record.forget_position(path)
 
     def live_count(self, hooked_only=False):
-        """Live sessions; with hooked_only, plain-git ones and cloud branches left out (they keep
-        nothing awake)."""
+        """Live sessions; with hooked_only, those with no hooks left out (plain git, and branches
+        read from elsewhere): they keep nothing awake."""
         return sum(1 for s in self.sessions.values()
                    if s["state"] == "live" and not (hooked_only and s["agent"] in NO_NOTES))
 
