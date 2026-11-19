@@ -34,6 +34,8 @@ parameter removed from the end only the calls that pass that many arguments by p
 ``breaking_reasons`` matches one use against them, cautiously: a call that unpacks ``*x`` or
 ``**x`` can break, and so can a use with no recorded calls (an inheritance, a call from JS).
 """
+import re
+
 POSITIONAL_ONLY = "positional_only"
 POSITIONAL_OR_KEYWORD = "positional_or_keyword"
 VAR_POSITIONAL = "var_positional"
@@ -48,6 +50,34 @@ ANY = ["any"]
 ON_CLASS = ["on_class"]
 _BINDINGS = {"staticmethod": "static", "classmethod": "class"}
 _AS = {"static": "a staticmethod", "class": "a classmethod", "instance": "a plain method", "": "a function"}
+
+
+# Every reason classify and the live map give, as a template: {id} is a parameter's name and
+# {path} a repository path. A reason shared with a teammate must match one of these forms
+# (REASON_FORMS), so a reason can never carry other words.
+REASON_TEMPLATES = (
+    "now a staticmethod", "now a classmethod", "now a plain method", "now a function", "now a class",
+    "now async", "no longer async",
+    "parameter {id} renamed to {id}", "type of {id} changed", "default of {id} changed",
+    "parameter {id} removed", "parameter {id} is now required",
+    "parameter {id} can no longer be passed by position", "parameter {id} can no longer be passed by name",
+    "positional parameters reordered", "parameter {id} placed before existing ones",
+    "new required parameter {id}", "new optional parameter {id}",
+    "*args removed", "*args added", "**kwargs removed", "**kwargs added",
+    "return type changed", "decorators changed", "type parameters changed",
+    "base class removed", "base classes changed",
+    "removed", "moved from {path}",
+)
+_PLACES = {"{id}": "[A-Za-z_][A-Za-z0-9_]{0,63}", "{path}": "(?P<path>.+)"}
+
+
+def _form(template):
+    """A template as a regular expression: its words literal, its places as their patterns."""
+    return re.compile("".join(_PLACES.get(part) or re.escape(part)
+                              for part in re.split(r"(\{id\}|\{path\})", template)))
+
+
+REASON_FORMS = tuple(_form(t) for t in REASON_TEMPLATES)
 
 
 def worst(*verdicts):
