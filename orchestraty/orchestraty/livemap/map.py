@@ -26,9 +26,10 @@ MAX_BLOB_BYTES. It stands as the session's copy last showed it whole, else as it
 it, so none of its functions looks removed; the view lists it (``not_compared``) until it reads
 whole again. A deletion is still one.
 
-A cloud agent's branch (``remote``) has no folder: its view is read from a shadow
-repository's objects, base commit to the branch's tip, through the same parses and analysis,
-and only when the tip or the base moved.
+A branch read from elsewhere (a cloud agent's, ``remote``) has no folder: its view is read from
+a shadow repository's objects, base commit to the branch's tip, through the same parses and
+analysis (``branch_view``), and only when the tip or the base moved. The live map keeps these
+branches in ``branches`` (``cloud`` is the older name for it).
 """
 import logging
 import os
@@ -169,6 +170,87 @@ def known(base, head, unread, before):
     return head, unread
 
 
+def branch_view(git_dir, repo_key, sid, base, tip, before=None, cache=None, base_blobs=None):
+    """A branch's view, from commits alone: the files and functions changed from `base` to `tip`
+    in the repository `git_dir` (a shadow), through the same parses and analysis as a worktree's.
+    `before` is the branch's last view: a file that does not parse now stands as it showed
+    there. `cache` and `base_blobs` are the live map's parse cache and base blob ids, to share
+    (fresh ones otherwise). A branch that cannot be read gives a view whose `error` says why."""
+    cache = ParseCache() if cache is None else cache
+    base_blobs = {} if base_blobs is None else base_blobs
+    new = SessionView(sid, repo_key, "", base, git_dir=git_dir, tip=tip)
+    try:
+        new.files = git_changes.commit_diff(git_dir, base, tip)
+        python = {p: s for p, s in new.files.items() if p.endswith(PYTHON)}
+        base_pf, head, new.head_blobs, unread = _parses(cache, base_blobs, git_dir, base, python, at=tip)
+        new.head, new.not_compared = known(base_pf, head, unread, before.head if before is not None else {})
+        new.symbols = analyse(base_pf, new.head)
+    except (gitio.GitError, gitio.UntrustedRepositoryError, RuntimeError) as exc:
+        new.error = str(exc)[:300]
+    return new
+
+
+def _parses(cache, base_blobs, top, base, python, at=None):
+    """({path: base ParsedFile or None}, {path: head ParsedFile or None}, {path: head blob id},
+    {path: why its head is not known}) for the changed .py files: the head as it is on disk in
+    `top`, or (with `at`) as it is at that commit of the repository `top`. `base_blobs` keeps
+    each (commit, path)'s blob id once read."""
+    head, head_blobs, unread = (_heads_at(cache, top, at, python) if at is not None
+                                else _heads_on_disk(cache, top, python))
+    wanted = [p for p, s in python.items() if s != "A" and (base, p) not in base_blobs]
+    if wanted:
+        found = git_changes.blob_ids(top, base, wanted)
+        for p in wanted:
+            base_blobs[(base, p)] = found.get(p)
+    blobs = {p: base_blobs.get((base, p)) for p, s in python.items() if s != "A"}
+    missing = sorted({b for p, b in blobs.items() if b and not cache.known(p, b)})
+    data = read_blobs(top, missing) if missing else {}
+    base_pf = {}
+    for path in python:
+        blob = blobs.get(path)
+        if not blob:
+            base_pf[path] = None
+        elif blob in data:
+            base_pf[path] = cache.get(path, data[blob], blob) if len(data[blob]) <= MAX_BLOB_BYTES else None
+        else:
+            base_pf[path] = cache.get(path, b"", blob)        # a cached parse: the key is all it needs
+    return base_pf, head, head_blobs, unread
+
+
+def _heads_on_disk(cache, top, python):
+    head, head_blobs, unread = {}, {}, {}
+    for path, status in python.items():
+        head[path] = head_blobs[path] = None
+        if status == "D":
+            continue
+        try:
+            with open(os.path.join(top, *path.split("/")), "rb") as fh:
+                data = fh.read(MAX_BLOB_BYTES + 1)
+        except OSError:
+            unread[path] = NOT_READ
+            continue
+        if len(data) <= MAX_BLOB_BYTES:
+            head_blobs[path] = blob_id(data)
+            head[path] = cache.get(path, data, head_blobs[path])
+        else:
+            unread[path] = TOO_LARGE
+    return head, head_blobs, unread
+
+
+def _heads_at(cache, top, commit, python):
+    head_blobs, unread = {p: None for p in python}, {}
+    head_blobs.update(git_changes.blob_ids(top, commit, [p for p, s in python.items() if s != "D"]))
+    missing = sorted({b for p, b in head_blobs.items() if b and not cache.known(p, b)})
+    data = read_blobs(top, missing) if missing else {}
+    head = {}
+    for path, blob in head_blobs.items():
+        if blob in data and len(data[blob]) > MAX_BLOB_BYTES:
+            blob = head_blobs[path] = None
+            unread[path] = TOO_LARGE
+        head[path] = cache.get(path, data.get(blob, b""), blob) if blob else None
+    return head, head_blobs, unread
+
+
 def _stat(path):
     try:
         st = os.stat(path)
@@ -192,7 +274,12 @@ class LiveMap:
         self._routes = {}                              # session id -> (view key, RouteView)
         self._ts_uses = {}                             # session id -> (view key, tsimports.Imports)
         self.ts = typescript.TypeScript(state, self.log)
-        self.cloud = {}                                # session id -> (shadow git dir, tip): cloud branches
+        self.branches = {}                             # session id -> (shadow git dir, tip): branches read from elsewhere
+
+    @property
+    def cloud(self):
+        """The older name of `branches`."""
+        return self.branches
 
     # sessions
     def track(self, session, repo_key, adopt_existing=False, recorded=None):
@@ -218,32 +305,34 @@ class LiveMap:
         self.pending.add(sid)
         self.indexes.get(repo_key, session["base_commit"], session["worktree"])
 
-    def track_cloud(self, session, repo_key, git_dir, tip):
-        """Start following a cloud agent's branch: its commits are read from the shadow
-        repository `git_dir`, from the session's base commit to `tip`."""
+    def track_branch(self, session, repo_key, git_dir, tip):
+        """Start following a branch read from elsewhere (a cloud agent's): its commits are read
+        from the shadow repository `git_dir`, from the session's base commit to `tip`."""
         sid = session["id"]
         self.sessions[sid] = session
-        self.cloud[sid] = (git_dir, tip)
+        self.branches[sid] = (git_dir, tip)
         self.views[sid] = SessionView(sid, repo_key, "", session["base_commit"], git_dir=git_dir)
         self.pending.add(sid)
         self.indexes.get(repo_key, session["base_commit"], git_dir)
 
-    def move_cloud(self, sid, tip):
+    def move_branch(self, sid, tip):
         """The branch moved: read it again."""
-        if sid in self.cloud:
-            self.cloud[sid] = (self.cloud[sid][0], tip)
+        if sid in self.branches:
+            self.branches[sid] = (self.branches[sid][0], tip)
             self.pending.add(sid)
 
-    def reread_cloud(self, sid):
-        """Read a cloud branch again at its next refresh if the last read failed."""
+    def reread_branch(self, sid):
+        """Read a branch again at its next refresh if the last read failed."""
         v = self.views.get(sid)
-        if sid in self.cloud and v is not None and v.error:
+        if sid in self.branches and v is not None and v.error:
             v.tip = ""
             self.pending.add(sid)
 
+    track_cloud, move_cloud, reread_cloud = track_branch, move_branch, reread_branch     # the older names
+
     def forget(self, sid):
         for table in (self.sessions, self.views, self.edits, self.dirty_at_start, self._graphs, self._routes,
-                      self._ts_uses, self.cloud):
+                      self._ts_uses, self.branches):
             table.pop(sid, None)
         self.pending.discard(sid)
         self.ts.forget(sid)
@@ -290,8 +379,8 @@ class LiveMap:
         return changed
 
     def refresh(self, sid):
-        if sid in self.cloud:
-            return self._refresh_cloud(sid)
+        if sid in self.branches:
+            return self._refresh_branch(sid)
         session, old = self.sessions[sid], self.views[sid]
         top, base = session["worktree"], session["base_commit"]
         try:
@@ -346,83 +435,23 @@ class LiveMap:
                 c["symbol"], c["kind"], "signature" if c["kind"] == "modified" else "", c["contract"], list(c["reasons"]),
                 c["file"], [c["line"], c["line"]] if c["line"] else [], language="typescript", heuristic=c["heuristic"])
 
-    def _refresh_cloud(self, sid):
-        """A cloud branch's view: the files and functions changed from its base commit to its
-        tip, read from the shadow repository. Nothing is read while neither moved."""
+    def _refresh_branch(self, sid):
+        """A branch's view (``branch_view``), read from the shadow repository. Nothing is read
+        while neither its tip nor its base moved."""
         session, old = self.sessions[sid], self.views[sid]
-        git_dir, tip = self.cloud[sid]
+        git_dir, tip = self.branches[sid]
         base = session["base_commit"]
         if old.tip == tip and old.base == base and not old.error:
             return False
-        new = SessionView(sid, old.repo_key, "", base, git_dir=git_dir, tip=tip)
-        try:
-            new.files = git_changes.commit_diff(git_dir, base, tip)
-            python = {p: s for p, s in new.files.items() if p.endswith(PYTHON)}
-            base_pf, head, new.head_blobs, unread = self._parses(git_dir, base, python, at=tip)
-            new.head, new.not_compared = known(base_pf, head, unread, old.head)
-            new.symbols = analyse(base_pf, new.head)
-        except (gitio.GitError, gitio.UntrustedRepositoryError, RuntimeError) as exc:
-            new.error = str(exc)[:300]
-            self.log.warning("cloud branch %s: not read: %s", session.get("branch", sid), exc)
+        new = branch_view(git_dir, old.repo_key, sid, base, tip, before=old, cache=self.cache,
+                          base_blobs=self._base_blobs)
+        if new.error:
+            self.log.warning("cloud branch %s: not read: %s", session.get("branch", sid), new.error)
         self.views[sid] = new
         return new.key() != old.key() or new.error != old.error
 
     def _parses(self, top, base, python, at=None):
-        """({path: base ParsedFile or None}, {path: head ParsedFile or None}, {path: head blob id},
-        {path: why its head is not known}) for the changed .py files: the head as it is on disk in
-        `top`, or (with `at`) as it is at that commit of the repository `top`."""
-        head, head_blobs, unread = (self._heads_at(top, at, python) if at is not None
-                                    else self._heads_on_disk(top, python))
-        wanted = [p for p, s in python.items() if s != "A" and (base, p) not in self._base_blobs]
-        if wanted:
-            found = git_changes.blob_ids(top, base, wanted)
-            for p in wanted:
-                self._base_blobs[(base, p)] = found.get(p)
-        blobs = {p: self._base_blobs.get((base, p)) for p, s in python.items() if s != "A"}
-        missing = sorted({b for p, b in blobs.items() if b and not self.cache.known(p, b)})
-        data = read_blobs(top, missing) if missing else {}
-        base_pf = {}
-        for path in python:
-            blob = blobs.get(path)
-            if not blob:
-                base_pf[path] = None
-            elif blob in data:
-                base_pf[path] = self.cache.get(path, data[blob], blob) if len(data[blob]) <= MAX_BLOB_BYTES else None
-            else:
-                base_pf[path] = self.cache.get(path, b"", blob)        # a cached parse: the key is all it needs
-        return base_pf, head, head_blobs, unread
-
-    def _heads_on_disk(self, top, python):
-        head, head_blobs, unread = {}, {}, {}
-        for path, status in python.items():
-            head[path] = head_blobs[path] = None
-            if status == "D":
-                continue
-            try:
-                with open(os.path.join(top, *path.split("/")), "rb") as fh:
-                    data = fh.read(MAX_BLOB_BYTES + 1)
-            except OSError:
-                unread[path] = NOT_READ
-                continue
-            if len(data) <= MAX_BLOB_BYTES:
-                head_blobs[path] = blob_id(data)
-                head[path] = self.cache.get(path, data, head_blobs[path])
-            else:
-                unread[path] = TOO_LARGE
-        return head, head_blobs, unread
-
-    def _heads_at(self, top, commit, python):
-        head_blobs, unread = {p: None for p in python}, {}
-        head_blobs.update(git_changes.blob_ids(top, commit, [p for p, s in python.items() if s != "D"]))
-        missing = sorted({b for p, b in head_blobs.items() if b and not self.cache.known(p, b)})
-        data = read_blobs(top, missing) if missing else {}
-        head = {}
-        for path, blob in head_blobs.items():
-            if blob in data and len(data[blob]) > MAX_BLOB_BYTES:
-                blob = head_blobs[path] = None
-                unread[path] = TOO_LARGE
-            head[path] = self.cache.get(path, data.get(blob, b""), blob) if blob else None
-        return head, head_blobs, unread
+        return _parses(self.cache, self._base_blobs, top, base, python, at)
 
     # code graphs
     def graph(self, sid):

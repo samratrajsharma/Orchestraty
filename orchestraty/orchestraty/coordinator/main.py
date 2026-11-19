@@ -473,7 +473,7 @@ class Coordinator:
                 self.cloud.fetched.discard(key)
                 self.livemap.indexes.forget_failures(key)
                 for sid in mine:
-                    self.livemap.reread_cloud(sid)
+                    self.livemap.reread_branch(sid)
             branches = None
             broken = shadow.broken() or any(remote.broken_error(self.livemap.views[sid].error)
                                             for sid in mine if sid in self.livemap.views)
@@ -525,9 +525,9 @@ class Coordinator:
                 if view is None or view.base != b["base"]:
                     self.livemap.forget(sid)
                     self._dirty_repos.add(session["repo_id"])
-                    self.livemap.track_cloud(session, key, remote.Shadow(self.state, common_dir).path, b["tip"])
-                elif self.livemap.cloud[sid][1] != b["tip"]:
-                    self.livemap.move_cloud(sid, b["tip"])
+                    self.livemap.track_branch(session, key, remote.Shadow(self.state, common_dir).path, b["tip"])
+                elif self.livemap.branches[sid][1] != b["tip"]:
+                    self.livemap.move_branch(sid, b["tip"])
             for sid, s in mine.items():
                 if sid not in seen and sid in self.sessions and s["state"] == "live":
                     self._end(s, "the branch is gone")
