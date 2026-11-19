@@ -101,9 +101,18 @@ def play(event="PostToolUse", **fields):
 # --------------------------------------------------------------------------------------- #
 # The files
 # --------------------------------------------------------------------------------------- #
+def pep440(semver):
+    """A manifest's semver version as Python writes the same version: 0.2.0-dev.0 is 0.2.0.dev0,
+    0.2.0-a.1 is 0.2.0a1."""
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)-(dev|a|b|rc)\.(\d+)", semver)
+    if not match:
+        return semver
+    return match.group(1) + ("." if match.group(2) == "dev" else "") + match.group(2) + match.group(3)
+
+
 def test_the_plugin_files_are_valid_json_with_the_expected_keys():
     manifest = load("plugins/claude-code/.claude-plugin/plugin.json")
-    assert manifest["name"] == plugin.NAME == "orchestraty" and manifest["version"] == __version__
+    assert manifest["name"] == plugin.NAME == "orchestraty" and pep440(manifest["version"]) == __version__
     assert manifest["description"] and manifest["author"]["name"]
     hooks_file = load("plugins/claude-code/hooks/hooks.json")
     assert set(hooks_file) == {"description", "modules", "hooks"}

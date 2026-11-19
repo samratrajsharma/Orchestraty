@@ -16,6 +16,7 @@ plugin's other files (``.mcp.json``, the skill) are written by hand. Standard li
 import argparse
 import json
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -39,13 +40,20 @@ def _json(value):
     return json.dumps(value, indent=2) + "\n"
 
 
+def semver(version):
+    """The package's version as a plugin manifest writes it (semver): 0.2.0.dev0 is 0.2.0-dev.0,
+    0.2.0a1 is 0.2.0-a.1; a release such as 0.1.1 is the same in both."""
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)\.?(dev|a|b|rc)(\d+)", version)
+    return f"{match.group(1)}-{match.group(2)}.{match.group(3)}" if match else version
+
+
 def built():
     """{path under the plugin folder: its text}."""
     version, plugin = _package()
     with open(os.path.join(MOD, "hooks", "hooks.json"), "r", encoding="utf-8") as fh:
         modules = json.load(fh)["modules"]
     files = {"hooks/hooks.json": _json(plugin.hooks_file(modules)),
-             ".claude-plugin/plugin.json": _json({"name": plugin.NAME, "version": version,
+             ".claude-plugin/plugin.json": _json({"name": plugin.NAME, "version": semver(version),
                                                   "description": DESCRIPTION, "author": {"name": "Orchestraty"}})}
     for module in modules:
         with open(os.path.join(MOD, "hooks", module), "r", encoding="utf-8", newline="") as fh:
