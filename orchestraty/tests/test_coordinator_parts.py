@@ -171,7 +171,7 @@ def test_the_record_keeps_which_files_were_not_compared(tmp_path):
 def test_the_record_is_created_with_its_schema_and_reopens(tmp_path):
     path = str(tmp_path / "r" / "record.sqlite")
     rec = Record(path)
-    assert rec.meta_get("schema") == str(SCHEMA) == "5"
+    assert rec.meta_get("schema") == str(SCHEMA) == "6"
     assert rec.db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert all(rec.has_table(t) for t in ("labels", "missed", "declarations", "changes", "claims",
                                          "session_not_compared"))
@@ -261,7 +261,7 @@ def test_a_record_from_before_claims_keeps_what_it_has_and_takes_claims(tmp_path
     assert reader.claims() == [] and reader.claim(1) is None    # a reader copes with no claims table
     reader.close()
     rec = Record(str(path))
-    assert rec.meta_get("schema") == "5" and len(rec.declarations()) == 1 and len(rec.change_log()) == 8
+    assert rec.meta_get("schema") == "6" and len(rec.declarations()) == 1 and len(rec.change_log()) == 8
     with rec.transaction():
         first = rec.add_claim(1, "A", "symbol", "a.py::charge", "a.py", True, 300, 400)
         second = rec.add_claim(1, "B", "area", "billing", "", False, 310, 900)

@@ -11,7 +11,7 @@ orch events --follow --since 10m    # the last ten minutes, then the new ones, a
 
 `--since` takes an ISO 8601 time (`2026-10-22T09:30:00Z` in UTC, or without `Z` in local time, or just a date), seconds since the epoch, or a time ago: `30s`, `10m`, `2h`, `1d`. Without `--json`, each event is one line of text: its local time, its kind and what it is about. The JSON is ASCII: other characters are written as `\uXXXX` escapes, so it reads the same whatever encoding a reader assumes.
 
-The record's own write methods log each change as it happens (record schema 3; claims from schema 4), so the stream is in the order the record learned of the changes. A record brought up from an older schema logged the history it already had, in time order, when it was upgraded; withdrawals from before then had no time and are not in it.
+The record's own write methods log each change as it happens (record schema 3; claims from schema 4; teammates' records from schema 6), so the stream is in the order the record learned of the changes. A record brought up from an older schema logged the history it already had, in time order, when it was upgraded; withdrawals from before then had no time and are not in it.
 
 ## Schema 1
 
@@ -42,5 +42,10 @@ What each kind adds. The session, finding or note is described as the record has
 | `declared` | When the agent declared | `paths`, `symbols`, `until`, as in [declared](status-json.md#declared) |
 | `claimed` | When the claim was made | `claim` (its number); `claim_kind`, `target`, `file`, `hard`, `until`, as `kind`, `target`, `file`, `hard` and `until` in [claims](status-json.md#claims) |
 | `claim_ended` | When it was released, expired or its session ended | as `claimed`; `ended`: why, `released`, `expired` or `session ended` |
+| `team_sent` | When this machine sent its record of a repository to teammates | `team_sent` (its number); `remote`, `store` (`ref`: its own ref on the remote, or `branch`: the records branch), `seq` (the record's sequence number), `result` (`pushed`, `unchanged`, or why not, as `stale: ...`, `refused: ...`, `failed: ...` or `held: ...`), `sessions` and `withheld` (how many sessions it holds, and how many values were held back from it) |
+| `team_withheld` | When a value was held back from a record before it was sent | `withheld` (its number); `field` (which field of the record) and `rule` (what caught it). Never the value. |
+| `team_dropped` | When a teammate's record was read and not admitted | `remote`, `person`, `device` (whose record); `why`: the reason, while that writer's record is still not admitted |
+
+The last three come with teammates' records (record schema 6). Nothing in this version logs them yet: they are there for the team sync that sends and reads those records.
 
 A note's text is never part of an event, and neither is a declaration's task line.

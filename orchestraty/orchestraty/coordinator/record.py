@@ -14,6 +14,14 @@ too: the record's own write methods log each session started or ended, finding o
 resolved, note written, delivered or withdrawn, declaration made and claim made or ended, in the
 order they happen (``orch events`` reads it).
 
+Schema 6 adds the tables for teammates' work, read through git: ``team_sessions`` (each
+teammate's branch followed as a session of agent ``team``), ``team_writers`` (each teammate's
+record as last read, and whether it was admitted), ``team_sent`` (each record this machine sent),
+``team_withheld`` (what was held back from it, by field and rule, with a fingerprint and never the
+value), ``team_confirmed`` (the tickets and task lines their author confirmed) and
+``team_planned`` (teammates' claims, which only inform). The change log gains ``team_sent``,
+``team_withheld`` and ``team_dropped``.
+
 A record of an older schema is brought up to date when the coordinator opens it, one step at a
 time (``_MIGRATIONS``); readers never change it, so they cope with tables that are not there yet.
 """
@@ -23,7 +31,7 @@ import sqlite3
 import time
 from contextlib import contextmanager
 
-SCHEMA = 5
+SCHEMA = 6
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -166,11 +174,67 @@ _MIGRATIONS = {
                path TEXT NOT NULL,
                why TEXT NOT NULL,
                PRIMARY KEY (session_id, path))""",),
+    6: ("""CREATE TABLE IF NOT EXISTS team_sessions (
+               session_id TEXT PRIMARY KEY,
+               repo_id INTEGER NOT NULL,
+               remote TEXT NOT NULL,
+               branch TEXT NOT NULL,
+               people TEXT NOT NULL,
+               own INTEGER NOT NULL DEFAULT 0,
+               writers TEXT NOT NULL,
+               evidence TEXT NOT NULL,
+               tip TEXT NOT NULL DEFAULT '',
+               tip_time INTEGER NOT NULL DEFAULT 0,
+               as_of INTEGER NOT NULL DEFAULT 0,
+               agents TEXT NOT NULL DEFAULT '[]',
+               task TEXT NOT NULL DEFAULT '',
+               merged TEXT NOT NULL DEFAULT '',
+               contained_in TEXT NOT NULL DEFAULT '[]',
+               builds_on TEXT NOT NULL DEFAULT '[]')""",
+        """CREATE TABLE IF NOT EXISTS team_writers (
+               repo_id INTEGER NOT NULL, remote TEXT NOT NULL, person TEXT NOT NULL, device TEXT NOT NULL,
+               store TEXT NOT NULL,
+               commit_id TEXT NOT NULL,
+               seq INTEGER NOT NULL,
+               written INTEGER NOT NULL,
+               read INTEGER NOT NULL,
+               verdict TEXT NOT NULL,
+               why TEXT NOT NULL DEFAULT '',
+               entries TEXT NOT NULL DEFAULT '[]',
+               PRIMARY KEY (repo_id, remote, person, device))""",
+        """CREATE TABLE IF NOT EXISTS team_sent (
+               id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, remote TEXT NOT NULL, store TEXT NOT NULL,
+               ts INTEGER NOT NULL, seq INTEGER NOT NULL, commit_id TEXT NOT NULL, bytes INTEGER NOT NULL,
+               sessions INTEGER NOT NULL,
+               result TEXT NOT NULL,
+               withheld INTEGER NOT NULL DEFAULT 0)""",
+        "CREATE INDEX IF NOT EXISTS team_sent_by_repo ON team_sent (repo_id, ts)",
+        """CREATE TABLE IF NOT EXISTS team_withheld (
+               id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, ts INTEGER NOT NULL,
+               field TEXT NOT NULL, rule TEXT NOT NULL,
+               fingerprint TEXT NOT NULL)""",
+        "CREATE INDEX IF NOT EXISTS team_withheld_by_repo ON team_withheld (repo_id, ts)",
+        """CREATE TABLE IF NOT EXISTS team_confirmed (
+               session_id TEXT PRIMARY KEY,
+               ticket TEXT NOT NULL DEFAULT '', line TEXT NOT NULL DEFAULT '', ts INTEGER NOT NULL)""",
+        """CREATE TABLE IF NOT EXISTS team_planned (
+               id INTEGER PRIMARY KEY, session_id TEXT NOT NULL,
+               kind TEXT NOT NULL, target TEXT NOT NULL, file TEXT NOT NULL DEFAULT '',
+               hard INTEGER NOT NULL DEFAULT 0,
+               since INTEGER NOT NULL, until INTEGER NOT NULL,
+               note_key TEXT NOT NULL)""",
+        "CREATE INDEX IF NOT EXISTS team_planned_by_session ON team_planned (session_id, until)"),
 }
 
 EVENT_COLUMNS = ("ts", "agent", "event", "session_id", "tool_name", "tool_use_id", "cwd", "file_path")
 SESSION_COLUMNS = ("id", "agent", "repo_id", "cwd", "worktree", "branch", "base_commit", "base_guessed",
                    "started", "last_seen", "state", "turn", "note")
+TEAM_SESSION_COLUMNS = ("session_id", "repo_id", "remote", "branch", "people", "own", "writers", "evidence", "tip",
+                        "tip_time", "as_of", "agents", "task", "merged", "contained_in", "builds_on")
+TEAM_SESSION_LISTS = ("people", "writers", "agents", "contained_in", "builds_on")       # kept as JSON
+TEAM_WRITER_COLUMNS = ("repo_id", "remote", "person", "device", "store", "commit_id", "seq", "written", "read",
+                       "verdict", "why", "entries")
+TEAM_PLANNED_COLUMNS = ("kind", "target", "file", "hard", "since", "until", "note_key")
 
 
 class SchemaError(Exception):
@@ -194,6 +258,14 @@ def _finding_row(row):
     d = dict(row)
     d["sessions"] = json.loads(d["sessions"])
     d["detail"] = json.loads(d["detail"])
+    return d
+
+
+def _team_session_row(row):
+    d = dict(row)
+    for c in TEAM_SESSION_LISTS:
+        d[c] = json.loads(d[c])
+    d["task"] = json.loads(d["task"]) if d["task"] else ""
     return d
 
 
@@ -601,6 +673,152 @@ class Record:
         if where:
             sql += " WHERE " + " AND ".join(where)
         return [dict(r) for r in self.db.execute(sql + " ORDER BY ts, id", args)]
+
+    # teammates' work, read through git (schema 6)
+    def put_team_session(self, row):
+        """Keep what is known of one teammate's branch, followed as a session of agent ``team``."""
+        values = []
+        for c in TEAM_SESSION_COLUMNS:
+            v = row.get(c)
+            if c in TEAM_SESSION_LISTS:
+                v = json.dumps(list(v or []))
+            elif c == "task":
+                v = json.dumps(v, sort_keys=True) if v else ""
+            values.append(v)
+        self.db.execute("INSERT OR REPLACE INTO team_sessions (%s) VALUES (%s)" % (
+            ", ".join(TEAM_SESSION_COLUMNS), ", ".join("?" * len(TEAM_SESSION_COLUMNS))), values)
+
+    def team_session(self, sid):
+        """One teammate's branch by its session id, or None (also before schema 6)."""
+        if not self.has_table("team_sessions"):
+            return None
+        row = self.db.execute("SELECT * FROM team_sessions WHERE session_id = ?", (sid,)).fetchone()
+        return _team_session_row(row) if row else None
+
+    def team_sessions(self, repo_id=None):
+        """Teammates' branches, of one repository or all; [] before schema 6."""
+        if not self.has_table("team_sessions"):
+            return []
+        sql, args = "SELECT * FROM team_sessions", []
+        if repo_id is not None:
+            sql, args = sql + " WHERE repo_id = ?", [repo_id]
+        return [_team_session_row(r) for r in self.db.execute(sql + " ORDER BY session_id", args)]
+
+    def put_team_writer(self, w):
+        """Keep one teammate's record as last read. A record dropped at a commit not seen
+        dropped before is logged (team_dropped), so a drop is told once, not on every read."""
+        key = (w["repo_id"], w["remote"], w["person"], w["device"])
+        before = self.db.execute("SELECT verdict, commit_id FROM team_writers WHERE repo_id = ? AND remote = ? "
+                                 "AND person = ? AND device = ?", key).fetchone()
+        values = [json.dumps(list(w.get("entries") or [])) if c == "entries" else w.get(c, "" if c == "why" else None)
+                  for c in TEAM_WRITER_COLUMNS]
+        # An upsert, not a replace: the row keeps its rowid, which the change log refers to.
+        self.db.execute("INSERT INTO team_writers (%s) VALUES (%s) ON CONFLICT (repo_id, remote, person, device) "
+                        "DO UPDATE SET %s" % (", ".join(TEAM_WRITER_COLUMNS), ", ".join("?" * len(TEAM_WRITER_COLUMNS)),
+                                              ", ".join(f"{c} = excluded.{c}" for c in TEAM_WRITER_COLUMNS[4:])),
+                        values)
+        if w["verdict"] == "dropped" and (before is None or before["verdict"] != "dropped"
+                                          or before["commit_id"] != w["commit_id"]):
+            rowid = self.db.execute("SELECT rowid FROM team_writers WHERE repo_id = ? AND remote = ? AND person = ? "
+                                    "AND device = ?", key).fetchone()[0]
+            self._log(w["read"], "team_dropped", ref=rowid)
+
+    def team_writers(self, repo_id):
+        """Every teammate's record of one repository as last read; [] before schema 6."""
+        if not self.has_table("team_writers"):
+            return []
+        out = []
+        for r in self.db.execute("SELECT * FROM team_writers WHERE repo_id = ? ORDER BY remote, person, device",
+                                 (repo_id,)):
+            d = dict(r)
+            d["entries"] = json.loads(d["entries"])
+            out.append(d)
+        return out
+
+    def team_writer_row(self, rowid):
+        """The team_writers row a team_dropped change refers to, or None."""
+        if not self.has_table("team_writers"):
+            return None
+        row = self.db.execute("SELECT * FROM team_writers WHERE rowid = ?", (rowid,)).fetchone()
+        return dict(row) if row else None
+
+    def add_team_sent(self, repo_id, remote, store, ts, seq, commit_id, size, sessions, result, withheld=0):
+        """Keep the outcome of sending this machine's record once; returns its id."""
+        cur = self.db.execute("INSERT INTO team_sent (repo_id, remote, store, ts, seq, commit_id, bytes, sessions, "
+                              "result, withheld) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                              (repo_id, remote, store, ts, seq, commit_id, size, sessions, result, withheld))
+        self._log(ts, "team_sent", ref=cur.lastrowid)
+        return cur.lastrowid
+
+    def team_sent(self, repo_id, limit=20):
+        """The last `limit` records this machine sent for a repository, the latest first; [] before schema 6."""
+        if not self.has_table("team_sent"):
+            return []
+        return [dict(r) for r in self.db.execute("SELECT * FROM team_sent WHERE repo_id = ? ORDER BY ts DESC, id DESC "
+                                                 "LIMIT ?", (repo_id, int(limit)))]
+
+    def team_sent_row(self, sent_id):
+        if not self.has_table("team_sent"):
+            return None
+        row = self.db.execute("SELECT * FROM team_sent WHERE id = ?", (sent_id,)).fetchone()
+        return dict(row) if row else None
+
+    def add_withheld(self, repo_id, ts, field, rule, fingerprint):
+        """Keep that a value was held back from a record: its field, the rule that caught it and
+        a fingerprint (never the value). Returns its id."""
+        cur = self.db.execute("INSERT INTO team_withheld (repo_id, ts, field, rule, fingerprint) VALUES (?, ?, ?, ?, ?)",
+                              (repo_id, ts, field, rule, fingerprint))
+        self._log(ts, "team_withheld", ref=cur.lastrowid)
+        return cur.lastrowid
+
+    def withheld(self, repo_id, since):
+        """What was held back from a repository's records from `since` on, oldest first; [] before schema 6."""
+        if not self.has_table("team_withheld"):
+            return []
+        return [dict(r) for r in self.db.execute("SELECT * FROM team_withheld WHERE repo_id = ? AND ts >= ? "
+                                                 "ORDER BY ts, id", (repo_id, since))]
+
+    def withheld_row(self, withheld_id):
+        if not self.has_table("team_withheld"):
+            return None
+        row = self.db.execute("SELECT * FROM team_withheld WHERE id = ?", (withheld_id,)).fetchone()
+        return dict(row) if row else None
+
+    def put_confirmed(self, session_id, ticket, line, ts):
+        """The ticket and task line a local session's author confirmed for sharing (their latest word)."""
+        self.db.execute("INSERT OR REPLACE INTO team_confirmed (session_id, ticket, line, ts) VALUES (?, ?, ?, ?)",
+                        (session_id, ticket, line, ts))
+
+    def confirmed(self, session_id):
+        if not self.has_table("team_confirmed"):
+            return None
+        row = self.db.execute("SELECT * FROM team_confirmed WHERE session_id = ?", (session_id,)).fetchone()
+        return dict(row) if row else None
+
+    def put_team_planned(self, sid, items):
+        """Replace a teammate's session's claims as a whole with `items`
+        ({kind, target, file, hard, since, until, note_key})."""
+        self.db.execute("DELETE FROM team_planned WHERE session_id = ?", (sid,))
+        self.db.executemany("INSERT INTO team_planned (session_id, %s) VALUES (?, %s)" % (
+            ", ".join(TEAM_PLANNED_COLUMNS), ", ".join("?" * len(TEAM_PLANNED_COLUMNS))),
+            [[sid] + [int(bool(i["hard"])) if c == "hard" else i.get(c, "") for c in TEAM_PLANNED_COLUMNS]
+             for i in items])
+
+    def team_planned(self, active_at=None, session_id=None):
+        """Teammates' claims, in the order they were put; with active_at (ns), only those that hold
+        then (since <= active_at < until). [] before schema 6."""
+        if not self.has_table("team_planned"):
+            return []
+        sql, args, where = "SELECT * FROM team_planned", [], []
+        if active_at is not None:
+            where.append("since <= ? AND until > ?")
+            args += [active_at, active_at]
+        if session_id is not None:
+            where.append("session_id = ?")
+            args.append(session_id)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        return [dict(r) for r in self.db.execute(sql + " ORDER BY id", args)]
 
     # the change log (schema 3)
     def _log(self, ts, kind, session_id="", finding_key="", ref=None):

@@ -8,6 +8,11 @@ when it is read. ``--follow`` polls the record about once a second for new chang
 server and no socket. Without ``--follow`` (or with ``--once``) it prints the changes there are
 and ends.
 
+From record schema 6 the log also says what happened to teammates' records: a record this
+machine sent (``team_sent``), a value held back from one (``team_withheld``: its field and the
+rule that caught it, never the value) and a teammate's record that was not admitted
+(``team_dropped``: whose, and why).
+
 ``--json`` prints one JSON object per line, with ``schema``: fields are only added within a
 schema number. The text of a note and a declaration's task line are never part of an event.
 """
@@ -25,6 +30,7 @@ EVENTS_SCHEMA = 1
 NS = 1_000_000_000
 KINDS = ("session_started", "session_ended", "finding_opened", "finding_resolved", "note_written",
          "note_delivered", "note_withdrawn", "declared", "claimed", "claim_ended")
+TEAM_KINDS = ("team_sent", "team_withheld", "team_dropped")        # record schema 6: teammates' records
 _DURATION = re.compile(r"^(\d+)([smhd])$")
 _UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
@@ -97,6 +103,23 @@ def event(record, change, declared=None):
                        until=_iso(c["expires"]))
             if kind == "claim_ended" and c["ended"] is not None:
                 out["ended"] = c["why"]                  # released, expired or session ended
+    elif kind == "team_sent":
+        r = record.team_sent_row(change["ref"]) if change["ref"] is not None else None
+        out["team_sent"] = change["ref"]
+        if r:
+            out.update(remote=r["remote"], store=r["store"], seq=r["seq"], result=r["result"], sessions=r["sessions"],
+                       withheld=r["withheld"])
+    elif kind == "team_withheld":
+        r = record.withheld_row(change["ref"]) if change["ref"] is not None else None
+        out["withheld"] = change["ref"]
+        if r:
+            out.update(field=r["field"], rule=r["rule"])
+    elif kind == "team_dropped":
+        r = record.team_writer_row(change["ref"]) if change["ref"] is not None else None
+        if r:
+            out.update(remote=r["remote"], person=r["person"], device=r["device"])
+            if r["verdict"] == "dropped":
+                out["why"] = r["why"]                    # while that writer's record is still not admitted
     return out
 
 
@@ -138,6 +161,14 @@ def render(e):
         if "target" in e:
             what += f" {_claimed(e)}" + (", hard" if e["hard"] else "")
             what += f" ({e['ended']})" if e.get("ended") else f" until {_local(e['until'], '%H:%M')}"
+    elif e["event"] == "team_sent":
+        what = f"#{e['team_sent']} to {e.get('remote', '?')}: {e.get('result', '?')}"
+        what += f", {e['sessions']} session(s)" if "sessions" in e else ""
+        what += f", {e['withheld']} withheld" if e.get("withheld") else ""
+    elif e["event"] == "team_withheld":
+        what = f"#{e['withheld']} {e.get('field', '?')} ({e.get('rule', '?')})"
+    elif e["event"] == "team_dropped":
+        what = f"{e.get('person', '?')} on {e.get('device', '?')}: {e.get('why') or 'dropped'}"
     else:
         names = f" ({', '.join(x.split('::')[-1] for x in e['symbols'])})" if e.get("symbols") else ""
         until = f" until {_local(e['until'], '%H:%M')}" if e.get("until") else ""
