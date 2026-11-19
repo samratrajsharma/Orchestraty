@@ -21,6 +21,10 @@ status``: when, whether it worked, and why not. A failure doubles the wait befor
 automatic try, up to an hour. If the user's garbage collection removes an object the shadow
 relied on (an object it found in the user's store at fetch time), reading the shadow fails; the
 shadow is then marked broken and fetched afresh.
+
+The shadow can also fetch any list of refspecs (given to git on stdin), push one ref to a remote
+with a lease, and prune its own objects. Team sync, in later versions, is built on these; for now
+nothing calls them. A push, like a fetch, never prompts: it fails instead.
 """
 import hashlib
 import json
@@ -28,6 +32,7 @@ import os
 import re
 import subprocess
 import time
+from collections import namedtuple
 
 from orch_engine.ingest import git_command
 
@@ -40,6 +45,9 @@ DEFAULT_REMOTE = "origin"
 DEFAULT_PATTERNS = ("claude/*", "codex/*", "copilot/*")
 REF_ROOT = "refs/orch"
 FETCH_TIMEOUT = 120              # seconds one fetch may take
+PUSH_TIMEOUT = 60                # seconds one push may take
+PRUNE_TIMEOUT = 600              # seconds pruning the shadow's objects may take
+PUSHED = ("new", "fast-forward", "forced", "up to date")        # PushResult kinds where the remote has our tip
 MAX_BACKOFF_SECONDS = 3600
 PROTOCOLS = "file:git:http:https:ssh"
 _BROKEN = re.compile(r"could not read|bad object|missing (?:blob|tree|commit)|unable to read|not a valid object|"
@@ -48,6 +56,37 @@ _USERINFO = re.compile(r"(?<=://)[^/@\s]+@")
 _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 _DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+class PushResult(namedtuple("PushResult", "kind detail")):
+    """What a push of one ref came to: `kind` is new, fast-forward, forced, up to date (the
+    remote has our tip), stale (the remote's ref was not what we expected), refused (the
+    remote said no: a hidden ref, a hook), deleted or failed (no answer about the ref: the
+    network, a credential, a timeout). `detail` is git's reason, with no user name or token."""
+
+    @property
+    def ok(self):
+        return self.kind in PUSHED
+
+
+_PUSH_FLAGS = {"*": "new", " ": "fast-forward", "+": "forced", "=": "up to date", "-": "deleted"}
+
+
+def parse_push(returncode, stdout, stderr, dst):
+    """The PushResult for the ref `dst` from what ``git push --porcelain`` printed."""
+    for line in stdout.splitlines():
+        flag, _, rest = line.partition("\t")
+        refs, _, summary = rest.partition("\t")
+        if len(flag) != 1 or refs.rpartition(":")[2] != dst:
+            continue
+        reason = summary[summary.rfind("(") + 1:-1] if summary.endswith(")") else ""
+        if flag in _PUSH_FLAGS:
+            return PushResult(_PUSH_FLAGS[flag], "" if flag != "-" else reason)
+        if flag == "!":
+            return PushResult("stale" if reason == "stale info" else "refused", reason or summary.strip("[]"))
+    if returncode == 0:
+        return PushResult("failed", "git said nothing about " + dst)
+    return PushResult("failed", _clean_error(stderr) if stderr.strip() else f"git exited with {returncode}")
 
 
 class RemoteError(Exception):
@@ -136,6 +175,28 @@ def remote_url(common_dir, name):
         url = gitio.run(["ls-remote", "--get-url", name], common_dir).strip() or urls[0].strip()
     except gitio.GitError:
         url = urls[0].strip()
+    return _absolute(url, common_dir, name)
+
+
+def push_url(common_dir, name):
+    """The URL the user's own ``git push`` sends `name` to: its pushurl if it has one, with the
+    pushInsteadOf and insteadOf rules applied, as an absolute path for a local remote. Raises
+    RemoteError when there is no such remote."""
+    try:
+        urls = gitio.run(["config", "--get-all", f"remote.{name}.url"], common_dir).splitlines()
+    except gitio.GitError:
+        urls = []
+    if not urls or not urls[0].strip():
+        raise RemoteError(f"the repository has no remote named {name}")
+    try:
+        url = gitio.run(["remote", "get-url", "--push", name], common_dir).splitlines()[0].strip()
+    except (gitio.GitError, IndexError):
+        url = urls[0].strip()
+    return _absolute(url, common_dir, name)
+
+
+def _absolute(url, common_dir, name):
+    """A remote's URL, a relative local path made absolute from the main worktree."""
     if url.startswith("-"):
         raise RemoteError(f"the URL of {name} starts with '-'")
     first = url.replace("\\", "/").split("/", 1)[0]
@@ -214,22 +275,35 @@ class Shadow:
             self.mark_broken()
             self._fetch(url, remote, patterns, ssh_configured, timeout)
 
-    def _fetch(self, url, remote, patterns, ssh_configured, timeout):
+    def ensure(self):
+        """The shadow, ready to fetch into: made afresh when it is missing or marked broken."""
         if not self.exists() or self.broken():
             self.create()
             try:
                 os.remove(self.broken_path)
             except FileNotFoundError:
                 pass
-        refspecs = [f"+HEAD:{REF_ROOT}/{remote}/HEAD"] + [f"+refs/heads/{p}:{REF_ROOT}/{remote}/{p}" for p in patterns]
-        argv = ["git", "-c", "log.showSignature=false", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true",
+
+    def _options(self):
+        """git's options for a command that talks to a remote: no hooks, no askpass program, no
+        credential prompt, and a transfer that stalls is given up."""
+        return ["-c", "log.showSignature=false", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true",
                 "-c", "core.hooksPath=" + os.path.join(self.path, "no-hooks"), "-c", "core.askPass=",
-                "-c", "credential.interactive=never", "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30",
-                "fetch", "--no-tags", "--prune", "--no-recurse-submodules", "--quiet", url] + refspecs
+                "-c", "credential.interactive=never", "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30"]
+
+    def _fetch(self, url, remote, patterns, ssh_configured, timeout):
+        self.ensure()
+        refspecs = [f"+HEAD:{REF_ROOT}/{remote}/HEAD"] + [f"+refs/heads/{p}:{REF_ROOT}/{remote}/{p}" for p in patterns]
+        argv = ["git"] + self._options() + ["fetch", "--no-tags", "--prune", "--no-recurse-submodules", "--quiet",
+                                            url] + refspecs
+        self._run_fetch(argv, None, ssh_configured, timeout, remote)
+
+    def _run_fetch(self, argv, stdin_text, ssh_configured, timeout, remote):
+        """Run a fetch; raises RemoteError with git's reason, or ShadowBroken."""
+        extra = {"stdin": subprocess.DEVNULL} if stdin_text is None else {"input": stdin_text.encode("utf-8")}
         try:
             proc = subprocess.run(argv, cwd=self.path, env=fetch_env(ssh_configured=ssh_configured),
-                                  stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout,
-                                  creationflags=_NO_WINDOW)
+                                  capture_output=True, timeout=timeout, creationflags=_NO_WINDOW, **extra)
         except subprocess.TimeoutExpired:
             raise RemoteError(f"no answer from {remote} within {timeout} seconds") from None
         except OSError as exc:
@@ -240,15 +314,56 @@ class Shadow:
                 raise ShadowBroken(_clean_error(err))
             raise RemoteError(_clean_error(err))
 
+    def fetch_refspecs(self, url, refspecs, timeout=FETCH_TIMEOUT, ssh_configured=False):
+        """Fetch `refspecs` from `url` in one connection, with the cloud fetch's options, the
+        refspecs given on stdin (so a long list never meets a command line's limit). A refspec
+        with a glob that matches nothing fetches nothing; one that names a missing ref exactly
+        fails the whole fetch. Pruning touches only these refspecs' destinations. Raises
+        RemoteError with git's reason, or ShadowBroken."""
+        self.ensure()
+        argv = ["git"] + self._options() + ["fetch", "--stdin", "--no-tags", "--prune", "--no-recurse-submodules",
+                                            "--quiet", url]
+        self._run_fetch(argv, "".join(r + "\n" for r in refspecs), ssh_configured, timeout, safe_url(url))
+
+    def push(self, url, src, dst, expected, timeout=PUSH_TIMEOUT, ssh_configured=False):
+        """Push `src` (a commit or a ref of the shadow) to the ref `dst` on `url`, only if the
+        remote's `dst` is still `expected` ("" for not there yet): a forced update with a
+        lease. It never prompts and runs no hook, follows no tag and pushes no submodule, whatever
+        the user's git config says. Returns a PushResult."""
+        argv = ["git"] + self._options() + ["-c", "push.gpgSign=false", "-c", "push.useForceIfIncludes=false",
+                                            "push", "--porcelain", "--no-verify", "--no-follow-tags",
+                                            "--no-recurse-submodules", f"--force-with-lease={dst}:{expected}", url,
+                                            f"{src}:{dst}"]
+        try:
+            proc = subprocess.run(argv, cwd=self.path, env=fetch_env(ssh_configured=ssh_configured),
+                                  stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout,
+                                  creationflags=_NO_WINDOW)
+        except subprocess.TimeoutExpired:
+            return PushResult("failed", f"no answer within {timeout} seconds")
+        except OSError as exc:
+            return PushResult("failed", f"git could not start: {type(exc).__name__}")
+        return parse_push(proc.returncode, proc.stdout.decode("utf-8", "replace"),
+                          proc.stderr.decode("utf-8", "replace"), dst)
+
+    def prune(self, timeout=PRUNE_TIMEOUT):
+        """Drop the shadow's own objects that no ref of it reaches any more (an older record, a
+        branch no longer followed). Only the shadow's object store is touched: what it reads from
+        the user's repository through objects/info/alternates is never copied, moved or removed.
+        Raises gitio.GitError, or ShadowBroken."""
+        for args in (["repack", "-a", "-d", "-l", "-q"], ["prune", "--expire=now"]):
+            rc, _ = self._git(args, timeout)
+            if rc != 0:
+                raise gitio.GitError(f"git {args[0]} failed in the shadow")
+
     # reading: local git only
-    def _git(self, args):
-        """(returncode, stdout) of a read-only git command in the shadow. Raises ShadowBroken
-        when git says an object is missing."""
+    def _git(self, args, timeout=None):
+        """(returncode, stdout) of a git command in the shadow that needs no network. Raises
+        ShadowBroken when git says an object is missing."""
         argv, env = git_command(args, self.path)
         env["GIT_OPTIONAL_LOCKS"] = "0"
         try:
             proc = subprocess.run(argv, cwd=self.path, env=env, stdin=subprocess.DEVNULL, capture_output=True,
-                                  timeout=gitio.TIMEOUT, creationflags=_NO_WINDOW)
+                                  timeout=timeout or gitio.TIMEOUT, creationflags=_NO_WINDOW)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise gitio.GitError(f"git {args[0]}: {type(exc).__name__}") from None
         err = proc.stderr.decode("utf-8", "replace")
