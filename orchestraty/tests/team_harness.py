@@ -33,9 +33,11 @@ IDENTITY = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_CO
             "GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE")
 BILLING = "def charge(amount, currency):\n    return amount\n"
 REFUNDS = "from pkg.billing import charge\n\n\ndef refund(amount):\n    return charge(-amount, 'EUR')\n"
-POLICY = "# What Orchestraty may share between the teammates of this repository.\nsync: on\nvisibility: private\n"
+POLICY = ("# What Orchestraty may share between the teammates of this repository.\n"
+          "version: 1\nsync: on\nvisibility: private\n")
 PEOPLE = ("# Who is who: each teammate's handle and the emails their commits carry.\n"
-          "people:\n  alice:\n    emails: [alice@example.com]\n  bob:\n    emails: [bob@example.com]\n")
+          "version: 1\npeople:\n  - handle: alice\n    emails: [alice@example.com]\n"
+          "  - handle: bob\n    emails: [bob@example.com]\n")
 
 
 class Clock:

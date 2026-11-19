@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from orchestraty.coordinator.record import Record
+from orchestraty.team import people, policy
 from team_harness import git_env, publish_raw, refusing_remote, run_git, team  # noqa: F401  (fixtures)
 
 
@@ -123,3 +124,10 @@ def test_two_coordinators_in_one_process_share_no_module_state(team):  # noqa: F
     leaked = sorted(f"{name}.{attr}" for (name, attr), text in after.items()
                     if any(m in text for m in machines) and not any(m in before.get((name, attr), "") for m in machines))
     assert leaked == []
+
+
+def test_the_seeded_policy_and_people_files_read(team):  # noqa: F811
+    force = policy.parse(run_git(team.remote, "show", "HEAD:.orchestraty/policy.yml"))
+    assert force.sync_on() and force.visibility == "private"
+    folks = people.People.parse(run_git(team.remote, "show", "HEAD:.orchestraty/people.yml"))
+    assert [p.handle for p in folks] == ["alice", "bob"] and folks.handle_for("Bob@example.com") == "bob"
