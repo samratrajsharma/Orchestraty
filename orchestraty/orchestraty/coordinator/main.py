@@ -46,7 +46,7 @@ from orchestraty.coordinator.lock import Heartbeat, Lock, touch
 from orchestraty.coordinator.record import Record, SchemaError, repo_key
 from orchestraty.coordinator.spool import SpoolReader
 from orchestraty.delivery import slots
-from orchestraty.delivery.deliver import Deliverer
+from orchestraty.delivery.deliver import TEAM_CLAIM, Deliverer
 from orchestraty.livemap import changes as git_changes
 from orchestraty.livemap import typescript
 from orchestraty.livemap.map import LiveMap
@@ -294,7 +294,10 @@ class Coordinator:
         self.new_findings = []
         if repos:
             with self.record.transaction():                 # a claim that ended takes back its notes
-                self.deliverer.withdraw_claims({c["id"] for c in self.record.claims(active_at=self.now_ns())})
+                now = self.now_ns()
+                self.deliverer.withdraw_claims({c["id"] for c in self.record.claims(active_at=now)},
+                                               {i["note_key"] for i in self.record.team_planned(active_at=now)
+                                                if i["session_id"] in self.sessions})
         for repo_id in sorted(repos):
             ids = sorted(sid for sid, s in self.sessions.items()
                          if s["repo_id"] == repo_id and s["state"] == "live" and sid in self.livemap.views)
@@ -334,6 +337,9 @@ class Coordinator:
                 changed = {sid: list(views[sid].files) for sid in ids}
                 for c in self.record.claims(active_at=now, repo_id=repo_id):
                     self.deliverer.add_claim(c, self.sessions, changed)
+                for sid in sorted(team_ids):                    # teammates' claims: they only inform
+                    for item in self.record.team_planned(active_at=now, session_id=sid):
+                        self.deliverer.add_team_claim(item, self.sessions, changed)
             self._together_jobs(repo_id, found)
             self._push_dirty = True
         return self.new_findings
@@ -1029,7 +1035,8 @@ class Coordinator:
         for c in expired:
             self._dirty_repos.add(c["repo_id"])
             self._status_dirty = True
-        for d in self.record.declarations_ended(now if self._last_expiry is None else self._last_expiry, now):
+        after = now if self._last_expiry is None else self._last_expiry
+        for d in self.record.declarations_ended(after, now) + self.record.team_planned_ended(after, now):
             if d["session_id"] in self.sessions:                         # it stopped holding: O7 again
                 self._dirty_repos.add(self.sessions[d["session_id"]]["repo_id"])
                 self._status_dirty = True
@@ -1084,7 +1091,8 @@ def _team_claims(sid, shared, now):
     for _, c in shared:
         digest = hashlib.sha1("\0".join((sid, c.kind, c.target, str(c.since))).encode("utf-8", "surrogateescape"))
         out.append({"kind": c.kind, "target": c.target, "file": c.file, "hard": c.hard,
-                    "since": min(c.since * NS, now), "until": c.until * NS, "note_key": "tclaim|" + digest.hexdigest()[:16]})
+                    "since": min(c.since * NS, now), "until": c.until * NS,
+                    "note_key": TEAM_CLAIM + digest.hexdigest()[:16]})
     return out
 
 

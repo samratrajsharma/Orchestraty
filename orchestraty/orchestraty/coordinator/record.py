@@ -820,6 +820,13 @@ class Record:
             sql += " WHERE " + " AND ".join(where)
         return [dict(r) for r in self.db.execute(sql + " ORDER BY id", args)]
 
+    def team_planned_ended(self, after, until):
+        """The teammates' claims whose time ran out after `after` and by `until` (ns)."""
+        if not self.has_table("team_planned"):
+            return []
+        return [dict(r) for r in self.db.execute("SELECT session_id, until FROM team_planned "
+                                                 "WHERE until > ? AND until <= ? ORDER BY until, id", (after, until))]
+
     # the change log (schema 3)
     def _log(self, ts, kind, session_id="", finding_key="", ref=None):
         self.db.execute("INSERT INTO changes (ts, kind, session_id, finding_key, ref) VALUES (?, ?, ?, ?, ?)",

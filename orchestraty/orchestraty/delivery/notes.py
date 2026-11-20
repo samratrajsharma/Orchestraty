@@ -461,12 +461,39 @@ def more_waiting(count):
     return _cap(f"{count} more note{'s' if count != 1 else ''} wait for a later step, and come with it.")
 
 
-def push_line(findings):
-    """The one line shown at push for the O6 findings still open in a worktree, or ""."""
-    if not findings:
+def push_line(findings, team_uses=()):
+    """The one line shown at push for the O6 findings still open in a worktree, and the uses of
+    its changes on teammates' branches (`team_uses`: [(O3 or O4 finding, the teammate's session)]),
+    or ""."""
+    if not findings and not team_uses:
         return ""
-    first = findings[0]
-    left = first["detail"].get("left", [])
-    more = f" and {len(findings) - 1} more change(s)" if len(findings) > 1 else ""
-    return (f"orchestraty: {len(left)} caller(s) of {_name(first['symbol'])} still use its old form "
-            f"({_list(left, lambda c: _name(c['symbol']))}){more}. Run: orch status")[:400]
+    line = "orchestraty: "
+    if findings:
+        first = findings[0]
+        left = first["detail"].get("left", [])
+        more = f" and {len(findings) - 1} more change(s)" if len(findings) > 1 else ""
+        line += (f"{len(left)} caller(s) of {_name(first['symbol'])} still use its old form "
+                 f"({_list(left, lambda c: _name(c['symbol']))}){more}")
+    if team_uses:
+        changed = list(dict.fromkeys(f["symbol"] for f, _ in team_uses))
+        what = _name(changed[0]) + (f" and {len(changed) - 1} more" if len(changed) > 1 else "")
+        verb = "is" if len(changed) == 1 else "are"
+        where = _used_on(list({t["id"]: t for _, t in team_uses}.values()))
+        if findings and changed == [findings[0]["symbol"]]:
+            line += f"; it is also used on {where}"
+        elif findings:
+            line += f"; {what}, which this branch changed, {verb} also used on {where}"
+        else:
+            line += f"{what}, which this branch changed, {verb} used on {where}"
+    return (line + ". Run: orch status")[:400]
+
+
+def _used_on(teammates):
+    """"1 teammate's branch (asha: feat/refunds)", or the user's own branch on another machine."""
+    def one(t):
+        who, where = _team(t)
+        return f"{who}: {where[len('branch '):]}" if who else f"you, on another machine: {where[len('branch '):]}"
+    if len(teammates) == 1 and _team(teammates[0])[0] is None:
+        return f"your {_team(teammates[0])[1]} on another machine"
+    noun = "teammate's branch" if len(teammates) == 1 else "teammates' branches"
+    return f"{len(teammates)} {noun} ({_list(teammates, one)})"

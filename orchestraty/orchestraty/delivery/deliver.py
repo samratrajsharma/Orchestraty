@@ -26,6 +26,10 @@ Who hears what:
 |        | the same, when it has changed what is  | the same sessions                | next      |
 |        | claimed already (not for an edit that  |                                  |           |
 |        | must ask, below)                       |                                  |           |
+| teammate's | a teammate's shared claim, until when | every session (with hooks) on   | edit file |
+| claim  | (it only informs)                      | the repository                   | (folder)  |
+|        | the same, when it has changed what is  | the same sessions                | next      |
+|        | claimed already                        |                                  |           |
 
 Claims (``orch claim``) are not findings: their notes are kept under ``claim|<number>``, and a
 claim that ends takes back the notes not yet taken. A claim on a function or class is noted
@@ -35,8 +39,14 @@ answer where the agent can ask (``adapters.asks``: Claude Code, a PreToolUse ``a
 agents' sessions are informed, and the note says so. Steer never turns a claim note into a
 deny: a slot denies only for a finding's note in it.
 
+A teammate's claim (kept in ``team_planned`` when their policy shares claims) is told the same
+way, under ``tclaim|<digest>``, but it only informs: whatever its kind, it never makes an edit
+ask, and steer never stops an edit for it. A remote item may be stale or forged.
+
 Plain-git sessions get no notes (they have no hooks), and nor do cloud agents' branches (their
-agents work elsewhere). A note goes only to a session whose agent can take that kind at the
+agents work elsewhere) or teammates' branches (their own machine tells their sessions). A
+teammate's breaking change wakes a session waiting for its user only when it was read from
+their commits, not when only their record reports it. A note goes only to a session whose agent can take that kind at the
 event its slot is for (``adapters``: Antigravity takes no edit note, so it hears the next note
 instead once it changes the file; only Claude Code can be woken), and it is written in the form
 that agent accepts. A session hears each finding once:
@@ -54,8 +64,10 @@ last line saying how many more wait; the rest wait for the slot's next write. Sl
 overwritten (see ``slots``): when a slot that had notes written to it is gone from disk, the
 hook took it, and those notes are delivered; then the next notes waiting for it are written.
 
-The push line: for each live session with an open O6 finding, hooked or plain git (a worktree
-an agent has left), ``push/<worktree key>.txt`` holds one line the git pre-push hook prints.
+The push line: for each live session with an open O6 finding, or a change of its own that a
+teammate's branch uses (an O3 or O4 that is not latent, its receiver a team session), hooked or
+plain git (a worktree an agent has left), ``push/<worktree key>.txt`` holds one line the git
+pre-push hook prints.
 """
 import os
 import shutil
@@ -68,6 +80,7 @@ from orchestraty.delivery import slots
 NS = 1_000_000_000
 MAX_SLOT_TEXT = 9000              # Claude Code saves longer hook text to a file instead
 NO_NOTES = sessionkinds.NO_NOTES   # no hooks here (plain git, a branch read from elsewhere): nothing can be delivered
+TEAM_CLAIM = "tclaim|"             # the notes about a teammate's claim: tclaim|<digest>, stable across reads
 
 
 def _rel(state, path):
@@ -110,6 +123,15 @@ class Deliverer:
         self.log = log
         self.now_ns = now_ns
 
+    def _named(self, sessions, sid):
+        """A session as a note names it: a teammate's branch with who works on it (from its
+        team_sessions row where the session does not carry it)."""
+        s = sessions[sid]
+        if s.get("agent") != sessionkinds.TEAM or "people" in s:
+            return s
+        row = self.record.team_session(sid) or {}
+        return dict(s, people=row.get("people") or [], own=bool(row.get("own")))
+
     # 1. findings -> notes
     def plan(self, finding, sessions, wake=False):
         """[(session id, kind, slot path, text)] for one finding (a dict as the record keeps it)."""
@@ -129,34 +151,36 @@ class Deliverer:
             for me, other in ((a, b), (b, a)):
                 if hears(me, "next") and other in sessions:
                     out.append((me, "next", slots.next_slot(self.state, me),
-                                templates.for_both(finding, sessions[other])))
+                                templates.for_both(finding, self._named(sessions, other))))
         elif rule in ("O3", "O4"):
             user, changer = finding["receiver"], finding["changer"]
             latent = finding["detail"].get("latent")
             if hooked(user) and changer in sessions:
                 path = os.path.join(sessions[user]["worktree"], *finding["file"].split("/"))
                 elsewhere = sessions[changer].get("worktree") != sessions[user].get("worktree")
-                text = templates.for_user(finding, sessions[changer], elsewhere=elsewhere)
+                who = self._named(sessions, changer)
+                text = templates.for_user(finding, who, elsewhere=elsewhere)
                 if hears(user, "edit"):
                     out.append((user, "edit", slots.edit_slot(self.state, user, path), text))
                 if not latent and hears(user, "next"):
                     # it already changed that file and may never edit it again: tell it with
                     # its next tool result too (whichever note it takes first counts)
                     out.append((user, "next", slots.next_slot(self.state, user),
-                                templates.for_user(finding, sessions[changer], before_edit=False,
-                                                   elsewhere=elsewhere)))
-                if wake and sessions[user].get("turn") == "idle" and not latent and hears(user, "wake"):
+                                templates.for_user(finding, who, before_edit=False, elsewhere=elsewhere)))
+                # a teammate's change their record only reports (not read from commits) never wakes
+                if (wake and sessions[user].get("turn") == "idle" and not latent and hears(user, "wake")
+                        and finding["detail"].get("evidence") != "record"):
                     out.append((user, "wake", slots.wake_slot(self.state, user), text))
             if hears(changer, "next") and user in sessions and not latent:
                 told = hears(user, "edit") or ("next" if hears(user, "next") else False)
                 out.append((changer, "next", slots.next_slot(self.state, changer),
-                            templates.for_changer(finding, sessions[user], told=told)))
+                            templates.for_changer(finding, self._named(sessions, user), told=told)))
         elif rule == "O5":
             a, b = finding["sessions"]
             for me, other in ((a, b), (b, a)):
                 if hears(me, "next") and other in sessions:
                     out.append((me, "next", slots.next_slot(self.state, me),
-                                templates.same_route(finding, me, sessions[other])))
+                                templates.same_route(finding, me, self._named(sessions, other))))
         elif rule == "O6":
             changer = finding["changer"]
             if hears(changer, "stop"):
@@ -166,7 +190,7 @@ class Deliverer:
             for me, other in ((a, b), (b, a)):
                 if hears(me, "next") and other in sessions:
                     out.append((me, "next", slots.next_slot(self.state, me),
-                                templates.planned_overlap(finding, me, sessions[other])))
+                                templates.planned_overlap(finding, me, self._named(sessions, other))))
         elif rule == "W1":
             a, b = finding["sessions"]
             if hooked(a) and hooked(b):                     # a plain-git session gets none and causes none
@@ -201,6 +225,43 @@ class Deliverer:
                             templates.claimed(claim, claimer, before_edit=False)))
         return out
 
+    def plan_team_claim(self, item, sessions, changed=None):
+        """[(session id, kind, slot path, text)] for a teammate's claim that holds (a team_planned
+        row), to every live session with hooks on the repository of their branch. As plan_claim,
+        but it only informs: never an ask, whatever its kind, and never a stop."""
+        teammate = sessions.get(item["session_id"])
+        if teammate is None or teammate.get("agent") != sessionkinds.TEAM:
+            return []
+        who = self._named(sessions, teammate["id"])
+        shared = (self.record.team_session(teammate["id"]) or {}).get("as_of") or None
+        out = []
+        for sid, s in sorted(sessions.items()):
+            if (sid == teammate["id"] or s["state"] != "live" or s["repo_id"] != teammate["repo_id"]
+                    or s["agent"] in NO_NOTES or not s["worktree"]):
+                continue
+            can = adapters.hears(s["agent"])
+            path = os.path.join(s["worktree"], *claims.path_of(item).split("/"))
+            if "edit" in can:
+                slot = (slots.area_slot(self.state, sid, path, ask=False) if item["kind"] == "area"
+                        else slots.edit_slot(self.state, sid, path))
+                out.append((sid, "edit", slot, templates.team_claimed(item, who, shared_at=shared)))
+            if "next" in can and any(claims.covers(item, f) for f in (changed or {}).get(sid, ())):
+                out.append((sid, "next", slots.next_slot(self.state, sid),
+                            templates.team_claimed(item, who, before_edit=False, shared_at=shared)))
+        return out
+
+    def add_team_claim(self, item, sessions, changed=None):
+        """Make the notes a teammate's claim calls for, under its stable key: not again for one
+        already made, nor for a session that took one of them, when their record is read again."""
+        made, key = 0, item["note_key"]
+        for sid, kind, slot, text in self.plan_team_claim(item, sessions, changed):
+            if self._heard(key, sid):
+                continue
+            cause = max(item["since"], sessions[sid]["last_seen"])
+            if self.record.add_note(key, sid, kind, _rel(self.state, slot), text, self.now_ns(), cause):
+                made += 1
+        return made
+
     def add_claim(self, claim, sessions, changed=None):
         """Make the notes a claim that holds calls for (not again for one already made, nor for a
         session that took one of them)."""
@@ -228,12 +289,13 @@ class Deliverer:
                 made += 1
         return made
 
-    def withdraw_claims(self, holding):
+    def withdraw_claims(self, holding, team_holding=frozenset()):
         """Take back the notes not yet taken of the claims that no longer hold (`holding`: the
-        numbers of those that do)."""
+        numbers of those that do; `team_holding`: the note keys of the teammates' claims that do)."""
         for key in sorted({n["finding_key"] for n in self.record.notes(states=("pending", "written"))}):
             number = claims.from_note_key(key)
-            if number is not None and number not in holding:
+            if (number is not None and number not in holding) or (key.startswith(TEAM_CLAIM)
+                                                                  and key not in team_holding):
                 self.withdraw(key)
 
     def add(self, finding, sessions, trigger_ns, wake=False):
@@ -364,6 +426,8 @@ class Deliverer:
         as an O3 about TypeScript, whose uses are heuristic)."""
         asks, stops = set(), set()
         for n in notes:
+            if n["finding_key"].startswith(TEAM_CLAIM):
+                continue                                  # a teammate's claim only informs
             number = claims.from_note_key(n["finding_key"])
             if number is not None:
                 c = self.record.claim(number)
@@ -390,7 +454,10 @@ class Deliverer:
             if s["state"] != "live" or not s["worktree"] or s["agent"] in sessionkinds.NO_COPY:
                 continue                                  # a branch read from elsewhere has no worktree to push from
             mine = [f for f in open_findings if f["rule"] == "O6" and f["changer"] == s["id"]]
-            line = templates.push_line(mine)
+            used = [(f, self._named(sessions, f["receiver"])) for f in open_findings
+                    if f["rule"] in ("O3", "O4") and f["changer"] == s["id"] and not f["detail"].get("latent")
+                    and (sessions.get(f["receiver"]) or {}).get("agent") == sessionkinds.TEAM]
+            line = templates.push_line(mine, used)
             if line:
                 wanted[slots.file_key(s["worktree"]) + ".txt"] = line
         os.makedirs(folder, exist_ok=True)
