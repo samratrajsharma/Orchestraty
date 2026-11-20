@@ -380,6 +380,10 @@ class Shadow:
             raise ShadowBroken(_clean_error(err))
         return proc.returncode, proc.stdout if raw else proc.stdout.decode("utf-8", "replace")
 
+    def git(self, args, raw=False):
+        """(returncode, stdout) of a local git command in the shadow, for team sync's reads."""
+        return self._git(args, raw=raw)
+
     def read_file(self, ref, path, max_bytes):
         """The bytes of the file `path` (a plain file, not a link or a folder) at `ref` in the
         shadow, or None when the shadow, the ref or such a file is not there. Raises TooLarge,
