@@ -855,11 +855,18 @@ def take_for_mod(root, agent, args):
 
 
 def git_event(root, event, argv):
-    """git's hooks: record the event with the worktree folder; for pre-push, print the push line."""
+    """git's hooks: record the event with the worktree folder; for pre-push, print the push line.
+    While team sync is on somewhere (<state>/team/enabled), a pre-push line also names the remote
+    and starts the coordinator, which then reads git's reflog for the push: a push git refuses
+    afterwards must send nothing, so this line never sends anything itself."""
     cwd = os.getcwd()
-    line = b'{"ts":%d,"pid":%d,"agent":"git","event":"%s","cwd":%s,"args":%d}\n' % (
-        time.time_ns(), os.getpid(), event, json_string(cwd), len(argv))
+    team = event == b"pre-push" and os.path.exists(os.path.join(root, "team", "enabled"))
+    remote = b',"remote":%s' % json_string(argv[0][:200] if argv else "") if team else b""
+    line = b'{"ts":%d,"pid":%d,"agent":"git","event":"%s","cwd":%s,"args":%d%s}\n' % (
+        time.time_ns(), os.getpid(), event, json_string(cwd), len(argv), remote)
     append(os.path.join(root, "spool", "git", time.strftime("%Y-%m-%d") + ".jsonl"), line)
+    if team:
+        start_coordinator(root, time.time())
     if event == b"pre-push":
         try:
             with open(os.path.join(root, "push", file_key(cwd) + ".txt"), "rb") as fh:

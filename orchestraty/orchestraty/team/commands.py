@@ -20,8 +20,8 @@ import time
 from orchestraty import __version__, config, gitio, remote, team
 from orchestraty.coordinator.record import Record
 from orchestraty.delivery.notes import printable
-from orchestraty.team import (grammar, identity, people, policy, probe, recordfile, scan, seal, snapshot, store, tasks,
-                              teamfile)
+from orchestraty.team import (grammar, identity, people, policy, probe, pushwatch, recordfile, scan, seal, snapshot,
+                              store, tasks, teamfile)
 
 PEOPLE_FILE = ".orchestraty/people.yml"
 CODEOWNERS_LINE = "/.orchestraty/ @your-org/leads"
@@ -218,6 +218,7 @@ def on(state, args, confirm):
         return 1
     device = identity.Device.load_or_create(state)
     team.save_settings(state, common_dir, on=True, remote=remote_name, consented=force.normalised())
+    pushwatch.PushWatch(shadow, common_dir, remote_name).check()        # from here on, a push sends the record
     print(f"Team sync on for {name}: you are {me.person} on device {device.id}. In this version nothing is pushed "
           "yet; orch team preview shows the record as it would be.")
     return 0

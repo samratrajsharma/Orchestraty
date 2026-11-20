@@ -107,6 +107,8 @@ class Coordinator:
         self._status_written = 0.0
         self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
         self.cloud = CloudBranches(state, self.log)
+        self.team = None                   # team sync's work: made once a repository has it on
+        self._saw_hooked = any(s["agent"] not in NO_NOTES for s in self.sessions.values())
         self.together = together.Worker(state)
         self._together_due = {}            # (session, session) -> the check to queue once its minute is up
         self._together_queued = {}         # (session, session) -> when its last check was queued (monotonic)
@@ -189,6 +191,9 @@ class Coordinator:
             if not self.livemap.ts.busy():          # nor is a compiler run's folder taken from under it
                 typescript.clean(self.state, {s["worktree"] for s in self.sessions.values() if s.get("worktree")})
         self.update_map()
+        if self.team is not None:
+            self.team.tick(self._team_repos(), self.now_ns())
+            self._keep_team_outcomes()
         self.update_findings()
         self.check_together()
         self.deliver()
@@ -264,6 +269,7 @@ class Coordinator:
             self.livemap.mark_all()
             forced, self._scan_now = self._scan_now, set()
             self.scan_level0(forced)
+            self.scan_team()
             self.scan_cloud()
         self.changed = self.livemap.refresh_pending()
         if self.changed:
@@ -457,6 +463,75 @@ class Coordinator:
             existing["last_seen"] = now
             self.record.put_session(existing)
 
+    # team sync
+    def _team_repos(self):
+        """{common_dir: remote name} of the watched repositories with team sync on."""
+        if not self.cfg["team"]:
+            return {}
+        from orchestraty import team
+        out = {}
+        for common_dir in self.cfg["repos"]:
+            chosen = team.settings(self.cfg, common_dir)
+            if chosen["on"]:
+                out[common_dir] = chosen["remote"]
+        return out
+
+    def _team_sync(self):
+        if self.team is None:
+            from orchestraty.team.sync import TeamSync
+            self.team = TeamSync(self.state, self.log, self.now_ns)
+        return self.team
+
+    def scan_team(self):
+        """Team sync, on the level-0 timer: look for the user's push in each repository where
+        it is on. Its record then goes from step(), on a thread."""
+        repos = self._team_repos()
+        if not repos:
+            return
+        sync, now = self._team_sync(), self.now_ns()
+        for common_dir, remote_name in repos.items():
+            sync.look(common_dir, remote_name, now)
+
+    def _keep_team_outcomes(self):
+        """Keep what each record push came to: team_sent, and what was withheld from it."""
+        outcomes = self.team.outcomes()
+        if not outcomes:
+            return
+        from orchestraty.team import seal
+        with self.record.transaction():
+            for o in outcomes:
+                repo_id = self.record.repo_id(o.common_dir)
+                self.record.add_team_sent(repo_id, o.remote, o.store, o.ts, o.seq, o.commit, o.size, o.sessions,
+                                          o.result, len(o.withheld))
+                seal.remember(self.record, repo_id, o.ts, o.withheld)
+        self._status_dirty = True
+
+    def _pushing(self, line):
+        """git's pre-push hook ran where team sync is on: read the reflog every step for a while.
+        The push itself is taken from the reflog, once git made it."""
+        cwd = line.get("cwd")
+        try:
+            info = gitio.worktree_info(cwd) if isinstance(cwd, str) else None
+        except gitio.UntrustedRepositoryError:
+            info = None
+        if info is None:
+            return
+        key = repo_key(info["common_dir"])
+        for common_dir, remote_name in self._team_repos().items():
+            if repo_key(common_dir) == key and remote_name == line["remote"]:
+                self._team_sync().arm(common_dir, self.now_ns())
+
+    def busy(self):
+        """Whether team sync has work under way: a record to push, or a push running."""
+        return self.team is not None and self.team.pending()
+
+    def idle_after(self):
+        """Seconds with no event before an idle coordinator leaves: team_idle_seconds for one
+        that only team sync's work kept up (no agent's session since it started), else idle_seconds."""
+        if self.team is not None and not self._saw_hooked:
+            return min(self.cfg["idle_seconds"], self.cfg["team_idle_seconds"])
+        return self.cfg["idle_seconds"]
+
     def scan_cloud(self):
         """Cloud branches: fetch where due (on a thread), then make each matching branch of the
         last fetch a session, follow the ones that moved, and end the ones gone or merged."""
@@ -582,6 +657,9 @@ class Coordinator:
                 self.handle_team_task(line, ts)
             else:
                 self.handle_feedback(line, ts)
+            return
+        if agent == "git" and line.get("event") == "pre-push" and isinstance(line.get("remote"), str):
+            self._pushing(line)                         # only while team sync is on does the hook name the remote
             return
         if "shim_error" in line:
             self.record.add_event({"ts": ts, "agent": agent, "event": "shim_error"},
@@ -765,6 +843,8 @@ class Coordinator:
         fresh = event == "SessionStart" and self.now_ns() - ts < FRESH_START_SECONDS * NS
         rid = self.record.repo_id(info["common_dir"])
         self._repo_keys[rid] = repo_key(info["common_dir"])
+        if agent not in NO_NOTES:
+            self._saw_hooked = True
         session = {"id": sid, "agent": agent, "repo_id": rid, "cwd": cwd,
                    "worktree": info["top"], "branch": info["branch"], "base_commit": info["head"],
                    "base_guessed": 0 if fresh else 1, "started": ts, "last_seen": ts,
@@ -1016,8 +1096,8 @@ def run(state, scan_seconds=SCAN_SECONDS):
                     return FAILED
                 time.sleep(1)
                 continue
-            if (coordinator.live_count(hooked_only=True) == 0
-                    and time.monotonic() - last_event > coordinator.cfg["idle_seconds"]):
+            if (coordinator.live_count(hooked_only=True) == 0 and not coordinator.busy()
+                    and time.monotonic() - last_event > coordinator.idle_after()):
                 heartbeat.stop(remove=True)   # from here on, a hook starts a new coordinator
                 if coordinator.step():         # ... unless something arrived meanwhile
                     last_event = time.monotonic()
