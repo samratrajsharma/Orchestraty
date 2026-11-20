@@ -4,9 +4,14 @@ Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestr
 
 ## Unreleased
 
+### Added
+
+- `orch team`: team sync's first half, for a repository whose remote has a team policy (`.orchestraty/policy.yml`) and people file (`.orchestraty/people.yml`). `orch team init` prints both to start from and `orch team check` reads them; `orch team on` reads the copy in force on the remote's default branch (asking first, since it is a fetch), shows what would be shared, where and when, and asks; a policy that later allows more waits until you agree again. `orch team preview` shows the exact record this machine would send, and what was withheld from it; `orch team task` gives a session a ticket or a task line you confirm; `whoami`, `device` and `off` do the rest. Nothing is pushed and no teammate's record is read in the background yet. Off by default: a solo user sees nothing new.
+- `orch status` and the dashboard show a team block where team sync is on, and `orch status --json --with-lines` adds teammates' confirmed task lines (shown otherwise only on a terminal and in the dashboard); the MCP status tool shows the block cleaned. `orch doctor` checks team sync where it is on, offline.
+
 ### Changed
 
-- The record becomes schema 6 when the coordinator opens it. Schema 6 only adds tables, for teammates' work read through git (nothing in this version writes them), and every row a 0.1.1 record holds stays as it was. After that, 0.1.x refuses the record with its "newer Orchestraty" message; to go back, move the record aside, with its `-wal` and `-shm` files. `orch events` knows three new kinds for those records: `team_sent`, `team_withheld` and `team_dropped`.
+- The record becomes schema 6 when the coordinator opens it. Schema 6 only adds tables, for teammates' work read through git and the task lines you confirm with `orch team task` (only those are written in this version), and every row a 0.1.1 record holds stays as it was. After that, 0.1.x refuses the record with its "newer Orchestraty" message; to go back, move the record aside, with its `-wal` and `-shm` files. `orch events` knows three new kinds for those records: `team_sent`, `team_withheld` and `team_dropped`.
 - The coordinator drops a declaration for a cloud agent's branch, as it already dropped a claim for one: nobody works in that branch here, so there is nothing to declare.
 
 ## 0.1.1 (19 November 2026)

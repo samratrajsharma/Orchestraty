@@ -42,6 +42,7 @@ The main package: the `orch` command, the hook shims, the coordinator, the live 
 | `orch remote on\|off [--remote NAME]` | Cloud agents' branches for the repository here: fetched read-only and compared with your sessions (see [Cloud agents' branches](#cloud-agents-branches-level-0)). Off by default; `on` says what it will do and asks first (`--yes` skips the question). `--repo DIR` names another repository. |
 | `orch remote patterns [add\|remove GLOB]` | The branches followed: by default `claude/*`, `codex/*` and `copilot/*`. |
 | `orch remote fetch` | Fetches now, and says how it went. `orch remote` alone shows the settings and the last fetch. |
+| `orch team [on\|off\|init\|check\|whoami\|preview\|task\|device]` | Team sync for the repository here: the policy and people files, what would be shared and what you agreed to (see [Teams: people and policy](#teams-people-and-policy)). Off by default; `orch team on` asks first. |
 | `orch together [on\|off]`, `orch together set "<command>" [--timeout 120]` | The together check, for the repository here (`--repo DIR` names another): off by default. See [The together check](#the-together-check-opt-in). `orch together` alone shows the settings. |
 | `orch ts [on\|off] [--timeout 300]` | TypeScript contracts, for the repository here (`--repo DIR` names another): off by default, since they run the project's compiler. See [TypeScript contracts](#typescript-contracts-opt-in). `orch ts` alone shows the settings and each session's latest run. |
 | `orch config [steer\|wake] [on\|off]` | Off by default. **steer**: a strong finding's note before an edit (O3 or O4 about Python) stops that edit with the reason, so the agent re-plans (otherwise the note only informs, and the agent's usual permission prompts apply). **wake**: a note for a session that waits for its user wakes it (adds a background hook). |
@@ -179,6 +180,71 @@ Agents that work while you do, such as a cloud agent pushing a branch or a perso
 - **Notes:** the rules run as for any session, and notes go to your live sessions: a breaking change on a cloud branch, used in a file one of them is changing, gives that session its note before it edits the file. The branch's own agent works elsewhere and is never told (level 0); the notes say so, and so does `orch status`, which shows the cloud branches in a group of their own: each branch, what it changed, its last commit's time, and the last fetch with its result.
 
 Tested with local remotes; not yet with a real cloud agent's branch on a hosting service.
+
+## Teams: people and policy
+
+Team sync is how teammates' agents, on any vendor, hear of each other's work through git: no server and no account. This version has its first half: the two files a team keeps in its repository, the gates a record passes on its way out and in, `orch team`, and what status and doctor show. Nothing is pushed and no teammate's record is read in the background yet; `orch team preview` shows the record this machine would send.
+
+**The two files** live in `.orchestraty/` on the remote's default branch and are reviewed like code. The copy in force is the one there: a change made on another branch counts once it is merged. `orch team init` prints both to start from (and a CODEOWNERS line, `/.orchestraty/ @your-org/leads`, so changes to them are reviewed), and `orch team check` reads them in a working copy.
+
+```yaml
+# .orchestraty/policy.yml
+version: 1
+sync: on                  # on or off; off unless it says on
+visibility: private       # private or public: required when sync is on
+public_sync: false        # must be true for sync to run in a public repository
+share:
+  claims: true            # live claims: their kind, target and end (for teammates, they only inform)
+  task: ticket            # none, ticket or confirmed: confirmed also shares lines their authors confirm
+  unpushed: false         # committed but unpushed work: its files and functions
+  activity: false         # whether a session's agent is working or idle
+tickets:
+  keys: [PAY, OPS]        # KEY-123: each key two to ten capital letters and digits
+  issues: true            # #123 and GH-123
+branches:
+  share: ["*"]            # branch globs, one * at most, which spans /
+  never: ["security/*"]
+deny:
+  paths: ["customers/**"] # path globs never named in a record
+  words: ["acme bank"]    # words never shared: any case; - _ . / and space count as one
+people:
+  unlisted: share         # share or refuse: whether someone not in people.yml shares, as unlisted-<hash>
+signatures: off           # off; verify gives a note; require keeps sync off (records are not signed yet)
+```
+
+```yaml
+# .orchestraty/people.yml
+version: 1
+people:
+  - handle: alice
+    emails: [alice@example.com, 1234+alice@users.noreply.github.com]
+    logins: ["@alice"]
+    teams: ["@acme/payments"]
+    keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGn2rnCq6TtUZtGkkw4x5B7XcLWY3XdWb3oyl2L5pEYp alice@laptop"]
+    name: Alice Example
+```
+
+- **Reading them.** Both are a strict subset of YAML: block mappings and lists, one-line `[...]` lists, quoted and plain values and comments; no tabs, anchors, tags, second documents, multi-line values, repeated keys or null. A policy that cannot be read keeps sync off and says why, with its line, and so does one this version cannot honour: an unknown version or kind of deny entry, `signatures: require`, or an unknown key anywhere but under `share`, where an unknown key grants nothing. A people file with anything wrong in it is refused whole. Every share setting is off unless the policy turns it on; `branches.share` is `["*"]` unless it says otherwise.
+- **No pattern becomes a regular expression.** A branch glob has one `*`, which spans `/`. A path glob is matched part by part, `**` standing for any number of parts and `[` for itself, without regard to case; a glob with no `/` but at its end matches a part at any depth, and a folder it matches denies all inside it. Deny words are found in one pass over the text, however many there are. At most 200 entries of each kind, each at most 200 characters, and 64 KiB in all. Paths that usually hold secrets are always denied: `.env`, `.env.*`, `*.env`, `.envrc`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `*.ppk`, `*.kdbx`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `.ssh`, `.aws`, `.gnupg`, `.netrc`, `_netrc`, `.git-credentials`, `.pypirc`, `.npmrc`, `.htpasswd`, `credentials.json`, `*.tfstate`, `*.tfstate.*` and `*.tfvars`.
+- **What you agreed to.** What is shared follows the most restrictive of the copy in force, the copy you agreed to at `orch team on` and your own narrowing in `config.json` (`narrow`, such as `{"task": "none"}`, and `never_branches`, in the repository's `team` entry). So a narrowing on the default branch applies at once, and a widening waits until you run `orch team on` again, which shows the difference and asks.
+- **Public repositories.** The policy must say `visibility`; `public` also needs `public_sync: true`, and `orch team on` then says that anyone who can read the repository can read what you share. To catch a repository the policy calls private that anyone can read, `orch team on` asks the remote's https address for its branch list with no credentials at all (ssh addresses are asked as their https form; a user name or token in a URL is never sent): when that works, sync stays off. Doctor shows the last answer and never asks.
+- **Who you are.** The handle `people.yml` gives your git email (`git config user.email` in the repository, so an includeIf counts), or `unlisted-` and the first eight hex digits of its sha256 when it does not list you; `orch team whoami` prints the lines to add. Your device is `team/device.json` in the state folder: a random id, an optional label (`orch team device --label laptop`) and a secret that never leaves the machine. `orch team device --new` gives a copied state folder its own.
+- **The record.** What would be shared is one small JSON record per device and repository: for each session here on a branch the policy shares, its agent kind, state and times, branch, base and the commit the remote has, and, as the policy allows, its ticket (from the branch's name or `orch team task --ticket`), a task line its author confirmed (`orch team task --line`), its claims and whether its agent is working. It has no field for a prompt, a transcript, file contents, a path outside the repository, a host name, an email or a commit message. On its way out, every field must follow its grammar and pass the deny lists and a secret scanner, or its smallest item is withheld, and status counts what was withheld by rule and field, never its value. A teammate's record is taken in only through a second gate, which drops one that is too large, malformed, written as someone else, older than one already read, or that breaks a field's grammar.
+- **Status.** Where team sync is on, `orch status` and the dashboard show a team block: the policy in force, who you are, the last record sent, what was withheld and each teammate's record. A teammate's confirmed task line is shown only on a terminal, in `orch status --json --with-lines` and in the dashboard: never in a note, an MCP answer or `status.json`. `orch doctor` adds the team checks.
+
+```text
+orch team                                    the team settings of the repository here
+orch team init [--write]                     print a policy and a people file to start from; --write writes them (asks first, commits nothing)
+orch team on [--remote NAME] [--yes]         read the policy in force, show what will be shared, where and when, and ask
+orch team off [--forget] [--yes]             stop; --forget also deletes this device's record ref on the remote (asks first)
+orch team whoami                             your git email, handle and device; the people.yml lines to add when it does not list you
+orch team preview [--json]                   the exact bytes of the record that would be sent now, and each item withheld
+orch team task [--session ID] (--ticket T | --line L | --from-declared | --clear)
+orch team device [--label NAME | --new]      label this machine's device, or give it a new id and secret
+orch team check [PATH]                       check policy.yml and people.yml in a working copy; exit 1, with the line, on a problem
+```
+
+Each action takes `--repo DIR` for a repository other than the one here, and turning team sync on needs the repository watched. Tested with local bare repositories; not yet on a hosting service.
 
 ## For builders
 
