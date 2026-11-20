@@ -254,6 +254,20 @@ class TeamSync:
         self._read[common_dir] = (seen, out)
         return out
 
+    def me(self, common_dir):
+        """This machine's person for a repository, as its records were last read ("" before)."""
+        gate = self._gates.get(common_dir)
+        return gate[3].person if gate is not None else ""
+
+    def sync_on(self, common_dir):
+        """Whether the effective policy lets team sync run in a repository, as last read."""
+        gate = self._gates.get(common_dir)
+        return gate is not None and not gate[2].off()
+
+    def fetched_names(self, common_dir):
+        """The branches the last team fetch of this coordinator asked for, None before one worked."""
+        return self._names.get(common_dir)
+
     def _admitted(self, shadow, common_dir, remote_name, now, last_seqs, refs=None):
         gate = self._gate(shadow, common_dir, remote_name)
         if gate is None:

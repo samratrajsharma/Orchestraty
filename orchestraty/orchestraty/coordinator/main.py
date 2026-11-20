@@ -108,6 +108,9 @@ class Coordinator:
         self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
         self.cloud = CloudBranches(state, self.log)
         self.team = None                   # team sync's work: made once a repository has it on
+        self.teamwork = None               # teammates' branches as sessions, made with it
+        self._team_seen = {}               # team session id -> (tip, as of, writers) when last changed
+        self._team_followed = {}           # (repository key, remote) -> branches followed as team sessions
         self._saw_hooked = any(s["agent"] not in NO_NOTES for s in self.sessions.values())
         self.together = together.Worker(state)
         self._together_due = {}            # (session, session) -> the check to queue once its minute is up
@@ -293,8 +296,9 @@ class Coordinator:
             with self.record.transaction():                 # a claim that ended takes back its notes
                 self.deliverer.withdraw_claims({c["id"] for c in self.record.claims(active_at=self.now_ns())})
         for repo_id in sorted(repos):
-            ids = sorted(sid for sid, s in self.sessions.items()
-                         if s["repo_id"] == repo_id and s["state"] == "live" and sid in self.livemap.views)
+            ids = sorted(sid for sid, s in self.sessions.items()      # teammates' branches: not in the rules yet
+                         if s["repo_id"] == repo_id and s["state"] == "live" and sid in self.livemap.views
+                         and s["agent"] != sessionkinds.TEAM)
             views = {sid: self.livemap.views[sid] for sid in ids}
             graph_ready = {sid: self.livemap.graph(sid) is not None for sid in ids}
             base_ready = {sid: self.livemap.base_graph(sid) is not None for sid in ids}
@@ -487,13 +491,97 @@ class Coordinator:
         records as last fetched, fetch where due (on a thread), and look for the user's push,
         whose record then goes from step(), on a thread too."""
         repos = self._team_repos()
+        self._end_team_elsewhere(repos)
         if not repos:
             return
         sync, now = self._team_sync(), self.now_ns()
         for common_dir, remote_name in repos.items():
-            sync.records(self.record, common_dir, remote_name, now)
+            admitted = sync.records(self.record, common_dir, remote_name, now)
+            self._sync_team(common_dir, remote_name, admitted, now)
             sync.fetch_if_due(common_dir, remote_name, self.cfg["team_fetch_minutes"] * 60, now)
             sync.look(common_dir, remote_name, now)
+
+    def _sync_team(self, common_dir, remote_name, admitted, now):
+        """Make each branch teammates' admitted records name a session of agent team, follow the
+        ones that moved and end the ones merged, gone, no longer named or stale. A branch named
+        but not fetched yet stays as it was, and so does everything through a failed fetch."""
+        from orchestraty.coordinator.team import TEAM_AGENT, TeamWork
+        key = repo_key(common_dir)
+        mine = {sid: s for sid, s in self.sessions.items()
+                if s["agent"] == TEAM_AGENT and self._repo_keys.get(s["repo_id"]) == key}
+        if not self.team.sync_on(common_dir):
+            self._end_team(mine.values(), "team sync off")
+            self._team_followed[(key, remote_name)] = set()
+            return
+        if self.teamwork is None:
+            self.teamwork = TeamWork(self.state)
+        facts = self.teamwork.settle(common_dir, remote_name, admitted, self.team.me(common_dir),
+                                     self.team.fetched_names(common_dir), now / NS, self.cfg["team_max_sessions"])
+        shadow_path = remote.Shadow(self.state, common_dir).path
+        stale_before = now / NS - self.cfg["team_stale_days"] * 86400
+        followed, seen = set(), set()
+        with self.record.transaction():
+            for sid, f in facts.items():
+                session = self.sessions.get(sid)
+                if f.pending:                               # named, not fetched yet
+                    seen.add(sid)
+                    if session is not None:
+                        followed.add(f.branch)
+                    continue
+                why = (f"merged into the default branch ({f.merged})" if f.merged else
+                       "the branch is gone" if not f.tip else
+                       "stale" if max(f.as_of, f.tip_time) < stale_before else "")
+                if why:
+                    if session is not None:
+                        self._end(session, why)
+                        self.record.put_team_session(_team_row(session, remote_name, f))
+                    continue
+                seen.add(sid)
+                followed.add(f.branch)
+                if session is None:
+                    rid = self.record.repo_id(common_dir)
+                    self._repo_keys[rid] = key
+                    session = {"id": sid, "agent": TEAM_AGENT, "repo_id": rid, "cwd": "", "worktree": "",
+                               "branch": f"{remote_name}/{f.branch}", "base_commit": f.base, "base_guessed": 0,
+                               "started": now, "last_seen": now, "state": "live", "turn": "", "note": ""}
+                    self.sessions[sid] = session
+                    self.record.put_session(session)
+                    self.log.info("teammate's branch %s/%s, base %s", remote_name, f.branch, f.base[:12])
+                changed = (f.tip, f.as_of, json.dumps(f.writers, sort_keys=True))
+                if self._team_seen.get(sid) != changed:     # its tip or the records naming it changed
+                    self._team_seen[sid] = changed
+                    session["base_commit"], session["last_seen"] = f.base, now
+                    self.record.put_session(session)
+                    self.record.put_team_session(_team_row(session, remote_name, f))
+                session["people"], session["own"] = list(f.people), f.own     # for the notes (2.3)
+                view = self.livemap.views.get(sid)
+                if view is None or view.base != f.base:
+                    self.livemap.forget(sid)
+                    self._dirty_repos.add(session["repo_id"])
+                    self.livemap.track_branch(session, key, shadow_path, f.tip)
+                elif self.livemap.branches.get(sid, ("", ""))[1] != f.tip:
+                    self.livemap.move_branch(sid, f.tip)
+            for sid, s in mine.items():
+                if sid not in seen and sid in self.sessions and s["state"] == "live":
+                    self._end(s, "no longer in a teammate's record")
+        self._team_followed[(key, remote_name)] = followed
+
+    def _end_team_elsewhere(self, repos):
+        """End the team sessions of repositories where team sync is no longer on, or that are
+        no longer watched."""
+        on = {repo_key(c) for c in repos}
+        watched = {repo_key(c) for c in self.cfg["repos"]}
+        left = [s for s in self.sessions.values() if s["agent"] == sessionkinds.TEAM and s["state"] == "live"
+                and self._repo_keys.get(s["repo_id"]) not in on]
+        for s in left:
+            self._end_team([s], "team sync off" if self._repo_keys.get(s["repo_id"]) in watched else "not watched")
+
+    def _end_team(self, sessions, why):
+        sessions = [s for s in sessions if s["state"] == "live"]
+        if sessions:
+            with self.record.transaction():
+                for s in sessions:
+                    self._end(s, why)
 
     def _keep_team_outcomes(self):
         """Keep what each record push came to: team_sent, and what was withheld from it."""
@@ -574,6 +662,11 @@ class Coordinator:
                 self.cloud.forget(common_dir)
             self.cloud.fetch_if_due(common_dir, chosen, self.cfg["remote_fetch_minutes"] * 60, now / NS)
             if not broken and branches is not None:       # None: nothing fetched yet, so nothing to end either
+                for name in sorted(set(branches) & self._team_followed.get((key, chosen["remote"]), set())):
+                    del branches[name]                      # a teammate's branch: followed once, as theirs
+                    sid = cloud_session_id(common_dir, chosen["remote"], name)
+                    if sid in self.sessions:
+                        self._end_cloud([self.sessions[sid]], "followed as a teammate's branch")
                 self._sync_cloud(common_dir, key, chosen, branches, mine)
         self._end_cloud([s for s in self.sessions.values() if s["agent"] == CLOUD_AGENT
                          and self._repo_keys.get(s["repo_id"]) not in watched], "not watched")
@@ -944,6 +1037,14 @@ class Coordinator:
         read from elsewhere): they keep nothing awake."""
         return sum(1 for s in self.sessions.values()
                    if s["state"] == "live" and not (hooked_only and s["agent"] in NO_NOTES))
+
+
+def _team_row(session, remote_name, f):
+    """The team_sessions row of a teammate's branch, from its TeamFacts."""
+    return {"session_id": session["id"], "repo_id": session["repo_id"], "remote": remote_name, "branch": f.branch,
+            "people": list(f.people), "own": int(f.own), "writers": list(f.writers), "evidence": "commits",
+            "tip": f.tip, "tip_time": f.tip_time, "as_of": f.as_of, "agents": list(f.agents), "task": f.task,
+            "merged": f.merged, "contained_in": [], "builds_on": []}
 
 
 def _storable(line):
