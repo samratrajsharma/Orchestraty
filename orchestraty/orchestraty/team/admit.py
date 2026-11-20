@@ -162,7 +162,7 @@ def read_tips(shadow, refs, budget=None):
     return out
 
 
-def writer_row(repo_id, remote_name, person, device, tip, verdict, now):
+def writer_row(repo_id, remote_name, person, device, tip, verdict, now, store="ref"):
     """The team_writers row for one writer as read now: what status and the dashboard show of it.
     A ref whose person or device is no name a record could have is kept cleaned, as a note would
     show it; an admitted record's sessions are kept as entries (the confirmed line among them, for
@@ -175,7 +175,7 @@ def writer_row(repo_id, remote_name, person, device, tip, verdict, now):
         verdict_word = "ignored" if verdict.discarded.get("cap") and not verdict.why else "dropped"
     return {"repo_id": repo_id, "remote": remote_name,
             "person": person if grammar.person(person) else clean(person, 60),
-            "device": device if grammar.device(device) else clean(device, 20), "store": "ref",
+            "device": device if grammar.device(device) else clean(device, 20), "store": store,
             "commit_id": tip.commit if grammar.sha(tip.commit) else "", "seq": record.seq if record else 0,
             "written": record.written if record else 0, "read": int(now * 1_000_000_000), "verdict": verdict_word,
             "why": summary(verdict),

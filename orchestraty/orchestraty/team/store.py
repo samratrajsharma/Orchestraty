@@ -14,6 +14,15 @@ only replace what this device last saw. There is no push before a team fetch has
 A remote value this device never wrote means another machine writes as this device (a copied
 state folder): the outbox then stops until ``orch team device --new`` gives one of them its own.
 
+**The records branch** is the fallback for a host that refuses custom refs (it hides them, or a
+hook says no): ``refs/heads/orchestraty/records``, holding ``records/<person>/<device>.json`` for
+each writer, in the same JSON. A writer switches to it after its first refusal and keeps that
+choice beside the shadow; readers always read both stores, the higher seq winning. Each commit
+says ``orchestraty records: <person>/<device> <seq> [skip ci]``, which the usual CI systems
+honour, and the branch holds no project file for one that does not. A writer that finds more
+than 500 commits there starts it again from an orphan commit, leaving out records older than
+four times ``team_stale_days``.
+
 Callers hold the shadow's lock (``locked``), which the cloud fetch shares.
 """
 import os
@@ -30,6 +39,9 @@ RECORDS = "refs/orch-team/{}/records"
 STORE = "refs/orch-team/{}/store"
 HEADS = "refs/orch-team/{}/heads"
 MAX_NAMED = 100                   # teammates' branches one fetch brings
+BRANCH = "refs/heads/orchestraty/records"
+BRANCH_COMPACT_COMMITS = 500      # past this, a writer starts the records branch again from an orphan commit
+BRANCH_TRIES = 3
 LOCK_WAIT = 30
 COMPACT_COMMITS = 100
 COMPACT_DAYS = 30
@@ -120,6 +132,125 @@ def drop_unnamed(shadow, remote_name, names):
     for ref in out.split() if rc == 0 else []:
         if ref[len(prefix):] not in names:
             shadow.git(["update-ref", "-d", ref])
+
+
+def read_branch_writers(shadow, remote_name):
+    """[(person, device, admit.Tip)] of the records in the records branch as last fetched: each
+    file records/<person>/<device>.json, under the commit that last changed it. A file of any
+    other place or name is not read, nor one over 256 KiB."""
+    from orchestraty.team.admit import Tip
+    tip = _rev(shadow, STORE.format(remote_name))
+    if not tip:
+        return []
+    rc, out = shadow.git(["ls-tree", "-r", "-l", "-z", tip, "--", "records/"])
+    found = []
+    for entry in out.split("\0") if rc == 0 else []:
+        meta, tab, path = entry.partition("\t")
+        fields, parts = meta.split(), path.split("/")
+        if not tab or len(fields) != 4 or fields[:2] != ["100644", "blob"] or len(parts) != 3:
+            continue
+        person, device = parts[1], parts[2][:-len(".json")] if parts[2].endswith(".json") else ""
+        if not (grammar.person(person) and grammar.device(device)):
+            continue
+        rc, log = shadow.git(["log", "-1", "--format=%H %ae", tip, "--", path])
+        commit, _, author = log.strip().partition(" ")
+        if int(fields[3]) > recordfile.MAX_BYTES:
+            found.append((person, device, Tip(commit, author, None, "too-large")))
+            continue
+        rc, data = shadow.git(["cat-file", "blob", fields[2]], raw=True)
+        found.append((person, device, Tip(commit, author, data if rc == 0 else None, "" if rc == 0 else "not-a-record")))
+    return sorted(found, key=lambda x: (x[0], x[1]))
+
+
+def _rev(shadow, ref):
+    if not shadow.exists():
+        return ""
+    rc, out = shadow.git(["rev-parse", "--verify", "--quiet", ref + "^{commit}"])
+    return out.strip() if rc == 0 else ""
+
+
+class BranchStore:
+    """This device's record in the records branch, for a host that refuses custom refs."""
+
+    def __init__(self, shadow, remote_name, person, device, email):
+        self.shadow, self.remote_name = shadow, remote_name
+        self.person, self.device, self.email = person, device, email
+        self.seen = STORE.format(remote_name)          # the branch's tip at the last fetch
+        self.path = f"records/{person}/{device}.json"
+
+    def push(self, url, data, record, now, stale_days, ssh_configured=False):
+        """Write the record's bytes as this writer's file on the branch and push it with a lease
+        on the tip it was built on: a writer that pushed meanwhile makes it fetch and build again,
+        at most three times. Returns a Sent (pushed, unchanged, stale, refused or failed)."""
+        result = None
+        for _ in range(BRANCH_TRIES):
+            if not self._fetch_branch(url, ssh_configured):
+                return Sent("failed", "the records branch could not be fetched")
+            tip = _rev(self.shadow, self.seen)
+            commit = self._commit(tip, data, record, now, stale_days)
+            result = self.shadow.push(url, commit, BRANCH, tip, ssh_configured=ssh_configured)
+            if result.kind in ("new", "fast-forward", "forced", "up to date"):
+                self.shadow.git(["update-ref", self.seen, commit])
+                return Sent("pushed", "")
+            if result.kind != "stale":
+                return Sent("refused" if result.kind == "refused" else "failed", result.detail)
+        return Sent("stale", result.detail if result else "")
+
+    def _fetch_branch(self, url, ssh_configured):
+        try:
+            self.shadow.fetch_refspecs(url, [f"+{BRANCH}*:{self.seen}*"], ssh_configured=ssh_configured)
+        except (remote.RemoteError, remote.ShadowBroken, gitio.GitError, OSError):
+            return False
+        return True
+
+    def _commit(self, tip, data, record, now, stale_days):
+        """A commit of the branch with this writer's file, on `tip` (or an orphan one holding the
+        files still fresh, when the branch has grown past BRANCH_COMPACT_COMMITS)."""
+        blob = self._out(["hash-object", "-w", "--stdin"], data=data)
+        index = os.path.join(self.shadow.path, "orchestraty-records.index")
+        env = {"GIT_INDEX_FILE": index}
+        try:
+            os.remove(index)
+        except FileNotFoundError:
+            pass
+        compact = bool(tip) and int(self._out(["rev-list", "--count", tip]) or 0) > BRANCH_COMPACT_COMMITS
+        if tip and not compact:
+            self._out(["read-tree", tip], env=env)
+        else:
+            self._out(["read-tree", "--empty"], env=env)
+            for path, kept in self._fresh(tip, now - 4 * stale_days * DAY) if compact else ():
+                self._out(["update-index", "--add", "--cacheinfo", f"100644,{kept},{path}"], env=env)
+        self._out(["update-index", "--add", "--cacheinfo", f"100644,{blob},{self.path}"], env=env)
+        tree = self._out(["write-tree"], env=env)
+        os.remove(index)
+        stamp = f"{record.written} +0000"
+        names = {"GIT_AUTHOR_NAME": self.person, "GIT_COMMITTER_NAME": self.person, "GIT_AUTHOR_EMAIL": self.email,
+                 "GIT_COMMITTER_EMAIL": self.email, "GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp}
+        message = f"orchestraty records: {self.person}/{self.device} {record.seq} [skip ci]"
+        return self._out(["commit-tree", "--no-gpg-sign", tree] + (["-p", tip] if tip and not compact else [])
+                         + ["-m", message], env=names)
+
+    def _fresh(self, tip, since):
+        """(path, blob) of the branch's records written since `since`."""
+        rc, out = self.shadow.git(["ls-tree", "-r", "-z", tip, "--", "records/"])
+        for entry in out.split("\0") if rc == 0 else []:
+            meta, tab, path = entry.partition("\t")
+            fields = meta.split()
+            if not tab or len(fields) != 3 or path == self.path:
+                continue
+            rc, data = self.shadow.git(["cat-file", "blob", fields[2]], raw=True)
+            try:
+                written = recordfile.parse_structure(data).record.written if rc == 0 else 0
+            except recordfile.Refused:
+                written = 0
+            if written >= since:
+                yield path, fields[2]
+
+    def _out(self, args, env=None, data=None):
+        rc, out = self.shadow.git(args, env=env, data=data)
+        if rc != 0:
+            raise gitio.GitError(f"git {args[0]} failed in the shadow")
+        return out.strip()
 
 
 class Outbox:

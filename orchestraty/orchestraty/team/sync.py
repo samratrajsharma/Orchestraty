@@ -73,13 +73,43 @@ def send(state, common_dir, now, now_ns):
             url = remote.push_url(common_dir, chosen["remote"])
         except remote.RemoteError as exc:
             return outcome(f"failed: {exc}", sealed, outbox.tip())
-        sent = outbox.push(url, now, remote._ssh_configured(common_dir))
+        ssh = remote._ssh_configured(common_dir)
+        branch = store.BranchStore(shadow, chosen["remote"], sealed.record.person, sealed.record.device, email)
+        if (teamfile.read(shadow).get("store") or "ref") == "ref":
+            sent = outbox.push(url, now, ssh)
+            if sent.kind == "refused":                   # the host refuses custom refs: the records branch
+                teamfile.update(shadow, store="branch")
+                sent = _to_branch(branch, outbox, shadow, url, now, cfg, ssh)
+        else:
+            sent = _to_branch(branch, outbox, shadow, url, now, cfg, ssh)
         kept = teamfile.read(shadow).get("push") or {}
         ok = sent.kind in ("pushed", "unchanged")
         teamfile.update(shadow, push={"at": int(now), "ok": ok, "error": "" if ok else sent.detail[:300],
                                       "failures": 0 if ok else int(kept.get("failures") or 0) + 1})
         result = sent.kind if ok or not sent.detail else f"{sent.kind}: {sent.detail}"
         return outcome(result, sealed, outbox.tip())
+
+
+def _to_branch(branch, outbox, shadow, url, now, cfg, ssh):
+    """Push the outbox's last record to the records branch; the outbox remembers it as pushed."""
+    tip = outbox.tip()
+    rc, data = shadow.git(["cat-file", "blob", f"{tip}:record.json"], raw=True)
+    if rc != 0:
+        return store.Sent("failed", "the outbox's last record cannot be read")
+    from orchestraty.team import recordfile
+    sent = branch.push(url, data, recordfile.parse_structure(data).record, now, cfg["team_stale_days"], ssh)
+    if sent.kind in ("pushed", "unchanged"):
+        teamfile.update(shadow, last_pushed=tip)
+    return sent
+
+
+def _seq(tip):
+    """The seq a tip's record says, 0 for one that cannot be read."""
+    from orchestraty.team import recordfile
+    try:
+        return recordfile.parse_structure(tip.blob).record.seq if tip.blob is not None else 0
+    except recordfile.Refused:
+        return 0
 
 
 class TeamSync:
@@ -99,6 +129,7 @@ class TeamSync:
         self._names = {}                # common_dir -> the branches the last admitted records name
         self._gates = {}                # common_dir -> (key, people, effective, me, device)
         self._read = {}                 # common_dir -> (what was read, [(person, device, Tip, Admitted)])
+        self._stores = {}               # common_dir -> {(person, device): "ref" or "branch"}
         self.fetched = set()            # repositories whose fetch finished since the coordinator looked
 
     def arm(self, common_dir, now):
@@ -239,7 +270,7 @@ class TeamSync:
         if gate is None:
             return []
         refs = store.read_writers(shadow, remote_name)
-        seen = (gate[0], tuple(refs))
+        seen = (gate[0], tuple(refs), store._rev(shadow, store.STORE.format(remote_name)))
         kept = self._read.get(common_dir)
         if kept is not None and kept[0] == seen:
             return kept[1]
@@ -248,9 +279,11 @@ class TeamSync:
         last_seqs = {(w["person"], w["device"]): w["seq"] for w in record.team_writers(repo_id)
                      if w["commit_id"] != tips.get((w["person"], w["device"]))}   # a tip read before is no rollback
         out = self._admitted(shadow, common_dir, remote_name, now, last_seqs, refs)
+        stores = self._stores.get(common_dir, {})
         with record.transaction():
             for person, device, tip, verdict in out:
-                record.put_team_writer(admit.writer_row(repo_id, remote_name, person, device, tip, verdict, now / NS))
+                record.put_team_writer(admit.writer_row(repo_id, remote_name, person, device, tip, verdict, now / NS,
+                                                        stores.get((person, device), "ref")))
         self._read[common_dir] = (seen, out)
         return out
 
@@ -275,8 +308,17 @@ class TeamSync:
         _, folks, eff, me, device = gate
         refs = store.read_writers(shadow, remote_name) if refs is None else refs
         mine = [(p, d, r) for p, d, r, _ in refs if (p, d) != (me.person, device.id)]
-        tips = admit.read_tips(shadow, mine)
-        return admit.admit_all(tips, folks, eff, last_seqs, now / NS,
+        tips, stores = {}, {}
+        for person, device_id, tip in admit.read_tips(shadow, mine):
+            tips[(person, device_id)], stores[(person, device_id)] = tip, "ref"
+        for person, device_id, tip in store.read_branch_writers(shadow, remote_name):
+            if (person, device_id) == (me.person, device.id):
+                continue
+            held = tips.get((person, device_id))
+            if held is None or _seq(tip) > _seq(held):          # a writer in both stores: the higher seq wins
+                tips[(person, device_id)], stores[(person, device_id)] = tip, "branch"
+        self._stores[common_dir] = stores
+        return admit.admit_all([(p, d, t) for (p, d), t in sorted(tips.items())], folks, eff, last_seqs, now / NS,
                                admit.exists_in(shadow, f"refs/orch/{remote_name}/HEAD"))
 
     def _gate(self, shadow, common_dir, remote_name):
