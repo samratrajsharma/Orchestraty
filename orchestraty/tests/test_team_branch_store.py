@@ -156,7 +156,7 @@ def test_readers_merge_ref_and_branch_writers(team):  # noqa: F811
 
 
 def test_branch_store_compacts(team, refusing_remote, tmp_path, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(store, "BRANCH_COMPACT_COMMITS", 4)
+    monkeypatch.setattr(store, "BRANCH_COMPACT_COMMITS", 2)
     ann, ben = on(refusing_remote.hook, tmp_path, team)
     try:
         ann.team_on()
@@ -171,10 +171,10 @@ def test_branch_store_compacts(team, refusing_remote, tmp_path, monkeypatch):  #
         first = run_git(refusing_remote.hook, "commit-tree", tree, "-m", "orchestraty records: carol/0123456789ab 1 "
                         "[skip ci]", identity=("carol", "carol@example.com"))
         run_git(refusing_remote.hook, "update-ref", BRANCH, first)
-        for n in range(6):
+        for n in range(3):                                                         # the third finds more than 2
             ann.push_work(f"A{n}", f"feat/n{n}", f"pkg/n{n}.py", f"N = {n}\n")
         count = int(run_git(refusing_remote.hook, "rev-list", "--count", BRANCH))
-        assert count <= 5
+        assert count <= 2
         root = run_git(refusing_remote.hook, "rev-list", "--max-parents=0", BRANCH)
         assert root != first                                                      # an orphan commit started again
         files = run_git(refusing_remote.hook, "ls-tree", "-r", "--name-only", BRANCH).splitlines()

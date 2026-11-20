@@ -27,7 +27,7 @@ def fetch(machine):
                                machine.clock() / NS)
 
 
-def send(machine, sealed=None):
+def send(machine, sealed=None, compact_commits=store.COMPACT_COMMITS):
     """Seal this machine's record (unless given), write it to the outbox and push it, under the
     shadow's lock: what team sync does after the user's own push. Returns (commit or None, Sent)."""
     now = machine.clock() / NS
@@ -35,7 +35,7 @@ def send(machine, sealed=None):
     outbox = outbox_of(machine)
     with store.locked(outbox.shadow):
         try:
-            commit = outbox.write(sealed, now)
+            commit = outbox.write(sealed, now, compact_commits)
         except store.Clash:
             commit = None
         sent = outbox.push(remote.push_url(common(machine), "origin"))
@@ -107,11 +107,11 @@ def test_chain_compacts_and_reader_reads_the_tip(team):  # noqa: F811
     started(alice)
     fetch(alice)
     outbox = outbox_of(alice)
-    for n in range(120):
-        commit, sent = send(alice, sealed_with(alice, 1_795_000_080 + 60 * n, outbox.next_seq()))
+    for n in range(12):                                                            # team_compact_commits 10: past it
+        commit, sent = send(alice, sealed_with(alice, 1_795_000_080 + 60 * n, outbox.next_seq()), compact_commits=10)
         assert commit and sent.kind == "pushed", (n, sent)
     tip = ref_on_remote(team, alice)
-    assert int(run_git(team.remote, "rev-list", "--count", tip)) <= 100
+    assert int(run_git(team.remote, "rev-list", "--count", tip)) <= 10
     root = run_git(team.remote, "rev-list", "--max-parents=0", tip)
     assert "parent " not in run_git(team.remote, "cat-file", "commit", root)
     assert run_git(team.remote, "log", "-1", "--format=%s", root).endswith("(compacted)")
@@ -120,7 +120,7 @@ def test_chain_compacts_and_reader_reads_the_tip(team):  # noqa: F811
     fetch(bob)
     data = remote.Shadow(bob.state, common(bob)).git(
         ["cat-file", "blob", f"refs/orch-team/origin/records/alice/{outbox.device}:record.json"], raw=True)[1]
-    assert json.loads(data)["seq"] == 120                                          # the tip, read whole
+    assert json.loads(data)["seq"] == 12                                           # the tip, read whole
 
 
 def test_lost_outbox_continues_from_remote_seq(team):  # noqa: F811

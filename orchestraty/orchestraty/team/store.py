@@ -312,11 +312,10 @@ class Outbox:
             raise seal.SealError("the record names another writer")
         self.shadow.ensure()
         parent = self.parent()
-        if parent:
-            before = self._record(parent)
-            if before is not None and recordfile.content_key(before) == recordfile.content_key(record):
-                return None
-        expected_seq = self._seq(parent) + 1 if parent else 1
+        before = self._record(parent) if parent else None
+        if before is not None and recordfile.content_key(before) == recordfile.content_key(record):
+            return None
+        expected_seq = before.seq + 1 if before is not None else 1
         if record.seq != expected_seq:
             raise seal.SealError(f"the record's seq is {record.seq}, not the next one ({expected_seq})")
         compact = bool(parent) and self._compaction_due(parent, now, compact_commits)
@@ -374,11 +373,12 @@ class Outbox:
         return True
 
     def _compaction_due(self, parent, now, compact_commits):
-        if int(self._out(["rev-list", "--count", parent]) or 0) >= compact_commits:
+        """Whether the chain ending at `parent` is long enough, or its root old enough, to start
+        again: one git call, the commits' times newest first (the root's is the last)."""
+        times = self._out(["log", "--format=%ct", f"--max-count={compact_commits}", parent]).split()
+        if len(times) >= compact_commits:
             return True
-        roots = self._out(["rev-list", "--max-parents=0", parent]).split()
-        when = int(self._out(["log", "-1", "--format=%ct", roots[0]]) or 0) if roots else 0
-        return when < now - COMPACT_DAYS * DAY
+        return bool(times) and int(times[-1]) < now - COMPACT_DAYS * DAY
 
     def _commit(self, ref):
         if not self.shadow.exists():
