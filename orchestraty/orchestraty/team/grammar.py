@@ -23,6 +23,7 @@ _DRIVE = re.compile(r"[A-Za-z]:")
 _DUPLICATE = re.compile(r"#[1-9][0-9]{0,5}")
 _TICKET_KEY = re.compile(r"[A-Z][A-Z0-9]{1,9}")
 _ISSUE = re.compile(r"(?:#|GH-)[0-9]{1,7}")
+_TOOL = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:(?:\.dev|a|b|rc)[0-9]{1,4})?")
 _NOT_IN_PATHS = ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp")       # controls, bidi and zero-width, surrogates, ...
 LOCALS = "<locals>"
 
@@ -236,3 +237,8 @@ def time(value):
 
 def seq(value):
     return _int(value) and 1 <= value <= MAX_SEQ
+
+
+def tool(value):
+    """The version of Orchestraty a record was written by, such as 0.2.0, 0.2.0.dev1 or 1.0.0rc2."""
+    return isinstance(value, str) and bool(_TOOL.fullmatch(value))
