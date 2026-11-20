@@ -145,3 +145,5 @@ def test_the_team_block_is_documented_both_ways(state, repo, git, tmp_path, monk
     from orchestraty.team import view
     assert set(t["fetch"]) == set(doc["`team.fetch`"])                         # orch team on's first fetch
     assert set(view.session_team(None, with_lines=True)) == set(doc["Team session"])
+    claim = {"kind": "area", "target": "pkg", "file": "", "hard": 1, "since": 5_000_000_000, "until": 9_000_000_000}
+    assert set(view.team_claim(claim)) == set(doc["Team claim"])

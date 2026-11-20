@@ -299,12 +299,15 @@ class Workspace:
         self.top, self.repo_id, self.common_key, self.head = None, None, None, ""
         self.me, self._several, self.vouched = None, [], False
         self.sessions, self.findings, self.changes, self.declared, self.claims = {}, [], {}, {}, []
+        self.team_rows, self.team_claims, self._named_sessions = {}, [], None
         self.record = Record(state.record, readonly=True) if os.path.exists(state.record) else None
         if self.record is not None:
             self.sessions = {s["id"]: s for s in self.record.sessions()}
             for d in self.record.declarations(active_at=int(self.now * NS)):
                 self.declared.setdefault(d["session_id"], []).append(d)
             self.claims = self.record.claims(active_at=int(self.now * NS))
+            self.team_rows = {r["session_id"]: r for r in self.record.team_sessions()}
+            self.team_claims = self.record.team_planned(active_at=int(self.now * NS))
 
     def close(self):
         if self.record is not None:
@@ -379,6 +382,9 @@ class Workspace:
                                 "session's id instead (orch status lists them).")
             raise ToolError(f"No live session works in {templates.clean(info['top'], 200)}.")
         found = _by_id(ours, ref)
+        if len(found) == 1 and found[0]["agent"] == sessionkinds.TEAM:
+            raise ToolError(f"{templates.clean(ref, 60)} is a teammate's branch, followed from the remote: its work is "
+                            "on another machine, so no tool answers in its name.")
         if len(found) == 1:
             return found[0]
         if found:
@@ -387,6 +393,31 @@ class Workspace:
             raise ToolError(f"The session {templates.clean(ref, 60)} does not work in {where}: this server answers "
                             "only for the sessions working there.")
         raise ToolError(f"No live session has the id {templates.clean(ref, 60)} (orch status lists them).")
+
+    def named(self, s):
+        """A session as a note names it: a teammate's branch with who works on it."""
+        if s["agent"] != sessionkinds.TEAM:
+            return s
+        row = self.team_rows.get(s["id"]) or {}
+        return dict(s, people=row.get("people") or [], own=bool(row.get("own")))
+
+    def named_sessions(self):
+        if self._named_sessions is None:
+            self._named_sessions = {sid: self.named(s) for sid, s in self.sessions.items()}
+        return self._named_sessions
+
+    def held(self, s, path, symbol=None):
+        """A teammate's claims that hold now on the file at `path` (asked about a function: on that
+        function, or on its file or a folder above it)."""
+        out = []
+        for c in self.team_claims:
+            if c["session_id"] != s["id"]:
+                continue
+            if c["kind"] == "symbol" and (c["target"] == symbol if symbol else c["file"] == path):
+                out.append(c)
+            elif c["kind"] != "symbol" and claiming.covers(c, path):
+                out.append(c)
+        return out
 
     def live(self):
         """The live sessions of this repository, oldest first."""
@@ -486,10 +517,15 @@ class Workspace:
 
 
 def _session_facts(ws, s, me):
-    return {"session": s["id"], "you": me is not None and s["id"] == me["id"], "agent": s["agent"],
-            "worktree": templates.clean(os.path.basename(s["worktree"]) or "?", 60),
-            "branch": templates.clean(s["branch"], 60) if s["branch"] else "",
-            "last_event": _iso(s["last_seen"] / NS), "seconds_since_last_event": max(0, int(ws.now - s["last_seen"] / NS))}
+    out = {"session": s["id"], "you": me is not None and s["id"] == me["id"], "agent": s["agent"],
+           "worktree": templates.clean(os.path.basename(s["worktree"]) or "?", 60),
+           "branch": templates.clean(s["branch"], 60) if s["branch"] else "",
+           "last_event": _iso(s["last_seen"] / NS), "seconds_since_last_event": max(0, int(ws.now - s["last_seen"] / NS))}
+    if s["agent"] == sessionkinds.TEAM:            # a teammate's branch: who works on it, by their cleaned handles
+        row = ws.team_rows.get(s["id"]) or {}
+        out.update(worktree="", people=[templates.clean(p, 60) for p in row.get("people") or []], teammate=True,
+                   evidence=templates.clean(row.get("evidence") or "commits", 10))
+    return out
 
 
 def _change(c):
@@ -523,16 +559,20 @@ def who_is_changing(ws, args):
         in_file = [c for c in symbols if path in (_file_of(c["symbol"]), _file_of(c.get("moved_from")))]
         named = [c for c in symbols if symbol in (c["symbol"], c.get("moved_from"))] if symbol else []
         declared = [d for d in ws.declared.get(s["id"], []) if path in d["paths"] or (symbol and symbol in d["symbols"])]
+        held = ws.held(s, path, symbol) if s["agent"] == sessionkinds.TEAM else []
         changes_file = path in files or path in unattributed
-        if symbol and not named and not declared:
+        if symbol and not named and not declared and not held:
             others_in_file += changes_file and (me is None or s["id"] != me["id"])
             continue
-        if not symbol and not changes_file and not declared:
+        if not symbol and not changes_file and not declared and not held:
             continue
         row = _session_facts(ws, s, me)
         row.update(file=files.get(path) or ("not attributed" if path in unattributed else ""),
                    changes=[_change(c) for c in (named if symbol else in_file)],
                    declared=[_declared(d, ws.mine(s)) for d in declared])
+        if s["agent"] == sessionkinds.TEAM:          # their shared claims: they only inform
+            row["claims"] = [{"kind": c["kind"], "target": templates.clean(c["target"], 200),
+                              "file": templates.clean(c["file"], 200), "until": _iso(c["until"] / NS)} for c in held]
         rows.append(row)
     target = (f"{templates.clean(symbol.split('::', 1)[1], 120)} in {templates.clean(path, 200)}" if symbol
               else templates.clean(path, 200))
@@ -548,7 +588,10 @@ def who_is_changing(ws, args):
             what.append(f"{c['symbol'].split('::', 1)[-1]} {c['kind']}{contract}{reasons}")
         for d in r["declared"]:
             what.append("declared it until " + _hhmm(d["until"]))
-        who = "you" if r["you"] else templates.describe(ws.sessions[r["session"]])
+        teammate = templates.describe(ws.named(ws.sessions[r["session"]])).split(" (", 1)[0]
+        for c in r.get("claims", []):
+            what.append(f"claimed by {teammate} until {_hhmm(c['until'])} (informs only)")
+        who = "you" if r["you"] else templates.describe(ws.named(ws.sessions[r["session"]]))
         lines.append(f"- {who}, last event {_ago(r['seconds_since_last_event'])}: {'; '.join(what or ['changing it'])}.")
     if symbol and others_in_file:
         lines.append(f"{others_in_file} other live session(s) change other parts of {templates.clean(path, 200)}.")
@@ -568,7 +611,8 @@ def check_before_edit(ws, args):
             continue
         if me is not None and f["rule"] != "O6" and f["receiver"] == me["id"] and f["file"] == path:
             elsewhere = not _same(changer["worktree"], me["worktree"])
-            items.append(("uses_broken", f, templates.for_user(f, changer, before_edit=True, elsewhere=elsewhere)))
+            items.append(("uses_broken", f, templates.for_user(f, ws.named(changer), before_edit=True,
+                                                               elsewhere=elsewhere)))
         elif me is None and f["rule"] == "O6":
             # No session works here yet: the callers in the base commit that no session has updated.
             d = f["detail"]
@@ -586,7 +630,7 @@ def check_before_edit(ws, args):
         theirs = [c for c in symbols if _file_of(c["symbol"]) == path and c["kind"] in CHANGED_KINDS]
         for c in theirs:
             items.append(("also_changing", {"symbol": c["symbol"], "session": s["id"]},
-                          templates.for_both({"symbol": c["symbol"]}, s)))
+                          templates.for_both({"symbol": c["symbol"]}, ws.named(s))))
         others_changed_file += bool(not theirs and (path in files or path in unattributed))
     if me is not None:
         for f in ws.findings:
@@ -601,12 +645,22 @@ def check_before_edit(ws, args):
             # a hard claim: the caller's edit waits for its user only where its own hook asks
             ask = (me is not None and adapters.asks(me["agent"])) if c["hard"] else None
             items.append(("claimed", c, templates.claimed(c, claimer, ask=ask)))
+    for c in ws.team_claims:                                    # a teammate's: it only informs, whatever its kind
+        teammate = ws.sessions.get(c["session_id"])
+        if (teammate is not None and teammate["state"] == "live" and teammate["repo_id"] == ws.repo_id
+                and claiming.covers(c, path)):
+            shared = (ws.team_rows.get(c["session_id"]) or {}).get("as_of") or None
+            items.append(("team_claimed", c, templates.team_claimed(c, ws.named(teammate), shared_at=shared)))
     data = {"path": path, "session": me["id"] if me else None, "uses_broken": [], "also_changing": [],
             "same_folder": [], "claimed": [], "others_changed_file": others_changed_file,
             "notes": [t for _, _, t in items], "coverage": templates.COVERAGE, "scope": SCOPE,
             "coordinator": ws.coordinator()}
     for kind, f, text in items:
-        if kind == "claimed":
+        if kind == "team_claimed":
+            data["claimed"].append({"claim": None, "teammate": True, "hard": False, "kind": f["kind"],
+                                    "target": templates.clean(f["target"], 200), "session": f["session_id"],
+                                    "until": _iso(f["until"] / NS), "note": text})
+        elif kind == "claimed":
             data[kind].append({"claim": f["id"], "kind": f["kind"], "target": templates.clean(f["target"], 200),
                                "hard": bool(f["hard"]), "session": f["session_id"], "until": _iso(f["expires"] / NS),
                                "note": text})
@@ -629,12 +683,15 @@ def check_before_edit(ws, args):
         data["base_commit"] = ws.head
         text += (" No session works in this worktree yet, so the uses are those of the other sessions' base commit; "
                  f"this worktree is at {ws.head[:12] or 'no commit'}.")
+        if any(s["agent"] == sessionkinds.TEAM for s in ws.live()):
+            text += (" A teammate's branch is compared with a session's own copy, so its changes show here once a "
+                     "session works in this worktree.")
     return data, text
 
 
 def _overlap_note(ws, f, me):
     """What a finding tells the caller, in the notes' words."""
-    return templates.about(f, me, ws.sessions)
+    return templates.about(f, me, ws.named_sessions())
 
 
 def my_overlaps(ws, args):

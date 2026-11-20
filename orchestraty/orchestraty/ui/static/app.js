@@ -9,7 +9,7 @@ const ALL_KEY = 'orch-ui-all'
 const REPO_KEY = 'orch-ui-repo'
 const TOUR_KEY = 'orch-ui-tour-min'
 const EASE = 'cubic-bezier(.16, 1, .3, 1)'
-const AGENTS = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity', git: 'plain git', cloud: 'cloud branch' }
+const AGENTS = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity', git: 'plain git', cloud: 'cloud branch', team: 'teammate' }
 const STRENGTHS = ['strong', 'medium', 'weak']
 const STRENGTH_WORDS = {
   strong: ['Strong', 'Would break when merged. The affected agent hears before its next edit.'],
@@ -417,6 +417,10 @@ function learn (map) {
 }
 function sname (s, id) {
   if (!s) return String(id || '').slice(0, 8) || '?'
+  if (s.agent === 'team') {          // a teammate's branch, by who works on it: "bob · feat/refunds"
+    const who = (s.people || []).length ? s.people.join(' and ') : (s.own ? 'You, on another machine' : 'A teammate')
+    return who + ' · ' + String(s.branch || '').replace(/^[^/]*\//, '')
+  }
   return baseName(s.worktree) || (s.branch ? s.branch : String(s.id).slice(0, 8))
 }
 const N = (id) => sname(known[id], id)
@@ -427,7 +431,7 @@ function colorOf (id) {
 }
 function avatar (s, id, size) {
   const sid = (s && s.id) || id
-  const git = s && (s.agent === 'git' || s.agent === 'cloud')
+  const git = s && (s.agent === 'git' || s.agent === 'cloud' || s.agent === 'team')
   const parts = sname(s, sid).split(/[-_./ ]+/).filter(Boolean)
   const el = h('span', { class: 'av' + (size ? ' ' + size : '') + (git ? ' git' : ''), 'aria-hidden': 'true' },
     (parts[parts.length - 1] || '?').slice(0, 1).toUpperCase())
@@ -441,6 +445,7 @@ function stateOf (s) {
   if (s.state !== 'live') return ['Ended', '', s.note || 'ended']
   if (s.agent === 'git') return ['Plain git', '', 'seen through git']
   if (s.agent === 'cloud') return ['Cloud branch', '', 'fetched from the remote']
+  if (s.agent === 'team') return ['Teammate', '', 'read from their commits']
   if (s.turn === 'working') return ['Working', 'ok', 'working on a turn']
   if (s.turn === 'idle') return ['Waiting', 'medium', 'waiting for its user']
   return ['Idle', '', 'idle']

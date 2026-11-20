@@ -77,7 +77,7 @@ def collect(state, include_ended=False, now=None, with_lines=False):
     cfg = config.load(state)
     data = {"schema": STATUS_SCHEMA, "coordinator": _coordinator(state, now), "repositories": []}
     sessions_by_repo, repo_rows, changes, findings, declared, claimed, every = {}, {}, {}, {}, {}, {}, {}
-    teams = {}
+    teams, planned = {}, {}
     if os.path.exists(state.record):
         record = Record(state.record, readonly=True)
         try:
@@ -100,6 +100,8 @@ def collect(state, include_ended=False, now=None, with_lines=False):
                     teams[r["id"]] = (record.team_writers(r["id"]), record.withheld(r["id"], int((now - 86400) * NS)),
                                       sent[0] if sent else None,
                                       {t["session_id"]: t for t in record.team_sessions(r["id"])})
+                for item in record.team_planned(active_at=int(now * NS)):
+                    planned.setdefault(item["session_id"], []).append(item)
         finally:
             record.close()
     checked = {}
@@ -129,7 +131,8 @@ def collect(state, include_ended=False, now=None, with_lines=False):
             followed = sorted((s for s in sessions if s["agent"] == sessionkinds.TEAM and s["state"] == "live"),
                               key=lambda s: (s["branch"], s["id"]))
             shown = [dict(_session(s, now, changes.get(s["id"], ({}, [], [], {}))),
-                          team=view.session_team(rows.get(s["id"]), with_lines)) for s in followed]
+                          team=view.session_team(rows.get(s["id"]), with_lines, planned.get(s["id"], ())))
+                     for s in followed]
             block = view.block(state, cfg, common_dir, writers, withheld, sent, now, with_lines=with_lines,
                                sessions=shown)
             if block is not None:
@@ -429,6 +432,9 @@ def _team_branch_lines(t, tty):
         summary = _summary(s["changes"])
         if summary:
             lines.append("      " + summary)
+        for c in tm.get("claims", []):                  # shared by them: shown, never honoured here
+            lines.append(f"      claimed: {claiming.describe(c)} until {_local(c['until'])}"
+                         + (", hard" if c["hard"] else "") + " (informs only here)")
     return lines
 
 

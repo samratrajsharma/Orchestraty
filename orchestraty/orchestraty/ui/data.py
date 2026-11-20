@@ -13,7 +13,7 @@ import statistics
 import time
 from contextlib import contextmanager
 
-from orchestraty import __version__, config, status
+from orchestraty import __version__, config, sessionkinds, status
 from orchestraty.coordinator.record import Record, repo_name
 from orchestraty.delivery import slots
 
@@ -74,10 +74,19 @@ def _order(f):
     return (_STRENGTH.get(f["strength"], 9), f["rule"], f["key"])
 
 
-def _who(s):
-    """How the page names a session, and where it stands."""
-    return {"id": s["id"], "agent": s["agent"], "worktree": s["worktree"], "branch": s["branch"],
-            "state": s["state"], "turn": s["turn"], "note": s["note"]}
+def _who(s, rows=None):
+    """How the page names a session, and where it stands; a teammate's branch also with who
+    works on it (`rows`: its team_sessions row by session id)."""
+    out = {"id": s["id"], "agent": s["agent"], "worktree": s["worktree"], "branch": s["branch"],
+           "state": s["state"], "turn": s["turn"], "note": s["note"]}
+    if s["agent"] == sessionkinds.TEAM:
+        row = (rows or {}).get(s["id"]) or {}
+        out.update(people=list(row.get("people") or []), own=bool(row.get("own")))
+    return out
+
+
+def _team_rows(record):
+    return {r["session_id"]: r for r in record.team_sessions()}
 
 
 def _facts(s, repo, now):
@@ -181,6 +190,7 @@ def session_payload(state, session_id, now=None):
         events = record.recent_events(session_id, EVENT_LIMIT)
         repos = {r["id"]: r for r in record.repos()}
         everyone = record.sessions()
+        rows = _team_rows(record)
     heard = _heard_with(notes)
     received = [n for n in notes if n["session_id"] == session_id]
     caused = [n for n in notes if n["session_id"] != session_id and _caused_by(findings.get(n["finding_key"]), session_id)]
@@ -192,7 +202,7 @@ def session_payload(state, session_id, now=None):
             "notes_received": [_note(n, findings, heard) for n in reversed(received)],
             "notes_caused": [_note(n, findings, heard) for n in reversed(caused)],
             "events": [_event(e) for e in events], "push": push[0] if push else None,
-            "sessions": {x["id"]: _who(x) for x in everyone if x["repo_id"] == s["repo_id"]}}
+            "sessions": {x["id"]: _who(x, rows) for x in everyone if x["repo_id"] == s["repo_id"]}}
 
 
 def findings_payload(state, which="open"):
@@ -206,6 +216,7 @@ def findings_payload(state, which="open"):
         repos = {r["id"]: r for r in record.repos()}
         sessions = record.sessions()
         labels = _labels(record)
+        rows = _team_rows(record)
     heard = _heard_with(notes)
     by_key = {}
     for n in notes:
@@ -214,7 +225,7 @@ def findings_payload(state, which="open"):
     return {"schema": SCHEMA, "state": which,
             "findings": [_finding(f, repos, by_key.get(f["key"], []), known, heard, labels)
                          for f in sorted(found, key=_order)],
-            "sessions": {s["id"]: _who(s) for s in sessions}}
+            "sessions": {s["id"]: _who(s, rows) for s in sessions}}
 
 
 def finding_payload(state, key):
@@ -226,7 +237,7 @@ def finding_payload(state, key):
         notes = record.notes(finding_key=key)
         repos = {r["id"]: r for r in record.repos()}
         named = set(f["sessions"]) | {f["changer"], f["receiver"]} | {n["session_id"] for n in notes}
-        sessions = {s["id"]: _who(s) for s in record.sessions() if s["id"] in named}
+        sessions = {s["id"]: _who(s, _team_rows(record)) for s in record.sessions() if s["id"] in named}
         labels = _labels(record)
     return {"schema": SCHEMA, "finding": _finding(f, repos, notes, {key: f}, _heard_with(notes), labels),
             "sessions": sessions}
@@ -235,12 +246,13 @@ def finding_payload(state, key):
 def notes_payload(state, session=None, kind=None, note_state=None, limit=NOTE_LIMIT):
     """Every note, newest first, filtered by receiving session, kind and state, with the median
     time to awareness of the delivered ones."""
-    notes, findings, sessions = [], {}, []
+    notes, findings, sessions, rows = [], {}, [], {}
     with _record(state) as record:
         if record is not None:
             notes = record.notes()
             findings = {f["key"]: f for f in record.findings(states=None)}
             sessions = record.sessions()
+            rows = _team_rows(record)
     heard = _heard_with(notes)
     picked = [n for n in notes if (session is None or n["session_id"] == session)
               and (kind is None or n["kind"] == kind) and (note_state is None or n["state"] == note_state)]
@@ -251,7 +263,8 @@ def notes_payload(state, session=None, kind=None, note_state=None, limit=NOTE_LI
             "notes": [_note(n, findings, heard) for n in picked[:limit]], "total": len(picked),
             "summary": {"delivered": len(delivered), "measured": len(measured),
                         "median_ms": round(statistics.median(measured), 1) if measured else None},
-            "sessions": {s["id"]: _who(s) for s in sessions}, "kinds": list(NOTE_KINDS), "states": list(NOTE_STATES)}
+            "sessions": {s["id"]: _who(s, rows) for s in sessions}, "kinds": list(NOTE_KINDS),
+            "states": list(NOTE_STATES)}
 
 
 def push_lines(state, sessions, changers=()):

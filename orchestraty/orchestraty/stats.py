@@ -3,10 +3,12 @@
 The weeks are the last 7 days, the 7 before them, and so on back over ``--days`` (default 7).
 Each week counts:
 
-* sessions live at some time in it, agent sessions (with hooks), plain-git ones and cloud
-  agents' branches, and pairs: two agent sessions on one repository working at the same time;
+* sessions live at some time in it, agent sessions (with hooks), plain-git ones, cloud
+  agents' branches and teammates' branches, and pairs: two agent sessions on one repository
+  working at the same time;
 * findings first seen in it, by rule and by strength (latent ones apart);
-* notes made in it, by kind and by state, how many were delivered, and the median and 90th
+* notes made in it, by kind, by state and by origin (``team`` when a teammate's branch or
+  claim is what it is about, else ``local``), how many were delivered, and the median and 90th
   percentile of their time to awareness: from the event that caused a note to the note written,
   ready for its agent;
 * notes acted on (a proxy, below), and the findings they were about;
@@ -17,8 +19,13 @@ Each week counts:
   not get because it had heard of the finding already, and notes withdrawn because their
   finding stopped holding before the agent took them. A finding that comes back, or a change
   found again under another session, is not told twice either; the record does not count those;
-* labels given in it by verdict (a finding's latest), and reports of missed notes;
+* labels given in it by verdict (a finding's latest), those of findings with a teammate's branch
+  apart too, and reports of missed notes;
 * an estimate of the tokens the notes handed to agents cost: their characters / 4.
+
+The counts about teammates (``sessions.team``, ``notes.by_origin``, ``labels.team``) are there
+only where team sync was turned on or the record holds teammates' branches, so a solo user's
+stats are as before. Nothing is ever counted by person.
 
 Acted on is a proxy, worked out from the record only: a note handed to its agent counts as
 acted on when, within ``acted_minutes`` of its delivery (30 by default, in config.json), the
@@ -54,6 +61,8 @@ DAY = 86400
 WEEK = 7
 LEVEL0_AGENT = sessionkinds.LEVEL0
 CLOUD_AGENT = sessionkinds.CLOUD
+TEAM_AGENT = sessionkinds.TEAM
+ORIGINS = ("local", "team")
 RULES = ("O1", "O2", "O3", "O4", "O5", "O6", "O7", "W1")
 STRENGTHS = ("strong", "medium", "weak")
 KINDS = ("edit", "next", "stop", "wake")
@@ -165,7 +174,7 @@ def per_session_day(lo, hi, agents, notes):
             "max": max(counts.values(), default=0)}
 
 
-def _week(n, start, end, rec, window_ns):
+def _week(n, start, end, rec, window_ns, team=False):
     lo, hi = int(start * NS), int(end * NS)
     live = [s for s in rec["sessions"].values() if s["started"] < hi and s["last_seen"] >= lo]
     agents = [s for s in live if s["agent"] not in sessionkinds.NO_NOTES]
@@ -190,7 +199,17 @@ def _week(n, start, end, rec, window_ns):
     for row in rec["labels"]:                                              # oldest first: the latest wins
         if lo <= row["ts"] < hi:
             latest[row["finding_key"]] = row["verdict"]
-    return {
+    teams = {sid for sid, s in rec["sessions"].items() if s["agent"] == TEAM_AGENT}
+
+    def origin(key):
+        """team: a note about a teammate's claim, or a finding a teammate's branch is part of."""
+        f = rec["findings"].get(key)
+        team = key.startswith("tclaim|") or (f is not None and bool(teams & ({f["changer"], f["receiver"]}
+                                                                              | set(f["sessions"]))))
+        return "team" if team else "local"
+
+    team_labels = {k: v for k, v in latest.items() if origin(k) == "team"}
+    out = {
         "week": n, "start": _iso(start), "end": _iso(end),
         "sessions": {"live": len(live), "agents": len(agents),
                      "plain_git": sum(1 for s in live if s["agent"] == LEVEL0_AGENT),
@@ -210,13 +229,19 @@ def _week(n, start, end, rec, window_ns):
         "labels": {"total": len(latest), "by_verdict": _counts(latest.values(), VERDICTS)},
         "missed": sum(1 for row in rec["missed"] if lo <= row["ts"] < hi),
     }
+    if team:                                                               # never by person
+        out["sessions"]["team"] = sum(1 for s in live if s["agent"] == TEAM_AGENT)
+        out["notes"]["by_origin"] = _counts((origin(x["finding_key"]) for x in made), ORIGINS)
+        out["labels"]["team"] = {"total": len(team_labels), "by_verdict": _counts(team_labels.values(), VERDICTS)}
+    return out
 
 
 def collect(state, days=7, now=None):
     """The stats of the last `days` days, the latest week first. Reads the record without
     writing to it."""
     now = time.time() if now is None else now
-    window = max(1, config.load(state)["acted_minutes"])
+    cfg = config.load(state)
+    window = max(1, cfg["acted_minutes"])
     rec = {"sessions": {}, "findings": {}, "notes": [], "labels": [], "missed": [], "edits": {}, "noted": set()}
     if os.path.exists(state.record):
         record = Record(state.record, readonly=True)
@@ -230,8 +255,10 @@ def collect(state, days=7, now=None):
             rec["edits"] = _edits(record.edits(int((now - days * DAY) * NS)), rec["sessions"])
         finally:
             record.close()
+    team = bool(cfg["team"]) or any(s["agent"] == TEAM_AGENT for s in rec["sessions"].values())
     return {"schema": STATS_SCHEMA, "version": __version__, "days": days, "acted_minutes": window,
-            "weeks": [_week(i + 1, start, end, rec, window * 60 * NS) for i, (start, end) in enumerate(_weeks(now, days))]}
+            "weeks": [_week(i + 1, start, end, rec, window * 60 * NS, team)
+                      for i, (start, end) in enumerate(_weeks(now, days))]}
 
 
 def summary(data):
@@ -243,9 +270,10 @@ def summary(data):
     weeks = []
     for w in data["weeks"]:
         notes, aware, per_day = w["notes"], w["notes"]["awareness_ms"], w["notes"]["per_session_day"]
+        team = "team" in w["sessions"]
         weeks.append({
             "week": int(w["week"]),
-            "sessions": {k: int(w["sessions"][k]) for k in ("live", "agents", "plain_git", "cloud")},
+            "sessions": {k: int(w["sessions"][k]) for k in ("live", "agents", "plain_git", "cloud") + ("team",) * team},
             "pairs": int(w["pairs"]),
             "findings": {"total": int(w["findings"]["total"]), "by_rule": known(w["findings"]["by_rule"], RULES),
                          "by_strength": known(w["findings"]["by_strength"], STRENGTHS),
@@ -263,6 +291,10 @@ def summary(data):
                       "held_back": {k: int(notes["held_back"][k]) for k in HELD_BACK}},
             "labels": {"total": int(w["labels"]["total"]), "by_verdict": known(w["labels"]["by_verdict"], VERDICTS)},
             "missed": int(w["missed"])})
+        if team:
+            weeks[-1]["notes"]["by_origin"] = known(notes["by_origin"], ORIGINS)
+            weeks[-1]["labels"]["team"] = {"total": int(w["labels"]["team"]["total"]),
+                                           "by_verdict": known(w["labels"]["team"]["by_verdict"], VERDICTS)}
     return {"schema": SUMMARY_SCHEMA, "kind": "orchestraty usage summary", "version": str(__version__),
             "days": int(data["days"]), "acted_minutes": int(data["acted_minutes"]), "weeks": weeks}
 
@@ -292,12 +324,16 @@ def render(data):
         aware, per_day, held = notes["awareness_ms"], notes["per_session_day"], notes["held_back"]
         lines += ["", f"Week {w['week']}  {_day(w['start'])} to {_day(w['end'])}",
                   f"  sessions    {s['live']} live ({s['agents']} agent, {s['plain_git']} plain git"
-                  + (f", {s['cloud']} cloud branch" + ("es" if s["cloud"] != 1 else "") if s["cloud"] else "") + "); "
+                  + (f", {s['cloud']} cloud branch" + ("es" if s["cloud"] != 1 else "") if s["cloud"] else "")
+                  + (f", {s['team']} teammate" + ("'s branch" if s["team"] == 1 else "s' branches")
+                     if s.get("team") else "")
+                  + "); "
                   f"{_plural(w['pairs'], 'pair')} working at the same time",
                   f"  findings    {f['total']}" + (f" ({_some(f['by_strength'])}): {_some(f['by_rule'])}" if f["total"] else "")
                   + (f"; {f['latent']} latent" if f["latent"] else ""),
                   f"  notes       {notes['made']} made" + (f" ({_some(notes['by_kind'])}): {_some(notes['by_state'])}"
-                                                           if notes["made"] else ""),
+                                                           if notes["made"] else "")
+                  + (f"; {notes['by_origin']['team']} about teammates" if notes.get("by_origin", {}).get("team") else ""),
                   "  awareness   " + (f"median {aware['median']} ms, 90th percentile {aware['p90']} ms, over "
                                       f"{_plural(aware['measured'], 'delivered note')}" if aware["measured"]
                                       else "no delivered note yet"),
@@ -309,7 +345,9 @@ def render(data):
                   f"already heard, {held['withdrawn']} withdrawn",
                   f"  acted on    {_plural(notes['acted_on'], 'note')}, {_plural(notes['findings_acted_on'], 'finding')} "
                   "(proxy)",
-                  f"  labels      {_some(w['labels']['by_verdict'])}",
+                  f"  labels      {_some(w['labels']['by_verdict'])}"
+                  + (f"; on teammates' branches: {_some(w['labels']['team']['by_verdict'])}"
+                     if w["labels"].get("team", {}).get("total") else ""),
                   f"  missed      {_plural(w['missed'], 'report')}",
                   f"  tokens      ~{notes['tokens_estimate']} for the notes handed to agents (an estimate: "
                   "characters / 4)"]

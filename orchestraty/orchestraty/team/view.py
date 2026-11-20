@@ -91,9 +91,16 @@ def _fetch(kept):
             "writers": int(kept.get("writers") or 0)}
 
 
-def session_team(row, with_lines=False):
-    """What a teammate's branch adds to a session in status: who works on it, from what, and how
-    it stands. The task line only `with_lines`."""
+def team_claim(item):
+    """A teammate's claim as status shows it: its hard flag shown, and never honoured here."""
+    return {"kind": item["kind"], "target": item["target"], "file": item["file"], "hard": bool(item["hard"]),
+            "since": _iso(item["since"] // NS), "until": _iso(item["until"] // NS)}
+
+
+def session_team(row, with_lines=False, claims=()):
+    """What a teammate's branch adds to a session in status: who works on it, from what, how it
+    stands, and the claims their records share that hold now (team_planned rows). The task
+    line only `with_lines`."""
     row = row or {"people": [], "own": 0, "evidence": "commits", "tip": "", "tip_time": 0, "as_of": 0, "agents": [],
                   "task": "", "merged": "", "contained_in": [], "builds_on": []}
     task = row["task"] if isinstance(row["task"], dict) else {}
@@ -101,7 +108,7 @@ def session_team(row, with_lines=False):
            "last_commit": _iso(row["tip_time"]) if row["tip_time"] else "",
            "as_of": _iso(row["as_of"]) if row["as_of"] else "", "agents": list(row["agents"]),
            "ticket": str(task.get("ticket") or ""), "merged": row["merged"], "contained_in": list(row["contained_in"]),
-           "builds_on": list(row["builds_on"]), "claims": []}
+           "builds_on": list(row["builds_on"]), "claims": [team_claim(c) for c in claims]}
     if with_lines:
         out["line"] = str(task.get("line") or "")
     return out

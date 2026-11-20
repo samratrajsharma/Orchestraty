@@ -316,12 +316,25 @@ A teammate's branch, in [`team.sessions`](#team), has the fields of a [session](
 | `agents` | array of strings | The agent kinds of the sessions on it. |
 | `ticket` | string | A ticket their records give it, or `""`. |
 | `merged` | string | `""` while it is not merged into the default branch. |
-| `contained_in` | array of strings | Your sessions whose copy holds its tip; `[]` in this version. |
-| `builds_on` | array of strings | Your sessions whose commits it builds on; `[]` in this version. |
-| `claims` | array | Teammates' claims on it; `[]` in this version. |
+| `contained_in` | array of strings | Your sessions whose copy holds its tip. The rules do not compare those pairs. |
+| `builds_on` | array of strings | Your sessions whose commits it builds on, a copy behind on the same branch included. The rules do not compare those pairs. |
+| `claims` | array of [team claims](#team-claim) | The claims their records share on it that hold now; `[]` when the policy shares none. |
 | `line` | string | The task line its author confirmed. Only in `orch status --json --with-lines`: never in status.json or in the MCP tool's answer. |
 
 A session id in `overlaps` or `merge_order` is one of `sessions`, `cloud.branches` or `team.sessions`.
+
+### Team claim
+
+A claim a teammate's record shares, as their policy allows. It only informs here: no edit waits for it or is stopped by it, whatever its kind.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `kind` | string | `file`, `area` (a folder) or `symbol` (a function or class). |
+| `target` | string | The file, the folder, or the function as `path::name`. |
+| `file` | string | For a `symbol`, the file it is in; else `""`. |
+| `hard` | boolean | Whether they made it hard. Shown, and never honoured here: a remote item may be stale or forged. |
+| `since` | string (time) | When it was made, never later than when it was first read here. |
+| `until` | string (time) | When it ends, by their clock. |
 
 ### Team writer
 
