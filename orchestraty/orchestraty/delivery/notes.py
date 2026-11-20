@@ -10,6 +10,11 @@ Nothing another session wrote (a prompt, a message, a comment, a default value's
 own message) ever reaches a note, so one session cannot steer another through it: the together
 check's note names only the error and where it happened, never the line of output it failed
 with. Each note says what its analysis covers and is cut to ``MAX_NOTE`` characters.
+
+A teammate's branch is named by their cleaned handles and the branch ("teammate asha (branch
+feat/refunds)"), and only reasons of the forms this version knows are put in words. Nothing
+else of their record (a task line, an email, a device, a session id) reaches a note, and each
+note says that nobody on that branch is told from here: their own machine tells their sessions.
 """
 import os
 import re
@@ -45,6 +50,7 @@ _AT_LINE = re.compile(r"([A-Za-z0-9_./-]+\.[A-Za-z0-9]+):([0-9]+):")
 _ERROR_NAME = re.compile(r"(?:E\s+)?(?:[A-Za-z_][\w.]*\.)?([A-Z][A-Za-z0-9_]*(?:Error|Exception))(?=:|\s*$)", re.ASCII)
 AGENTS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "git": "plain-git"}
 CLOUD = sessionkinds.CLOUD  # a cloud agent's branch: its agent works elsewhere and is never told
+TEAM = sessionkinds.TEAM    # a teammate's branch: their machine tells their own agents
 
 
 def clean(value, limit=MAX_VALUE):
@@ -106,9 +112,40 @@ def _reasons(reasons):
     return "; ".join(kept) or "its contract changed"
 
 
+def _names(people):
+    """'asha', 'asha and bob', or 'asha, bob and 1 more'."""
+    if len(people) <= 2:
+        return " and ".join(people)
+    return f"{people[0]}, {people[1]} and {len(people) - 2} more"
+
+
+def _team(session):
+    """(who to agree with, "branch <name>") of a teammate's branch: their cleaned handles, or
+    None for the user's own work on another machine (``own``, with no one else on it). A row
+    that names nobody is "that teammate", never taken for the user's own work."""
+    people = [clean(p, 40) for p in session.get("people") or []]
+    who = _names(people) if people else (None if session.get("own") else "that teammate")
+    return who, f"branch {clean(str(session.get('branch') or '?').split('/', 1)[-1], 60)}"
+
+
+def _team_reasons(reasons):
+    """A teammate's reasons, only those of the forms this version knows (the rest is no reason
+    it can put in words: "its contract changed")."""
+    from orchestraty.team import grammar
+    return [r for r in reasons if grammar.reason(str(r))]
+
+
 def describe(session):
-    """'another Claude Code session (worktree wt-b, branch feat-b)' from a session row."""
+    """'another Claude Code session (worktree wt-b, branch feat-b)' from a session row; for a
+    teammate's branch, 'teammate asha (branch feat/refunds)', by their cleaned handles only."""
     agent = session.get("agent", "")
+    if agent == TEAM:
+        who, where = _team(session)
+        if who is None:
+            return f"your user's work on another machine ({where})"
+        if not session.get("people"):
+            return f"a teammate ({where})"
+        return f"teammate{'s' if len(session['people']) > 1 else ''} {who} ({where})"
     if agent == CLOUD:
         return f"the cloud branch {clean(session.get('branch') or '?', 80)}"
     where = f"worktree {clean(os.path.basename(session.get('worktree', '')) or '?', 60)}"
@@ -148,20 +185,32 @@ def for_user(finding, changer, before_edit=True, elsewhere=True):
     d = finding["detail"]
     uses = _list(d.get("uses", []), lambda u: _name(u["symbol"]) + _lines(u.get("lines", [])))
     target = f"{_name(finding['symbol'])} in {_path(finding['symbol'])}"
+    team = changer.get("agent") == TEAM
+    reasons = _team_reasons(d.get("reasons", [])) if team else d.get("reasons", [])
     hint = None
     if finding["rule"] == "O4":
         what = f"{describe(changer)} removed {target}."
     else:
-        what = f"{describe(changer)} changed the contract of {target}: {_reasons(d.get('reasons', []))}."
+        what = f"{describe(changer)} changed the contract of {target}: {_reasons(reasons)}."
         if d.get("moved_to"):
             what += f" It now lives in {_path(d['moved_to'])}."
-        hint = both_forms([str(r) for r in d.get("reasons", [])])
+        hint = both_forms([str(r) for r in reasons])
     cloud = changer.get("agent") == CLOUD
-    if elsewhere:
+    if elsewhere and team:
+        what += (" Their Orchestraty reports it from commits that are not on the remote yet, so it is not checked "
+                 "here; both meet when merged." if d.get("evidence") == "record" else
+                 " The change is committed on that branch and not merged yet, so your copy does not show it; both "
+                 "meet when merged.")
+    elif elsewhere:
         what += (f" The change is in that {'branch' if cloud else 'worktree'}, so your copy does not show it yet; "
                  "both meet when merged.")
     when = "before you change this file" if before_edit else "in the code you changed"
-    if cloud:
+    if team:
+        who = _team(changer)[0]
+        act = f": {hint}; otherwise tell your user" if hint else ", and tell your user"
+        tail = (f" if the old form must stay, so they can agree with {who}: nobody on that branch is told from here."
+                if who else " if the old form must stay, so you can line the two up with your user.")
+    elif cloud:
         act = f": {hint}; otherwise tell your user" if hint else ", and tell your user"
         tail = " if the old form must stay: the agent on that branch works elsewhere and is not told."
     else:
@@ -178,10 +227,15 @@ def for_changer(finding, user, told=None):
     is a plain-git session (no session with Orchestraty works there)."""
     d = finding["detail"]
     uses = _list(d.get("uses", []), lambda u: _name(u["symbol"]) + _lines(u.get("lines", [])))
-    how = "removed" if finding["rule"] == "O4" else f"changed ({_reasons(d.get('reasons', []))})"
+    team = user.get("agent") == TEAM
+    reasons = _team_reasons(d.get("reasons", [])) if team else d.get("reasons", [])
+    how = "removed" if finding["rule"] == "O4" else f"changed ({_reasons(reasons)})"
     if told is None:
         told = user.get("agent") not in sessionkinds.NO_NOTES
-    if user.get("agent") == CLOUD:
+    if team:
+        then = ("Orchestraty on their machine tells their sessions once your change is pushed; if the old form must "
+                "stay, mention it to your user.")
+    elif user.get("agent") == CLOUD:
         then = "The agent on that branch works elsewhere and is not told; mention it to your user."
     elif told == "next":
         then = "That session is told with its next step."
@@ -195,11 +249,16 @@ def for_changer(finding, user, told=None):
 
 def for_both(finding, other):
     """O2, to each of two sessions changing the same function."""
+    what = f"{describe(other)} is also changing {_name(finding['symbol'])} in {_path(finding['symbol'])}"
+    if other.get("agent") == TEAM:
+        agree = _team(other)[0]
+        who = f", who can agree with {agree}," if agree else ""
+        return _cap(f"{what}, committed on that branch. Nobody on that branch is told from here: settle on one "
+                    f"version with your user{who} before either is merged.")
     settle = ("The agent on that branch works elsewhere and is not told: settle on one version with your user "
               "before either is merged." if other.get("agent") == CLOUD else
               "Agree on one version before either of you merges.")
-    return _cap(f"{describe(other)} is also changing {_name(finding['symbol'])} in {_path(finding['symbol'])}. "
-                + settle)
+    return _cap(f"{what}. " + settle)
 
 
 def _route_done(change, who):
@@ -224,7 +283,12 @@ def same_route(finding, me, other):
     file, line = mine.get("file") or finding.get("file") or "", mine.get("line")
     where = (f", declared in {_path(file)}" + (f" at line {int(line)}" if isinstance(line, int) else "")) if file else ""
     route = clean_route(d.get("method", ""), d.get("path", ""))
-    if other.get("agent") == CLOUD:
+    if other.get("agent") == TEAM:
+        agree = _team(other)[0]
+        agree = f", who can agree with {agree}," if agree else ""
+        who = "that branch"
+        settle = f"Nobody on that branch is told from here: settle the route with your user{agree} before either is merged."
+    elif other.get("agent") == CLOUD:
         who, settle = "that branch", ("The agent on that branch works elsewhere and is not told: settle the route "
                                       "with your user before either is merged.")
     elif other.get("agent") == sessionkinds.LEVEL0:
@@ -302,8 +366,32 @@ def planned_overlap(finding, me, other):
             else clean(finding["file"]))
     mine = "claimed" if how.get(me) == "claimed" else "declared"
     theirs = "claimed" if how.get(other["id"]) == "claimed" else "declared"
+    if other.get("agent") == TEAM:
+        ends = (d.get("until") or {}).get(other["id"])
+        until = f", until {time.strftime('%H:%M', time.localtime(ends / 1e9))}" if isinstance(ends, int) else ""
+        return _cap(f"{_who(other)} has {theirs} {what} on their machine{until}, which you have {mine} too (rule O7). "
+                    "Across machines a claim only informs: agree with your user before either of you goes on; nothing "
+                    "is held back.")
     return _cap(f"{_who(other)} has {theirs} {what}, which you have {mine} too (rule O7). Agree with that session "
                 "on who changes it before either of you goes on; nothing is held back.")
+
+
+def team_claimed(claim, teammate, before_edit=True, shared_at=None):
+    """A teammate's claim (team_planned), to a session here before it edits what the claim covers,
+    or with its next step when it has changed that already (before_edit=False). Across machines
+    a claim only informs, whatever its kind: no number, nothing to release, never an ask.
+    `shared_at`: when their record that holds it was sealed (seconds)."""
+    until = time.strftime("%H:%M", time.localtime(claim["until"] / 1e9))
+    shared = (f" (shared through git at {time.strftime('%H:%M', time.localtime(shared_at))})"
+              if isinstance(shared_at, (int, float)) and shared_at else "")
+    head = f"{describe(teammate)} has claimed {reserved(claim)} until {until}, on their machine{shared}."
+    if before_edit:
+        then = ("Across machines a claim only informs, whatever its kind: leave it to them, or ask your user before you "
+                "change it.")
+    else:
+        then = ("Across machines a claim only informs, whatever its kind. You have changed it in your worktree: ask "
+                "your user before you go on.")
+    return _cap(f"{head} {then}")
 
 
 def failure(line):

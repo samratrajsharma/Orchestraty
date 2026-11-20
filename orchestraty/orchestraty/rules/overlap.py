@@ -383,13 +383,18 @@ def declared_work(a, b, planned):
             if item is None:
                 continue
             what = item["symbol"] or item["path"]
-            how = met.setdefault(what, (item, {a: "declared", b: "declared"}))[1]
+            how, until = met.setdefault(what, (item, {a: "declared", b: "declared"}, {}))[1:]
             for sid, z in ((a, x), (b, y)):
                 if z["how"] == "claimed":
                     how[sid] = "claimed"
-    for what, (item, how) in sorted(met.items()):
+                if z.get("until"):                       # a teammate's claim: when it ends, for the note
+                    until[sid] = z["until"]
+    for what, (item, how, until) in sorted(met.items()):
+        detail = {"what": what, "kind": "symbol" if item["symbol"] else "path", "how": how}
+        if until:
+            detail["until"] = until
         yield Finding(f"O7|{what}|{a}|{b}", "O7", MEDIUM, (a, b), symbol=item["symbol"], file=item["path"],
-                      detail={"what": what, "kind": "symbol" if item["symbol"] else "path", "how": how})
+                      detail=detail)
 
 
 def evaluate(views, graphs, base_graphs, hooked=None, planned=None, routes=None, ts_uses=None,

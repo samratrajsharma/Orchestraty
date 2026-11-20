@@ -8,14 +8,24 @@ the other broke, neither order works alone: they merge together, or agree first.
 session uses another's breaking change, there is nothing to say.
 
 A session is named by its branch (a cloud agent's branch by ``<remote>/<branch>``), or by the
-start of its id when it has none. Every name and function is cleaned as in notes.
+start of its id when it has none. A teammate's branch is named with their handles ("asha's
+feat/refunds"), so it is never taken for a local branch of the same name; the user's own work
+on another machine is "your feat/x on another machine". Every name and function is cleaned as
+in notes.
 """
+from orchestraty import sessionkinds
 from orchestraty.delivery import notes as templates
 
 RULES = ("O3", "O4")
 
 
 def name(session, sid):
+    if session and session.get("agent") == sessionkinds.TEAM:          # never taken for a local branch
+        people = [templates.clean(p, 40) for p in session.get("people") or []]
+        branch = templates.clean(str(session.get("branch") or "?").split("/", 1)[-1], 80)
+        if people:
+            return f"{' and '.join(people)}'s {branch}"
+        return f"your {branch} on another machine" if session.get("own") else f"a teammate's {branch}"
     if session and session.get("branch"):
         return templates.clean(session["branch"], 80)
     return f"session {sid[:8]}"

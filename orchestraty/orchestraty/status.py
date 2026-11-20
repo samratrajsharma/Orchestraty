@@ -118,7 +118,8 @@ def collect(state, include_ended=False, now=None, with_lines=False):
                                   claimed.get(s["id"], ()) if s["state"] == "live" else ())
                          for s in sorted(local, key=lambda s: (s["started"], s["id"]))],
             "overlaps": [_finding(f) for f in sorted(findings.get(row["id"], []) if row else [], key=_finding_order)],
-            "merge_order": mergeorder.advise(every.get(row["id"], []) if row else [], {s["id"]: s for s in sessions}),
+            "merge_order": mergeorder.advise(every.get(row["id"], []) if row else [],
+                                             _named(sessions, teams.get(row["id"] if row else None))),
             "together": _together(cfg, common_dir, checked.get(repo_key(common_dir), {}), {s["id"] for s in local}),
             "typescript": _typescript(state, cfg, common_dir, {s["id"] for s in local}),
             "cloud": _cloud(state, cfg, common_dir, now, cloud, changes)})
@@ -134,6 +135,14 @@ def collect(state, include_ended=False, now=None, with_lines=False):
             if block is not None:
                 data["repositories"][-1]["team"] = block
     return data
+
+
+def _named(sessions, team):
+    """{id: session}, a teammate's branch with who works on it (from its team_sessions row), so
+    merge order names it by person and branch."""
+    rows = team[3] if team else {}
+    return {s["id"]: dict(s, people=rows[s["id"]]["people"], own=bool(rows[s["id"]]["own"])) if s["id"] in rows else s
+            for s in sessions}
 
 
 def _cloud(state, cfg, common_dir, now, sessions, changes):
@@ -228,6 +237,18 @@ def _finding(f):
     return {"key": f["key"], "rule": f["rule"], "strength": f["strength"], "symbol": f["symbol"],
             "file": f["file"], "changer": f["changer"], "receiver": f["receiver"], "sessions": f["sessions"],
             "detail": f["detail"]}
+
+
+def team_names(sessions):
+    """{session id: "asha:feat/refunds"} for teammates' branches, so an overlap line never names
+    one like a local branch; the user's own work on another machine is "you:feat/x"."""
+    from orchestraty.delivery import notes as templates
+    out = {}
+    for s in sessions:
+        people = [templates.clean(p, 40) for p in (s.get("team") or {}).get("people") or []]
+        branch = templates.clean(str(s.get("branch") or "?").split("/", 1)[-1], 80)
+        out[s["id"]] = f"{'+'.join(people) or 'you'}:{branch}"
+    return out
 
 
 def _overlap_line(f, names=None):
@@ -333,6 +354,7 @@ def render(data, wake=False, tty=False):
         lines += ["", f"{repo['name']}  ({repo['common_dir']})"]
         cloud = repo.get("cloud") or {}
         names = {s["id"]: s["branch"] for s in cloud.get("branches", [])}
+        names.update(team_names((repo.get("team") or {}).get("sessions", [])))
         if repo["sessions"]:
             lines += _session_lines(repo["sessions"])
             lines += _cannot_lines(repo["sessions"], wake)

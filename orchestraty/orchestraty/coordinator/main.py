@@ -441,7 +441,7 @@ class Coordinator:
                 for c in self.record.team_planned(active_at=now, session_id=sid):
                     planned.setdefault(sid, []).append({"path": claims.path_of(c),
                                                         "symbol": c["target"] if c["kind"] == "symbol" else "",
-                                                        "how": "claimed"})
+                                                        "how": "claimed", "until": c["until"]})
         return planned
 
     def scan_level0(self, forced=()):
