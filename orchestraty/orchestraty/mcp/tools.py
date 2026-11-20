@@ -236,7 +236,33 @@ def _team_view(t):
                                      "ticket": templates.clean(e.get("ticket", ""), 20)}
                                     for e in w.get("entries", []) if isinstance(e, dict)])
                       for w in t.get("writers", []) if isinstance(w, dict)]
+    if isinstance(t.get("fetch"), dict):
+        out["fetch"] = dict(t["fetch"], error=_first_words(t["fetch"].get("error")))
+    out["sessions"] = [_team_session_view(s) for s in t.get("sessions", []) if isinstance(s, dict)]
     return out
+
+
+def _team_session_view(s):
+    """A teammate's branch as an agent sees it: its names cleaned as notes clean them (a file a
+    teammate committed is named by them), never a task line."""
+    tm = s.get("team") if isinstance(s.get("team"), dict) else {}
+    changes = s.get("changes") if isinstance(s.get("changes"), dict) else {}
+    files = changes.get("files") if isinstance(changes.get("files"), dict) else {}
+    return {"id": templates.clean(s.get("id", ""), 40), "agent": "team", "branch": templates.clean(s.get("branch", ""), 200),
+            "base_commit": templates.clean(s.get("base_commit", ""), 40), "state": templates.clean(s.get("state", ""), 10),
+            "last_event": templates.clean(s.get("last_event", ""), 25),
+            "changes": {"files": {templates.clean(p, 200): templates.clean(v, 2) for p, v in sorted(files.items())},
+                        "unattributed": [], "not_compared": {},
+                        "symbols": [{"symbol": templates.clean(x.get("symbol", ""), 200),
+                                     "kind": templates.clean(x.get("kind", ""), 10),
+                                     "contract": templates.clean(x.get("contract", ""), 10),
+                                     "reasons": [templates.clean_reason(r) for r in x.get("reasons") or []][:3]}
+                                    for x in changes.get("symbols") or [] if isinstance(x, dict)]},
+            "team": {"people": [templates.clean(p, 60) for p in tm.get("people", [])], "own": tm.get("own") is True,
+                     "agents": [templates.clean(a, 20) for a in tm.get("agents", [])],
+                     "ticket": templates.clean(tm.get("ticket", ""), 20), "merged": templates.clean(tm.get("merged", ""), 12),
+                     "last_commit": templates.clean(tm.get("last_commit", ""), 25),
+                     "as_of": templates.clean(tm.get("as_of", ""), 25)}}
 
 
 def _file_done(status, symbol):

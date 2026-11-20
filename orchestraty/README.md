@@ -241,12 +241,25 @@ orch team on [--remote NAME] [--yes]         read the policy in force, show what
 orch team off [--forget] [--yes]             stop; --forget also deletes this device's record ref on the remote (asks first)
 orch team whoami                             your git email, handle and device; the people.yml lines to add when it does not list you
 orch team preview [--json]                   the exact bytes of the record that would be sent now, and each item withheld
+orch team push                               send this device's record now, as after a push of yours
+orch team fetch                              read teammates' records and the branches they name now
+orch team log                                the records this device wrote, and what was sent
 orch team task [--session ID] (--ticket T | --line L | --from-declared | --clear)
 orch team device [--label NAME | --new]      label this machine's device, or give it a new id and secret
 orch team check [PATH]                       check policy.yml and people.yml in a working copy; exit 1, with the line, on a problem
 ```
 
 Each action takes `--repo DIR` for a repository other than the one here, and turning team sync on needs the repository watched. Tested with local bare repositories; not yet on a hosting service.
+
+## Team sync (level 0)
+
+Once `orch team on` ran for a repository, its coordinator shares and reads through git, as [above](#teams-people-and-policy) and in [SECURITY.md](../SECURITY.md#between-teammates):
+
+- **Your record goes with your own push.** git writes "update by push" in its reflog each time your push to the team remote works; the coordinator reads that (or, where git keeps no such reflog, sees the remote-tracking refs move while no fetch ran) and, 3 seconds later, pushes this device's record as a connection of its own that never prompts. A push git refused, a fetch, or no push at all sends nothing, and a record with nothing new is not sent. A push made while no coordinator ran is caught up at its next start, within a day. `orch team push` sends the record by hand; `orch team log` lists the records this device wrote and what was sent.
+- **Teammates' records are read every two minutes** while the coordinator runs (it runs while your agents work, and for a minute after a push), at its start and right after its own push; `orch team fetch` reads them now. A teammate's branch shows here within about two minutes of their push.
+- **What you see.** `orch status` adds, under the team block, each teammate's branch: who, its last commit, their last record and what its commits changed (files and contracts, worked out here); `orch status --json` has them in `team.sessions` and the last fetch in `team.fetch` (see [docs/status-json.md](docs/status-json.md)). The dashboard lists them in its team card, the MCP `status` tool gives them cleaned, and the Claude Code mod names a teammate's session "teammate alice (branch origin/feat/x)". Their agents are told on their own machines, and in this version yours are not told of their work yet.
+- **`orch doctor`** says how a push is seen here, where records go (with the `branches-ignore` line for a CI that does not honour `[skip ci]`), when git is older than 2.38 (squash merges are then found by patch id only), when another machine writes as this device, how the last push and fetch went, and when teammates sealed their records under another policy. `orch uninstall` asks whether to delete this device's record refs, never anyone else's.
+- **Limits.** Teammates see your work only as often as you push: what is not committed is never shared. The record push uses the credentials your own pushes use, without a prompt: one that asks for a password or a touch makes it fail (status and doctor say so), and a credential helper or `core.sshCommand` set in the repository's own config is not seen. Records are not signed yet, so anyone who can push to the remote can write a record in anyone's name; the incoming gate stops mistakes, not someone set on it.
 
 ## For builders
 

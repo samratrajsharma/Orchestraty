@@ -98,7 +98,8 @@ def collect(state, include_ended=False, now=None, with_lines=False):
                 for r in repo_rows.values():
                     sent = record.team_sent(r["id"], limit=1)
                     teams[r["id"]] = (record.team_writers(r["id"]), record.withheld(r["id"], int((now - 86400) * NS)),
-                                      sent[0] if sent else None)
+                                      sent[0] if sent else None,
+                                      {t["session_id"]: t for t in record.team_sessions(r["id"])})
         finally:
             record.close()
     checked = {}
@@ -123,8 +124,13 @@ def collect(state, include_ended=False, now=None, with_lines=False):
             "cloud": _cloud(state, cfg, common_dir, now, cloud, changes)})
         if cfg["team"]:
             from orchestraty.team import view
-            block = view.block(state, cfg, common_dir, *teams.get(row["id"] if row else None, ([], [], None)), now,
-                               with_lines=with_lines)
+            writers, withheld, sent, rows = teams.get(row["id"] if row else None, ([], [], None, {}))
+            followed = sorted((s for s in sessions if s["agent"] == sessionkinds.TEAM and s["state"] == "live"),
+                              key=lambda s: (s["branch"], s["id"]))
+            shown = [dict(_session(s, now, changes.get(s["id"], ({}, [], [], {}))),
+                          team=view.session_team(rows.get(s["id"]), with_lines)) for s in followed]
+            block = view.block(state, cfg, common_dir, writers, withheld, sent, now, with_lines=with_lines,
+                               sessions=shown)
             if block is not None:
                 data["repositories"][-1]["team"] = block
     return data
@@ -337,6 +343,7 @@ def render(data, wake=False, tty=False):
         if repo.get("team"):
             from orchestraty.team import view
             lines += view.lines(repo["team"], tty=tty, local=_local)
+            lines += _team_branch_lines(repo["team"], tty)
         if repo["overlaps"]:
             lines.append("  overlaps:")
             lines += ["    " + _overlap_line(f, names) for f in repo["overlaps"]]
@@ -382,6 +389,29 @@ def _cloud_lines(cloud):
         if summary:
             lines.append("      " + summary)
     return lines
+
+
+def _team_branch_lines(t, tty):
+    """Each teammate's branch followed here: who, its last commit and their last record, and what
+    it changed, as read from its commits. A confirmed task line only on a terminal."""
+    lines = []
+    for s in t.get("sessions", []):
+        tm = s["team"]
+        who = " and ".join(tm["people"]) if tm["people"] else "you, other machine"
+        branch = s["branch"].split("/", 1)[-1]
+        ago = _ago(max(0, int(time.time() - _seconds(tm["last_commit"])))) if tm["last_commit"] else "unknown"
+        as_of = f", as of their push at {_local(tm['as_of'])}" if tm["as_of"] else ""
+        ticket = f"  [{tm['ticket']}]" if tm["ticket"] else ""
+        line = f"  {tm['line']}" if tty and tm.get("line") else ""
+        lines.append(f"    {who}  {branch}  last commit {ago}{as_of}{ticket}{line}")
+        summary = _summary(s["changes"])
+        if summary:
+            lines.append("      " + summary)
+    return lines
+
+
+def _seconds(iso):
+    return calendar.timegm(time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ"))
 
 
 def _cannot_lines(sessions, wake):

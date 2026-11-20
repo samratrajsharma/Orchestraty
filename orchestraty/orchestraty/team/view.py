@@ -13,7 +13,7 @@ read locally, from config.json, the record and the shadow: no network.
 import time
 
 from orchestraty import remote, team
-from orchestraty.team import identity, people, policy, probe
+from orchestraty.team import identity, people, policy, probe, teamfile
 
 PEOPLE_FILE = ".orchestraty/people.yml"
 NS = 1_000_000_000
@@ -48,12 +48,12 @@ def people_in_force(shadow, name):
     return people.People.empty() if data is None else people.People.parse(data)
 
 
-def block(state, cfg, common_dir, writers, withheld, sent, now, with_lines=False):
+def block(state, cfg, common_dir, writers, withheld, sent, now, with_lines=False, sessions=()):
     """The team block of one repository, or None for a repository without team sync. `writers`,
     `withheld` and `sent` are the record's rows (team_writers, team_withheld from 24 hours ago,
-    team_sent's latest)."""
+    team_sent's latest); `sessions` the teammates' branches followed, as status shows sessions."""
     chosen = team.settings(cfg, common_dir)
-    if not chosen["on"] and not writers:
+    if not chosen["on"] and not writers and not sessions:
         return None
     shadow = remote.Shadow(state, common_dir)
     try:
@@ -64,8 +64,9 @@ def block(state, cfg, common_dir, writers, withheld, sent, now, with_lines=False
     answer, _ = probe.last(shadow)
     eff = policy.effective(force, agreed, chosen["narrow"], chosen["never_branches"], anonymous_read=answer)
     off = eff.off()
+    kept = teamfile.read(shadow)
     return {
-        "on": chosen["on"], "remote": chosen["remote"], "store": "ref", "agents_told": False,
+        "on": chosen["on"], "remote": chosen["remote"], "store": kept.get("store") or "ref", "agents_told": False,
         "policy": {"blob": force.blob[:7] if force is not None else "", "sync": off is None, "visibility": eff.visibility,
                    "share": {"claims": eff.claims, "task": eff.task, "unpushed": eff.unpushed, "activity": eff.activity},
                    "widened": bool(force is not None and agreed is not None and policy.widened(force, agreed)),
@@ -73,8 +74,37 @@ def block(state, cfg, common_dir, writers, withheld, sent, now, with_lines=False
         "me": _me(state, common_dir, shadow, chosen["remote"]),
         "sent": _sent(sent),
         "withheld_24h": _withheld(withheld),
+        "fetch": _fetch(kept.get("fetch")),
         "writers": [_writer(w, with_lines) for w in writers],
+        "sessions": list(sessions),
     }
+
+
+def _fetch(kept):
+    """The last team fetch: when, whether it worked and why not, the failures in a row, the next
+    one, the last that worked and the writers it found. None before the first."""
+    if not isinstance(kept, dict) or not isinstance(kept.get("at"), (int, float)):
+        return None
+    when = {k: _iso(kept[k]) if isinstance(kept.get(k), (int, float)) else None for k in ("at", "next", "last_ok")}
+    return {"at": when["at"], "ok": kept.get("ok") is True, "error": str(kept.get("error") or ""),
+            "failures": int(kept.get("failures") or 0), "next": when["next"], "last_ok": when["last_ok"],
+            "writers": int(kept.get("writers") or 0)}
+
+
+def session_team(row, with_lines=False):
+    """What a teammate's branch adds to a session in status: who works on it, from what, and how
+    it stands. The task line only `with_lines`."""
+    row = row or {"people": [], "own": 0, "evidence": "commits", "tip": "", "tip_time": 0, "as_of": 0, "agents": [],
+                  "task": "", "merged": "", "contained_in": [], "builds_on": []}
+    task = row["task"] if isinstance(row["task"], dict) else {}
+    out = {"people": list(row["people"]), "own": bool(row["own"]), "evidence": row["evidence"], "tip": row["tip"],
+           "last_commit": _iso(row["tip_time"]) if row["tip_time"] else "",
+           "as_of": _iso(row["as_of"]) if row["as_of"] else "", "agents": list(row["agents"]),
+           "ticket": str(task.get("ticket") or ""), "merged": row["merged"], "contained_in": list(row["contained_in"]),
+           "builds_on": list(row["builds_on"]), "claims": []}
+    if with_lines:
+        out["line"] = str(task.get("line") or "")
+    return out
 
 
 def _me(state, common_dir, shadow, remote_name):
@@ -166,9 +196,17 @@ def lines(t, tty=False, local=None):
         n = sum(w["count"] for w in held)
         words = "; ".join(f"{w['rule']} in {FIELDS.get(w['field'], w['field'])}" for w in held)
         out.append(f"    withheld in the last 24 h: {n} ({words})")
-    if t["writers"]:
-        out.append(f"  teammates' records from {t['remote']} (shared through git; their sessions are told on their own "
+    f = t.get("fetch")
+    if t["writers"] or t.get("sessions") or f:
+        out.append(f"  teammates' branches from {t['remote']} (shared through git; their sessions are told on their own "
                    "machines)")
+    if f:
+        nxt = f"; next at {local(f['next'])}" if f["next"] and t["on"] else ""
+        if f["ok"]:
+            out.append(f"    last read {local(f['at'])}: ok, {f['writers']} writers, {len(t.get('sessions') or [])} "
+                       f"branches{nxt}")
+        else:
+            out.append(f"    last read {local(f['at'])}: failed ({f['failures']} in a row): {f['error']}{nxt}")
     for w in t["writers"]:
         name = f"{w['person']} ({w['device'][:6]})"
         if w["verdict"] == "ignored":

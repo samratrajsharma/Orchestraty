@@ -719,10 +719,20 @@ function teamCards () {
         continue
       }
       for (const e of w.entries || []) {
+        if (e.pushed && (t.sessions || []).some((s) => s.branch === t.remote + '/' + e.branch)) continue
         rows.push(h('li', {}, h('b', {}, w.person), ' ', h('span', { class: 'mono' }, e.branch),
           e.ticket ? ' [' + e.ticket + ']' : '', e.line ? h('span', { class: 'meta' }, ' ' + e.line) : '',
           e.pushed ? '' : h('span', { class: 'faint' }, ' nothing pushed')))
       }
+    }
+    for (const s of t.sessions || []) {             // teammates' branches, read from their commits
+      const tm = s.team || {}
+      const people = (tm.people || []).length ? tm.people.join(' and ') : 'You, on another machine'
+      const files = Object.keys((s.changes && s.changes.files) || {})
+      rows.push(h('li', {}, h('b', {}, people), ' ', h('span', { class: 'mono' }, s.branch),
+        tm.ticket ? ' [' + tm.ticket + ']' : '', tm.line ? h('span', { class: 'meta' }, ' ' + tm.line) : '',
+        files.length ? h('span', { class: 'faint' }, ' · ' + files.slice(0, 3).join(', ') +
+          (files.length > 3 ? ' and ' + (files.length - 3) + ' more' : '')) : ''))
     }
     return h('div', { class: 'card pad stack', 'data-anim': 'g:team' },
       h('span', { class: 'meta' }, 'Team sync · ' + r.name),

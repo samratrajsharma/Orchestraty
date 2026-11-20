@@ -240,13 +240,15 @@ What team sync does for the repository. It is read locally, from config.json, th
 | --- | --- | --- |
 | `on` | boolean | Whether team sync is on for the repository (`orch team on`). |
 | `remote` | string | The team remote. |
-| `store` | string | Where records are kept on it: `ref`, one ref per writer under `refs/orchestraty/`. |
+| `store` | string | Where this machine's records go on it: `ref`, one ref per writer under `refs/orchestraty/`; or `branch`, the branch `orchestraty/records`, once the host refused custom refs. |
 | `agents_told` | boolean | Whether teammates' work reaches this machine's agents. `false` in this version. |
 | `policy` | object | The policy in force and the effective policy. See [team.policy](#teampolicy). |
 | `me` | object or null | Who this machine shares as; null when no git email is set for the repository. See [team.me](#teamme). |
 | `sent` | object or null | The last record this machine sent, null before any. See [team.sent](#teamsent). |
 | `withheld_24h` | array | What was withheld from this machine's records in the last 24 hours, by rule and field, never a value. See [team.withheld_24h](#teamwithheld_24h). |
+| `fetch` | object or null | The last team fetch, null before the first. See [team.fetch](#teamfetch). |
 | `writers` | array | Each teammate's record as last read. See [team writer](#team-writer). |
+| `sessions` | array | Each teammate's branch followed here, read from its commits. See [team session](#team-session). |
 
 ### `team.policy`
 
@@ -286,6 +288,40 @@ What team sync does for the repository. It is read locally, from config.json, th
 | `rule` | string | The rule that withheld it: a secret scanner rule (such as `github-token`), `grammar`, `deny-path` or `deny-word`. |
 | `field` | string | The field it was in, such as `sessions[].branch`. |
 | `count` | integer | How many times in the last 24 hours. |
+
+### `team.fetch`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `at` | string (time) | When it ran. |
+| `ok` | boolean | Whether it worked. |
+| `error` | string | Why not, or `""`. |
+| `failures` | integer | Failed fetches in a row; each one doubles the wait, up to an hour. |
+| `next` | string (time) or null | When the next is due. |
+| `last_ok` | string (time) or null | The last one that worked. |
+| `writers` | integer | The writers' records it found. |
+
+### Team session
+
+A teammate's branch, in [`team.sessions`](#team), has the fields of a [session](#session), read this way: `agent` is `team`, `worktree` is `""` (it has none here), `branch` is `<remote>/<branch>`, `base_commit` is its merge base with the remote's default branch, worked out here, `changes` is what its commits changed from there, `started` is when this machine first saw it, `last_event` and `seconds_since_last_event` are when it last saw the branch or the records naming it change, `turn` is `""`, and `declared` and `claims` are `[]`. It adds `team`:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `people` | array of strings | The teammates whose records name the branch; `[]` for your own other device alone. |
+| `own` | boolean | Whether your own work on another device names it. |
+| `evidence` | string | `commits`: it is read from the branch's commits. |
+| `tip` | string | The branch's commit as last fetched. |
+| `last_commit` | string (time) | Its last commit's time, by their clock, never later than now. |
+| `as_of` | string (time) | When the newest record naming it was sealed, by their clock, never later than now. |
+| `agents` | array of strings | The agent kinds of the sessions on it. |
+| `ticket` | string | A ticket their records give it, or `""`. |
+| `merged` | string | `""` while it is not merged into the default branch. |
+| `contained_in` | array of strings | Your sessions whose copy holds its tip; `[]` in this version. |
+| `builds_on` | array of strings | Your sessions whose commits it builds on; `[]` in this version. |
+| `claims` | array | Teammates' claims on it; `[]` in this version. |
+| `line` | string | The task line its author confirmed. Only in `orch status --json --with-lines`: never in status.json or in the MCP tool's answer. |
+
+A session id in `overlaps` or `merge_order` is one of `sessions`, `cloud.branches` or `team.sessions`.
 
 ### Team writer
 

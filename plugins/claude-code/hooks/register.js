@@ -73,8 +73,17 @@ function strongForMe(repo) {
 
 function who(repo, sid) {
   const s = ((repo && repo.sessions) || []).find((x) => x.id === sid)
-  if (!s) return String(sid).slice(0, 8)
-  return (s.agent === 'git' ? 'plain git' : s.agent) + ' in ' + baseName(s.worktree)
+  if (s) return (s.agent === 'git' ? 'plain git' : s.agent) + ' in ' + baseName(s.worktree)
+  const c = ((repo && repo.cloud && repo.cloud.branches) || []).find((x) => x.id === sid)
+  if (c) return 'the cloud branch ' + c.branch
+  const t = ((repo && repo.team && repo.team.sessions) || []).find((x) => x.id === sid)
+  if (t) {
+    const people = (t.team && t.team.people) || []
+    const named = people.length ? (people.length > 1 ? 'teammates ' : 'teammate ') + people.join(' and ')
+      : 'your work on another machine'
+    return named + ' (branch ' + t.branch + ')'
+  }
+  return String(sid).slice(0, 8)
 }
 
 // One line for one overlap, as this session sees it.

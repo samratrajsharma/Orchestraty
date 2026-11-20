@@ -114,6 +114,21 @@ def repositories(state, cfg):
     return unique
 
 
+def _team_records(state, cfg):
+    """(common_dir, remote) of each repository this device wrote team records for."""
+    if not cfg.get("team"):
+        return []
+    from orchestraty import remote, team
+    from orchestraty.team import store
+    out = []
+    for common in repositories(state, cfg):
+        remote_name = team.settings(cfg, common)["remote"]
+        shadow = remote.Shadow(state, common)
+        if shadow.exists() and shadow.git(["rev-parse", "--verify", "--quiet", store.OUTBOX.format(remote_name)])[0] == 0:
+            out.append((common, remote_name))
+    return out
+
+
 def worktrees(common_dir):
     """The tops of a repository's worktrees that exist, the main one first."""
     tops = []
@@ -311,6 +326,9 @@ def plan(state, environ=None, which=shutil.which):
         else:
             notes.append(f"Claude Code's Orchestraty plugin ({pid}, {scope} scope) stays installed: there is no claude "
                          f"command here to uninstall it with. In Claude Code, run /plugin uninstall {pid}.")
+    for common, remote_name in _team_records(state, cfg):
+        steps.append(Step("forget", f"team sync: ask whether to delete this device's record ref on {remote_name} for "
+                                    f"{common} (only what this device wrote, with a lease)", common, None, remote_name))
     shadows = os.path.join(state.root, "shadows")
     if os.path.isdir(shadows):
         steps.append(Step("shadows", f"cloud branches: remove their shadows ({shadows})", shadows, None, None))
@@ -421,6 +439,15 @@ def do(state, step, ask, keep_backups, runner=subprocess.run):
             said = (proc.stderr or proc.stdout or "").strip().splitlines()
             return f"claude plugin uninstall did not work ({said[-1] if said else proc.returncode}); run it yourself."
         return "Uninstalled Claude Code's Orchestraty plugin."
+    if step.kind == "forget":
+        if not ask(f"Delete this device's record ref on {step.extra} for {step.path}? Teammates then no longer see "
+                   "your record; nobody else's is touched."):
+            return f"Kept this device's record ref on {step.extra} for {step.path}."
+        from orchestraty.team import commands as team_commands
+        try:
+            return team_commands._forget(state, step.path, step.extra)
+        except team_commands.Refused as exc:
+            return f"Kept this device's record ref on {step.extra}: {exc}"
     if step.kind == "shadows":
         gitio.remove_tree(step.path)
         cfg = config.load(state)

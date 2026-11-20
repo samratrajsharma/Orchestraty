@@ -142,3 +142,6 @@ def test_the_team_block_is_documented_both_ways(state, repo, git, tmp_path, monk
     assert set(t["me"]) == set(doc["`team.me`"]) and set(t["sent"]) == set(doc["`team.sent`"])
     assert set(t["withheld_24h"][0]) == set(doc["`team.withheld_24h`"])
     assert set(t["writers"][0]) == set(doc["Team writer"]) and set(t["writers"][0]["entries"][0]) == set(doc["Team writer entry"])
+    from orchestraty.team import view
+    assert set(t["fetch"]) == set(doc["`team.fetch`"])                         # orch team on's first fetch
+    assert set(view.session_team(None, with_lines=True)) == set(doc["Team session"])

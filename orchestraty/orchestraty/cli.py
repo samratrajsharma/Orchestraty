@@ -1447,6 +1447,12 @@ def build_parser():
                                       description="The exact bytes of the record this machine would send now, and "
                                                   "each item withheld from it (field and rule).")
     t_preview.add_argument("--json", action="store_true", help="as JSON")
+    tm_actions.add_parser("push", parents=[where], help="send this device's record now",
+                          description="Seal, write and push this device's record now, as after a push of yours.")
+    tm_actions.add_parser("fetch", parents=[where], help="read teammates' records now",
+                          description="Fetch teammates' records and the branches they name now, read-only.")
+    tm_actions.add_parser("log", parents=[where], help="this device's record history",
+                          description="The records this device wrote (its outbox chain) and what was sent.")
     t_task = tm_actions.add_parser("task", parents=[where], help="give a session a ticket or a task line to share",
                                    description="The ticket or the task line a session works on, confirmed by you; "
                                                "a line is shared only under the policy's share.task: confirmed.")

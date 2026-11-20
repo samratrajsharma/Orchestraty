@@ -274,14 +274,15 @@ def off(state, args, confirm):
         if not confirm(f"Delete your record ref on {chosen['remote']} (made from this device)?", args.yes):
             print("Nothing changed.")
             return 1
-        _forget(state, common_dir, chosen["remote"])
+        print(_forget(state, common_dir, chosen["remote"]))
     team.save_settings(state, common_dir, on=False)
     print(f"Team sync off for {name}: nothing more is sent or read.")
     return 0
 
 
 def _forget(state, common_dir, remote_name):
-    """Delete this device's record ref on the remote, with a lease on what this device pushed."""
+    """Delete this device's record ref on the remote, with a lease on what this device pushed.
+    Returns what was done; raises Refused when the ref was not deleted."""
     try:
         device = identity.Device.load(state)
     except identity.DeviceError:
@@ -290,8 +291,7 @@ def _forget(state, common_dir, remote_name):
     outbox = OUTBOX.format(remote_name)
     rc, tip = shadow.git(["rev-parse", "--verify", "--quiet", outbox]) if device and shadow.exists() else (1, "")
     if rc != 0:
-        print("No record of yours was pushed from this device, so there is nothing to delete.")
-        return
+        return "No record of yours was pushed from this device, so there is nothing to delete."
     tip = tip.strip()
     rc, data = shadow.git(["cat-file", "blob", f"{tip}:record.json"], raw=True)
     try:
@@ -301,7 +301,7 @@ def _forget(state, common_dir, remote_name):
     if not grammar.person(person):
         raise Refused("this device's last record cannot be read, so its ref is not deleted")
     try:
-        url = remote.remote_url(common_dir, remote_name)
+        url = remote.push_url(common_dir, remote_name)
     except remote.RemoteError as exc:
         raise Refused(str(exc)) from None
     dst = f"refs/orchestraty/{person}/{device.id}"
@@ -309,7 +309,7 @@ def _forget(state, common_dir, remote_name):
     if result.kind not in ("deleted", "up to date"):
         raise Refused(f"{dst} was not deleted on {remote_name}: {result.kind} ({result.detail})")
     shadow.git(["update-ref", "-d", outbox])
-    print(f"Deleted {dst} on {remote_name}.")
+    return f"Deleted {dst} on {remote_name}."
 
 
 def whoami(state, args, confirm):
@@ -564,5 +564,73 @@ def device(state, args, confirm):
     return 0
 
 
+def _on_here(state, args):
+    info = _watched(state, args)
+    chosen = team.settings(config.load(state), info["common_dir"])
+    if not chosen["on"]:
+        raise Refused("team sync is off for this repository: orch team on first")
+    return info, chosen
+
+
+def push(state, args, confirm):
+    """orch team push: send this device's record now, as after a push of yours."""
+    info, chosen = _on_here(state, args)
+    from orchestraty.team import sync
+    try:
+        outcome = sync.send(state, info["common_dir"], time.time(), time.time_ns())
+    except store.Busy as exc:
+        raise Refused(f"{exc}; try again in a moment") from None
+    if outcome is None:
+        print(f"Nothing new to send: {chosen['remote']} has this device's last record.")
+        return 0
+    print(f"Record {outcome.seq} ({outcome.sessions} sessions, {outcome.size} bytes): {outcome.result}.")
+    return 0 if outcome.result in ("pushed", "unchanged") else 1
+
+
+def fetch(state, args, confirm):
+    """orch team fetch: read teammates' records and the branches they name now."""
+    info, chosen = _on_here(state, args)
+    from orchestraty.team import sync
+    cfg = config.load(state)
+    sync.TeamSync(state, None, time.time_ns).fetch_now(info["common_dir"], chosen["remote"],
+                                                        cfg["team_fetch_minutes"] * 60, time.time_ns())
+    kept = teamfile.read(remote.Shadow(state, info["common_dir"])).get("fetch") or {}
+    if kept.get("ok"):
+        print(f"Read {chosen['remote']}: {kept.get('writers', 0)} writers.")
+        return 0
+    print(f"Reading {chosen['remote']} failed: {kept.get('error') or 'the shadow was busy'}.")
+    return 1
+
+
+def log(state, args, confirm):
+    """orch team log: this device's record history, from its outbox chain and what was sent."""
+    info, chosen = _on_here(state, args)
+    shadow = remote.Shadow(state, info["common_dir"])
+    rc, out = shadow.git(["log", "--format=%H %ct %s", store.OUTBOX.format(chosen["remote"])]) \
+        if shadow.exists() else (1, "")
+    chain = [line.split(" ", 2) for line in out.splitlines()] if rc == 0 else []
+    if not chain:
+        print("This device has written no record for this repository yet.")
+    for commit, when, subject in chain:
+        seq = subject.split()[2] if len(subject.split()) > 2 else "?"
+        mark = " (compacted)" if subject.endswith("(compacted)") else ""
+        print(f"{commit[:12]}  seq {seq}  written {time.strftime('%Y-%m-%d %H:%M', time.gmtime(int(when)))} UTC{mark}")
+    kept = teamfile.read(shadow).get("push") or {}
+    if kept:
+        state_ = "pushed" if kept.get("ok") else f"failed: {kept.get('error')}"
+        print(f"last push from this machine: {state_} at "
+              f"{time.strftime('%Y-%m-%d %H:%M', time.gmtime(int(kept.get('at') or 0)))} UTC")
+    if os.path.exists(state.record):
+        rec = Record(state.record, readonly=True)
+        try:
+            rows = rec.team_sent(rec.repo_id(info["common_dir"]), limit=20)
+        finally:
+            rec.close()
+        for r in rows:
+            print(f"sent {time.strftime('%Y-%m-%d %H:%M', time.gmtime(r['ts'] // 1_000_000_000))} UTC: seq {r['seq']}, "
+                  f"{r['sessions']} sessions, {r['store']}: {r['result']}")
+    return 0
+
+
 ACTIONS = {"show": show, "on": on, "off": off, "whoami": whoami, "init": init, "check": check, "preview": preview,
-           "task": task, "device": device}
+           "task": task, "device": device, "push": push, "fetch": fetch, "log": log}

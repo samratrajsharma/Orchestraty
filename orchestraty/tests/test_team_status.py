@@ -56,7 +56,9 @@ def test_status_team_block_when_on(state, with_policy, repo, capsys):
     blob = remote.Shadow(state, str(repo / ".git")).git(["rev-parse", "refs/orch/origin/HEAD:.orchestraty/policy.yml"])[1]
     from orchestraty.team import identity
     device = identity.Device.load(state)
-    assert t == {"on": True, "remote": "origin", "store": "ref", "agents_told": False,
+    fetched = t.pop("fetch")                                                  # orch team on's first team fetch
+    assert fetched["ok"] is True and fetched["writers"] == 0 and fetched["error"] == ""
+    assert t == {"on": True, "remote": "origin", "store": "ref", "agents_told": False, "sessions": [],
                  "policy": {"blob": blob.strip()[:7], "sync": True, "visibility": "private",
                             "share": {"claims": True, "task": "ticket", "unpushed": False, "activity": False},
                             "widened": False, "why": "", "fix": ""},

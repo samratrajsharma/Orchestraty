@@ -211,6 +211,10 @@ class TeamSync:
         thread.start()
         return True
 
+    def fetch_now(self, common_dir, remote_name, interval_seconds, now):
+        """The team fetch, here and now (orch team fetch), as the thread would make it."""
+        self._fetch(common_dir, remote_name, interval_seconds, now)
+
     def _fetch(self, common_dir, remote_name, interval_seconds, now):
         shadow = remote.Shadow(self.state, common_dir)
         try:
@@ -225,6 +229,8 @@ class TeamSync:
         except store.Busy:
             self._fetch_now.add(common_dir)
         except Exception:                                    # never let a fetch take the coordinator down
+            if self.log is None:
+                raise
             self.log.exception("the team fetch of %s failed", common_dir)
         finally:
             self.fetched.add(common_dir)
@@ -247,8 +253,9 @@ class TeamSync:
             return False, 0
         store.drop_unnamed(shadow, remote_name, found)
         self._names[common_dir] = found
-        self.log.info("team fetch of %s: %d writers, %d branches named", common_dir,
-                      len(store.read_writers(shadow, remote_name)), len(found))
+        if self.log is not None:
+            self.log.info("team fetch of %s: %d writers, %d branches named", common_dir,
+                          len(store.read_writers(shadow, remote_name)), len(found))
         return True, len(store.read_writers(shadow, remote_name))
 
     def _named(self, shadow, common_dir, remote_name, now):
