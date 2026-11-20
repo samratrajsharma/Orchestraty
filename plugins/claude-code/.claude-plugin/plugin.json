@@ -1,6 +1,6 @@
 {
   "name": "orchestraty",
-  "version": "0.2.0-dev.1",
+  "version": "0.2.0-dev.2",
   "description": "Keeps parallel coding-agent sessions on one repository aware of each other: the hooks that record this session's edits and hand it Orchestraty's notes, a status line, a band and a pane (the mod), the MCP tools to check before an edit, and a skill on how to treat the notes. Needs Orchestraty installed and orch init run; makes no network requests.",
   "author": {
     "name": "Orchestraty"
