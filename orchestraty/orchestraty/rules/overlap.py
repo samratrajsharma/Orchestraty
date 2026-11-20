@@ -58,6 +58,16 @@ items overlap when one path is the other or holds it, unless both name functions
 differ. The finding is about the narrower item, the function where there is one, and
 says how each session named it: ``claimed`` over ``declared``.
 
+Across people, a teammate's branch (a session of agent ``team``: no working copy here) is one
+of ``others``. Two of them are never compared with each other, and a pair ``apart`` says one
+holds the other's commits is not compared at all. A teammate's change is checked where this
+machine's sessions use it (O3 and O4), strong when it was read from the branch's commits and
+medium when only their record says it (``evidence``); it gives no O6 here, since their own
+machine tells their agent of the callers they left. This machine's change is checked in a
+teammate's copy only where they are changing the file: a latent use has nobody here to tell.
+W1 never runs for them (no shared folder), and O7 compares this machine's declarations and
+claims with their claims. With no teammates, every rule is as in Phase 1.
+
 Every finding has a stable key, so the coordinator can tell a new finding from one it already
 knows, and one that stopped holding.
 """
@@ -267,10 +277,12 @@ def _ts_uses(change, sym, imports):
     return {path: [{"symbol": path, "lines": lines}] for path, lines in imports.uses(module, name).items()}
 
 
-def contract_uses(changer, user, views, graphs, ts_uses=None):
+def contract_uses(changer, user, views, graphs, ts_uses=None, latent=True):
     """O3 and O4: what `changer` broke or removed, used in `user`'s copy of the code; latent
-    where `user` is not changing the file. ts_uses(sid): that session's TypeScript imports, or
-    None (TypeScript contracts off, or not known yet)."""
+    where `user` is not changing the file (only with `latent`: a teammate's branch has nobody
+    here to tell before an edit). ts_uses(sid): that session's TypeScript imports, or None
+    (TypeScript contracts off, or not known yet)."""
+    allow_latent = latent
     files = set(views[user].files)
     graph, imports = None, None
     for sym, change in sorted(views[changer].symbols.items()):
@@ -298,7 +310,7 @@ def contract_uses(changer, user, views, graphs, ts_uses=None):
         for path, uses in sorted(by_file.items(), key=lambda kv: (kv[0] not in files, kv[0])):
             latent = path not in files
             if latent:
-                if latent_left <= 0:
+                if latent_left <= 0 or not allow_latent:
                     continue
                 latent_left -= 1
             rule = "O4" if removed else "O3"
@@ -380,7 +392,8 @@ def declared_work(a, b, planned):
                       detail={"what": what, "kind": "symbol" if item["symbol"] else "path", "how": how})
 
 
-def evaluate(views, graphs, base_graphs, hooked=None, planned=None, routes=None, ts_uses=None):
+def evaluate(views, graphs, base_graphs, hooked=None, planned=None, routes=None, ts_uses=None,
+             others=frozenset(), apart=None, evidence=None):
     """Every finding among the sessions of one repository.
 
     views: {session id: SessionView}; graphs(sid) and base_graphs(sid) give that session's code
@@ -389,11 +402,20 @@ def evaluate(views, graphs, base_graphs, hooked=None, planned=None, routes=None,
     notes, the only ones W1 is about (None: W1 does not run). planned: {session id: [item]},
     what each declared or claimed, for O7 (None: O7 does not run). routes(sid): that session's
     route changes, or None while they are not known, for O5 (None: O5 does not run).
-    ts_uses(sid): that session's TypeScript imports, for O3 and O4 about TypeScript."""
+    ts_uses(sid): that session's TypeScript imports, for O3 and O4 about TypeScript.
+    others: teammates' sessions: never compared with each other, no O6 of their own, never the
+    receiver of a latent finding. apart(a, b): a pair not to compare (one's copy holds the
+    other's commits). evidence(sid): "commits" or "record"; a record-only changer's O3 and O4
+    are medium."""
     out = {}
     ids = sorted(views)
+
+    def compared(a, b):
+        return not ((a in others and b in others) or (apart is not None and apart(a, b)))
     for i, a in enumerate(ids):
         for b in ids[i + 1:]:
+            if not compared(a, b):
+                continue
             shared = one_folder(a, b, views)
             found = list(same_file(a, b, views))
             if not shared:
@@ -408,9 +430,20 @@ def evaluate(views, graphs, base_graphs, hooked=None, planned=None, routes=None,
             for f in found:
                 out[f.key] = f
         for b in ids:
-            if b != a and not one_folder(a, b, views):
-                for f in contract_uses(a, b, views, graphs, ts_uses):
-                    out[f.key] = f
-        for f in left_behind(a, views, base_graphs, graphs):
-            out[f.key] = f
+            if b != a and compared(a, b) and not one_folder(a, b, views):
+                for f in contract_uses(a, b, views, graphs, ts_uses, latent=b not in others):
+                    out[f.key] = _from_teammate(f, evidence) if a in others else f
+        if a not in others:                         # a teammate's machine tells them of their callers
+            for f in left_behind(a, views, base_graphs, graphs):
+                out[f.key] = f
     return [out[k] for k in sorted(out)]
+
+
+def _from_teammate(f, evidence):
+    """A teammate's change: say what it was read from; only their record says it: medium."""
+    seen = evidence(f.changer) if evidence is not None else "commits"
+    if "evidence" not in f.detail:                  # TypeScript's own evidence (its imports) stays
+        f.detail["evidence"] = seen
+    if seen == "record":
+        f.strength = MEDIUM
+    return f
