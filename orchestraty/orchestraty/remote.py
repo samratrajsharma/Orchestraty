@@ -366,14 +366,17 @@ class Shadow:
                 raise gitio.GitError(f"git {args[0]} failed in the shadow")
 
     # reading: local git only
-    def _git(self, args, timeout=None, raw=False):
+    def _git(self, args, timeout=None, raw=False, env=None, data=None):
         """(returncode, stdout) of a git command in the shadow that needs no network; stdout is
-        bytes when `raw`. Raises ShadowBroken when git says an object is missing."""
-        argv, env = git_command(args, self.path)
-        env["GIT_OPTIONAL_LOCKS"] = "0"
+        bytes when `raw`. `env` adds to git's environment and `data` is its input. Raises
+        ShadowBroken when git says an object is missing."""
+        argv, full = git_command(args, self.path)
+        full["GIT_OPTIONAL_LOCKS"] = "0"
+        full.update(env or {})
+        stdin = {"input": data} if data is not None else {"stdin": subprocess.DEVNULL}
         try:
-            proc = subprocess.run(argv, cwd=self.path, env=env, stdin=subprocess.DEVNULL, capture_output=True,
-                                  timeout=timeout or gitio.TIMEOUT, creationflags=_NO_WINDOW)
+            proc = subprocess.run(argv, cwd=self.path, env=full, capture_output=True, timeout=timeout or gitio.TIMEOUT,
+                                  creationflags=_NO_WINDOW, **stdin)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise gitio.GitError(f"git {args[0]}: {type(exc).__name__}") from None
         err = proc.stderr.decode("utf-8", "replace")
@@ -381,9 +384,10 @@ class Shadow:
             raise ShadowBroken(_clean_error(err))
         return proc.returncode, proc.stdout if raw else proc.stdout.decode("utf-8", "replace")
 
-    def git(self, args, raw=False):
-        """(returncode, stdout) of a local git command in the shadow, for team sync's reads."""
-        return self._git(args, raw=raw)
+    def git(self, args, raw=False, env=None, data=None):
+        """(returncode, stdout) of a local git command in the shadow, for team sync's reads and
+        record commits."""
+        return self._git(args, raw=raw, env=env, data=data)
 
     def read_file(self, ref, path, max_bytes, with_id=False):
         """The bytes of the file `path` (a plain file, not a link or a folder) at `ref` in the

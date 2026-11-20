@@ -20,11 +20,12 @@ import time
 from orchestraty import __version__, config, gitio, remote, team
 from orchestraty.coordinator.record import Record
 from orchestraty.delivery.notes import printable
-from orchestraty.team import grammar, identity, people, policy, probe, recordfile, scan, seal, snapshot, tasks, teamfile
+from orchestraty.team import (grammar, identity, people, policy, probe, recordfile, scan, seal, snapshot, store, tasks,
+                              teamfile)
 
 PEOPLE_FILE = ".orchestraty/people.yml"
 CODEOWNERS_LINE = "/.orchestraty/ @your-org/leads"
-OUTBOX = "refs/orch-out/{}/record"
+OUTBOX = store.OUTBOX
 POLICY_TEMPLATE = """\
 # What Orchestraty shares between the teammates of this repository. The copy in force is the one
 # on the remote's default branch: a change made on another branch counts once it is merged.
@@ -472,16 +473,11 @@ def sealed_now(state, common_dir, now):
             rec.close()
     else:
         projection = seal.Projection(__version__, force.blob, ())
+    outbox = store.Outbox(shadow, chosen["remote"], me.person, device.id, email)
     try:
-        return seal.seal(projection, eff, me, device, _next_seq(shadow), now)
+        return seal.seal(projection, eff, me, device, outbox.next_seq(), now)
     except seal.SealError as exc:
         raise Refused(str(exc)) from None
-
-
-def _next_seq(shadow):
-    """The seq the next record would have: one more than the last this device sent."""
-    kept = teamfile.read(shadow).get("seq")
-    return kept + 1 if isinstance(kept, int) and not isinstance(kept, bool) and kept > 0 else 1
 
 
 def task(state, args, confirm):
