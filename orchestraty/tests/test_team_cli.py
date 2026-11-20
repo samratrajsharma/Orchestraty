@@ -1,6 +1,7 @@
 """orch team: turning team sync on and off for a repository (asking first), what it would share, and
 the files it starts from. The team remote is a local bare repository: nothing leaves the machine."""
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -284,7 +285,9 @@ def test_enabled_marker_follows_config(state, with_policy, repo, capsys):
         c.reload_config()
         assert marker.exists()
         cfg["team"][next(iter(cfg["team"]))]["on"] = False
-        Path(state.config).write_text(json.dumps(cfg) + " ", encoding="utf-8")
+        before = os.stat(state.config).st_mtime_ns
+        Path(state.config).write_text(json.dumps(cfg), encoding="utf-8")
+        os.utime(state.config, ns=(before + 2 * 10 ** 9, before + 2 * 10 ** 9))   # a coarse clock: same time otherwise
         c.reload_config()
         assert not marker.exists()
     finally:
