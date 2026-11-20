@@ -1,0 +1,6 @@
+# What Orchestraty may share between the teammates of this repository.
+version: 1
+sync: on
+visibility: private
+share:
+  claims: true

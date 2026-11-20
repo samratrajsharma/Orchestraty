@@ -1,0 +1,7 @@
+# Who is who: each teammate's handle and the emails their commits carry.
+version: 1
+people:
+  - handle: alice
+    emails: [alice@example.com]
+  - handle: bob
+    emails: [bob@example.com]

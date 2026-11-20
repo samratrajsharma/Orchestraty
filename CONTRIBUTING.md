@@ -49,6 +49,7 @@ Everything runs on the user's machine. An agent's hook runs a small script that 
 - **Never touch the real user's state, settings or repositories.** The fixtures in `orchestraty/tests/conftest.py` give every test its own state folder and home (`ORCH_HOME`, `HOME`, `USERPROFILE`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) and keep the background process from starting; the `git` fixture runs git with an empty user and system config, in temporary repositories. Use them; never point a test at `~`, the real agent settings or a real repository.
 - **Leave nothing behind.** No `__pycache__`, no `.pytest_cache`, no output files in the working copy. CI fails any job whose tests leave a file behind.
 - A change that affects behaviour comes with a test that fails without it.
+- **The labelled sample of team notes** (`orchestraty/tests/test_team_sample.py`) plays alice's changes on pushed branches against bob's work on his machine (`tests/team_sample/catalog.py`, on `tests/fixtures/team_shop`) and labels every finding with an oracle written before its first run (`tests/team_sample/oracle.py`): real, harmless or false. It fails when a finding is not in the oracle, when a strong one is labelled false, or when strict precision (real over all), recall or the list of misses gets worse than the figures pinned after the first run. `python -m pytest tests/test_team_sample.py -s` prints the table. Change a label only to correct the label, never to fit the code; a better figure is pinned in the same change.
 
 ### Continuous integration
 

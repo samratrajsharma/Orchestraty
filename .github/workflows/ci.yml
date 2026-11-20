@@ -29,9 +29,10 @@ jobs:
   quick:
     name: quick (${{ matrix.os }}, Python 3.12)
     runs-on: ${{ matrix.os }}
-    # The two-machine team sync tests run many git commands, which take about ten times as long
-    # on the Windows runner as on Linux: its main package tests now take over 20 minutes there.
-    timeout-minutes: 40
+    # The two-machine team sync tests and the labelled sample of team notes run many git commands,
+    # which take about ten times as long on the Windows runner as on Linux: its main package
+    # tests now take over 35 minutes there.
+    timeout-minutes: 60
     strategy:
       # Report both platforms, even when one of them fails.
       fail-fast: false
