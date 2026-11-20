@@ -1,4 +1,5 @@
-"""Team sync's part of the coordinator: the record goes with the user's own push.
+"""Team sync's part of the coordinator: the record goes with the user's own push, and teammates'
+records are read from the remote every few minutes.
 
 On the level-0 timer, and every step for two minutes after git's pre-push hook ran, the
 coordinator looks for the user's push in git's reflog (``pushwatch``). A push sets this device's
@@ -9,18 +10,30 @@ new, and a remote that has it already, sends nothing. What each push came to goe
 coordinator, which keeps it in the record (``team_sent``, and ``team_withheld`` for what was
 withheld). At most one record commit goes per user push; the record is never written on a
 change of the live map.
+
+The team fetch runs on a thread too, at the coordinator's start, every ``team_fetch_minutes``
+(a fifth more or less, so teammates' coordinators do not fetch in step), right after this
+device's own push, and only while the coordinator runs. It brings every writer's record ref and
+the branches records name; when it finds names it did not bring, it fetches those at once. A
+failed fetch keeps what was read and waits twice as long each time, up to an hour. Reading,
+which needs no network, takes each record through the incoming gate (only when its tip
+changed) and keeps every writer in ``team_writers``; this device's own record is skipped.
 """
+import json
 import queue
+import random
 import threading
 from collections import namedtuple
 
 from orchestraty import config, remote, team
-from orchestraty.team import commands, identity, pushwatch, store, teamfile
+from orchestraty.team import admit, commands, identity, people, pushwatch, store, teamfile, view
 
 NS = 1_000_000_000
 PUSH_SETTLE_SECONDS = 3             # after a push, before the record goes: git push --all may go on
 ARM_SECONDS = 120                   # after the pre-push hook's line, the reflog is read every step this long
 BUSY_RETRY_SECONDS = 30             # the shadow's lock was held: the record goes this much later
+JITTER = 0.2                        # each fetch interval is a fifth longer or shorter, at random
+MAX_BACKOFF_SECONDS = 3600
 
 Outcome = namedtuple("Outcome", "common_dir remote store ts seq commit size sessions result withheld")
 
@@ -81,6 +94,12 @@ class TeamSync:
         self._armed = {}                # common_dir -> until when (ns) the reflog is read every step
         self._threads = {}              # (what, common_dir) -> its thread
         self._outcomes = queue.Queue()
+        self._started = set()           # repositories whose first team fetch this coordinator made
+        self._fetch_now = set()         # repositories whose team fetch is due at once
+        self._names = {}                # common_dir -> the branches the last admitted records name
+        self._gates = {}                # common_dir -> (key, people, effective, me, device)
+        self._read = {}                 # common_dir -> (what was read, [(person, device, Tip, Admitted)])
+        self.fetched = set()            # repositories whose fetch finished since the coordinator looked
 
     def arm(self, common_dir, now):
         """git's pre-push hook ran: read the reflog every step for a while."""
@@ -140,6 +159,134 @@ class TeamSync:
         if outcome is not None:
             self.log.info("team record of %s: %s (seq %d)", common_dir, outcome.result, outcome.seq)
             self._outcomes.put(outcome)
+            if outcome.result == "pushed":
+                self._fetch_now.add(common_dir)              # read again at once: the lease rests on it
+
+    # the team fetch
+    def fetch_if_due(self, common_dir, remote_name, interval_seconds, now):
+        """Start the team fetch on its thread when one is due and none is running: at this
+        coordinator's start, after this device's push, or when the last one said. True if started."""
+        if self._running("fetch", common_dir):
+            return False
+        if common_dir in self._started and common_dir not in self._fetch_now:
+            due = (teamfile.read(remote.Shadow(self.state, common_dir)).get("fetch") or {}).get("next")
+            if isinstance(due, (int, float)) and now / NS < due:
+                return False
+        self._started.add(common_dir)
+        self._fetch_now.discard(common_dir)
+        thread = threading.Thread(target=self._fetch, args=(common_dir, remote_name, interval_seconds, now),
+                                  name="team-fetch", daemon=True)
+        self._threads[("fetch", common_dir)] = thread
+        thread.start()
+        return True
+
+    def _fetch(self, common_dir, remote_name, interval_seconds, now):
+        shadow = remote.Shadow(self.state, common_dir)
+        try:
+            with store.locked(shadow):
+                ok, writers = self._fetch_once(shadow, common_dir, remote_name, now)
+                kept = teamfile.read(shadow).get("fetch") or {}
+                failures = int(kept.get("failures") or 0)
+                wait = (interval_seconds * random.uniform(1 - JITTER, 1 + JITTER) if ok
+                        else min(interval_seconds * 2 ** failures, MAX_BACKOFF_SECONDS))
+                teamfile.update(shadow, fetch=dict(kept, next=now / NS + wait,
+                                                   writers=writers if ok else kept.get("writers", 0)))
+        except store.Busy:
+            self._fetch_now.add(common_dir)
+        except Exception:                                    # never let a fetch take the coordinator down
+            self.log.exception("the team fetch of %s failed", common_dir)
+        finally:
+            self.fetched.add(common_dir)
+
+    def _fetch_once(self, shadow, common_dir, remote_name, now):
+        """One fetch, and a second one for branches it found named and did not bring. (ok, writers)."""
+        try:
+            url = remote.remote_url(common_dir, remote_name)
+        except remote.RemoteError as exc:
+            kept = teamfile.read(shadow).get("fetch") or {}
+            teamfile.update(shadow, fetch=dict(kept, at=int(now / NS), ok=False, error=str(exc)[:300],
+                                               failures=int(kept.get("failures") or 0) + 1))
+            return False, 0
+        ssh = remote._ssh_configured(common_dir)
+        names = set(self._names.get(common_dir, ()))
+        if not store.fetch_records(shadow, url, remote_name, now / NS, names, ssh):
+            return False, 0
+        found = self._named(shadow, common_dir, remote_name, now)
+        if found - names and not store.fetch_records(shadow, url, remote_name, now / NS, found, ssh):
+            return False, 0
+        store.drop_unnamed(shadow, remote_name, found)
+        self._names[common_dir] = found
+        self.log.info("team fetch of %s: %d writers, %d branches named", common_dir,
+                      len(store.read_writers(shadow, remote_name)), len(found))
+        return True, len(store.read_writers(shadow, remote_name))
+
+    def _named(self, shadow, common_dir, remote_name, now):
+        """The branches the records just fetched name, as the incoming gate admits them."""
+        found = set()
+        for _, _, _, verdict in self._admitted(shadow, common_dir, remote_name, now, {}):
+            for e in verdict.record.sessions if verdict.record is not None else ():
+                if e.pushed is not None and e.pushed.ref.startswith("refs/heads/"):
+                    found.add(e.pushed.ref[len("refs/heads/"):])
+        return set(sorted(found)[:store.MAX_NAMED])
+
+    # reading
+    def records(self, record, common_dir, remote_name, now):
+        """[(person, device, Tip, Admitted)] of the writers last fetched, this device left out,
+        through the incoming gate. Records are read again only when a tip, the policy or the
+        people file changed; each writer's row in team_writers is kept then. No network."""
+        shadow = remote.Shadow(self.state, common_dir)
+        gate = self._gate(shadow, common_dir, remote_name)
+        if gate is None:
+            return []
+        refs = store.read_writers(shadow, remote_name)
+        seen = (gate[0], tuple(refs))
+        kept = self._read.get(common_dir)
+        if kept is not None and kept[0] == seen:
+            return kept[1]
+        repo_id = record.repo_id(common_dir)
+        tips = {(p, d): c for p, d, _, c in refs}
+        last_seqs = {(w["person"], w["device"]): w["seq"] for w in record.team_writers(repo_id)
+                     if w["commit_id"] != tips.get((w["person"], w["device"]))}   # a tip read before is no rollback
+        out = self._admitted(shadow, common_dir, remote_name, now, last_seqs, refs)
+        with record.transaction():
+            for person, device, tip, verdict in out:
+                record.put_team_writer(admit.writer_row(repo_id, remote_name, person, device, tip, verdict, now / NS))
+        self._read[common_dir] = (seen, out)
+        return out
+
+    def _admitted(self, shadow, common_dir, remote_name, now, last_seqs, refs=None):
+        gate = self._gate(shadow, common_dir, remote_name)
+        if gate is None:
+            return []
+        _, folks, eff, me, device = gate
+        refs = store.read_writers(shadow, remote_name) if refs is None else refs
+        mine = [(p, d, r) for p, d, r, _ in refs if (p, d) != (me.person, device.id)]
+        tips = admit.read_tips(shadow, mine)
+        return admit.admit_all(tips, folks, eff, last_seqs, now / NS,
+                               admit.exists_in(shadow, f"refs/orch/{remote_name}/HEAD"))
+
+    def _gate(self, shadow, common_dir, remote_name):
+        """(key, people, effective policy, me, device) for reading a repository's records: worked
+        out again when the default branch as fetched or the repository's team settings change."""
+        rc, head = shadow.git(["rev-parse", "--verify", "--quiet", f"refs/orch/{remote_name}/HEAD"]) \
+            if shadow.exists() else (1, "")
+        cfg = config.load(self.state)
+        key = (head.strip() if rc == 0 else "", json.dumps(team.settings(cfg, common_dir), sort_keys=True))
+        kept = self._gates.get(common_dir)
+        if kept is not None and kept[0] == key:
+            return kept
+        try:
+            _, _, _, _, eff = commands.effective_for(self.state, common_dir, cfg)
+            folks = view.people_in_force(shadow, remote_name) or people.People.empty()
+            me = identity.who_am_i(folks, identity.my_email(common_dir))
+            device = identity.Device.load(self.state)
+        except (identity.NoEmail, identity.DeviceError, people.Error, commands.Refused):
+            return None
+        if device is None:
+            return None
+        gate = (key, folks, eff, me, device)
+        self._gates[common_dir] = gate
+        return gate
 
     def outcomes(self):
         """What the push threads came to since the last call, for the coordinator to keep."""

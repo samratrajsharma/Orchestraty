@@ -23,10 +23,13 @@ from contextlib import contextmanager
 
 from orchestraty import gitio, remote
 from orchestraty.coordinator.lock import Lock
-from orchestraty.team import recordfile, seal, teamfile
+from orchestraty.team import grammar, recordfile, seal, teamfile
 
 OUTBOX = "refs/orch-out/{}/record"
 RECORDS = "refs/orch-team/{}/records"
+STORE = "refs/orch-team/{}/store"
+HEADS = "refs/orch-team/{}/heads"
+MAX_NAMED = 100                   # teammates' branches one fetch brings
 LOCK_WAIT = 30
 COMPACT_COMMITS = 100
 COMPACT_DAYS = 30
@@ -63,16 +66,26 @@ def clash_message(device):
     return f"another machine writes as device {device}: run orch team device --new on one of them"
 
 
-def fetch_records(shadow, url, remote_name, now, ssh_configured=False):
-    """Fetch the remote's default branch and every writer's record ref into the shadow, and keep
-    how it went in the team file. True when it worked."""
-    refspecs = [f"+HEAD:refs/orch/{remote_name}/HEAD", f"+refs/orchestraty/*:{RECORDS.format(remote_name)}/*"]
+def refspecs(remote_name, names=()):
+    """The team fetch's refspecs: the default branch, every writer's record ref, the records
+    branch and the branches records name (at most 100). A glob never fails for a ref that is
+    not there, so each named branch is one: `feat/x*` brings feat/x (and siblings, never used)."""
+    out = [f"+HEAD:refs/orch/{remote_name}/HEAD", f"+refs/orchestraty/*:{RECORDS.format(remote_name)}/*",
+           f"+refs/heads/orchestraty/records*:{STORE.format(remote_name)}*"]
+    return out + [f"+refs/heads/{n}*:{HEADS.format(remote_name)}/{n}*" for n in sorted(names)[:MAX_NAMED]]
+
+
+def fetch_records(shadow, url, remote_name, now, names=(), ssh_configured=False):
+    """Fetch the remote's default branch, every writer's record ref and the branches `names`
+    into the shadow, in one connection, and keep how it went in the team file. True when it
+    worked. --prune touches only these refspecs' destinations: never the cloud fetch's refs."""
+    refspecs_now = refspecs(remote_name, names)
     try:
         try:
-            shadow.fetch_refspecs(url, refspecs, ssh_configured=ssh_configured)
+            shadow.fetch_refspecs(url, refspecs_now, ssh_configured=ssh_configured)
         except remote.ShadowBroken:
             shadow.mark_broken(now)
-            shadow.fetch_refspecs(url, refspecs, ssh_configured=ssh_configured)
+            shadow.fetch_refspecs(url, refspecs_now, ssh_configured=ssh_configured)
     except (remote.RemoteError, remote.ShadowBroken, gitio.GitError, OSError) as exc:
         kept = teamfile.read(shadow).get("fetch") or {}
         teamfile.update(shadow, fetch=dict(kept, at=int(now), ok=False, error=remote._clean_error(str(exc))[:300],
@@ -81,6 +94,32 @@ def fetch_records(shadow, url, remote_name, now, ssh_configured=False):
     kept = teamfile.read(shadow).get("fetch") or {}
     teamfile.update(shadow, fetch=dict(kept, at=int(now), ok=True, error="", failures=0, last_ok=int(now)))
     return True
+
+
+def read_writers(shadow, remote_name):
+    """[(person, device, ref, commit)] of the writers the last fetch brought, sorted. A ref there
+    of any other depth, or whose person or device no writer could have, is not read at all."""
+    if not shadow.exists():
+        return []
+    prefix = RECORDS.format(remote_name) + "/"
+    rc, out = shadow.git(["for-each-ref", "--format=%(refname) %(objectname)", prefix])
+    found = []
+    for line in out.splitlines() if rc == 0 else []:
+        ref, _, commit = line.partition(" ")
+        parts = ref[len(prefix):].split("/")
+        if len(parts) == 2 and grammar.person(parts[0]) and grammar.device(parts[1]):
+            found.append((parts[0], parts[1], ref, commit))
+    return sorted(found)
+
+
+def drop_unnamed(shadow, remote_name, names):
+    """Delete the shadow's copies of teammates' branches that no record names any more (and the
+    siblings a glob brought)."""
+    prefix = HEADS.format(remote_name) + "/"
+    rc, out = shadow.git(["for-each-ref", "--format=%(refname)", prefix]) if shadow.exists() else (1, "")
+    for ref in out.split() if rc == 0 else []:
+        if ref[len(prefix):] not in names:
+            shadow.git(["update-ref", "-d", ref])
 
 
 class Outbox:

@@ -8,8 +8,9 @@ policy and a people file to start from, ``check`` reads them in a working copy, 
 this machine shares as, ``preview`` shows the exact bytes a record would have now, ``task`` gives a
 session a ticket or a task line its author confirms, and ``device`` labels or renews the device.
 
-In this version nothing is pushed and no teammate's record is read: the record is only shown,
-by ``orch team preview``.
+From then on the coordinator sends this device's record after each of the user's own pushes
+and reads teammates' records every few minutes (team/sync.py); ``orch team preview`` shows the
+exact record before it goes.
 """
 import json
 import os
@@ -219,8 +220,9 @@ def on(state, args, confirm):
     device = identity.Device.load_or_create(state)
     team.save_settings(state, common_dir, on=True, remote=remote_name, consented=force.normalised())
     pushwatch.PushWatch(shadow, common_dir, remote_name).check()        # from here on, a push sends the record
-    print(f"Team sync on for {name}: you are {me.person} on device {device.id}. In this version nothing is pushed "
-          "yet; orch team preview shows the record as it would be.")
+    store.fetch_records(shadow, url, remote_name, time.time())          # the first team fetch
+    print(f"Team sync on for {name}: you are {me.person} on device {device.id}. Your record goes with your next "
+          f"push to {remote_name}; orch team preview shows it now.")
     return 0
 
 

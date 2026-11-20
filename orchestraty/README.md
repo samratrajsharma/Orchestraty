@@ -183,7 +183,7 @@ Tested with local remotes; not yet with a real cloud agent's branch on a hosting
 
 ## Teams: people and policy
 
-Team sync is how teammates' agents, on any vendor, hear of each other's work through git: no server and no account. This version has its first half: the two files a team keeps in its repository, the gates a record passes on its way out and in, `orch team`, and what status and doctor show. Nothing is pushed and no teammate's record is read in the background yet; `orch team preview` shows the record this machine would send.
+Team sync is how teammates' agents, on any vendor, hear of each other's work through git: no server and no account. After `orch team on`, this machine's record of its sessions goes to the team remote right after each of your own successful pushes there, and teammates' records are read from it every two minutes while the coordinator runs; `orch team preview` shows the exact record before it goes. This version has the two files a team keeps in its repository, the gates a record passes on its way out and in, the push and the fetch, `orch team`, and what status and doctor show of teammates' records.
 
 **The two files** live in `.orchestraty/` on the remote's default branch and are reviewed like code. The copy in force is the one there: a change made on another branch counts once it is merged. `orch team init` prints both to start from (and a CODEOWNERS line, `/.orchestraty/ @your-org/leads`, so changes to them are reviewed), and `orch team check` reads them in a working copy.
 

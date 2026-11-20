@@ -483,13 +483,16 @@ class Coordinator:
         return self.team
 
     def scan_team(self):
-        """Team sync, on the level-0 timer: look for the user's push in each repository where
-        it is on. Its record then goes from step(), on a thread."""
+        """Team sync, on the level-0 timer, in each repository where it is on: read teammates'
+        records as last fetched, fetch where due (on a thread), and look for the user's push,
+        whose record then goes from step(), on a thread too."""
         repos = self._team_repos()
         if not repos:
             return
         sync, now = self._team_sync(), self.now_ns()
         for common_dir, remote_name in repos.items():
+            sync.records(self.record, common_dir, remote_name, now)
+            sync.fetch_if_due(common_dir, remote_name, self.cfg["team_fetch_minutes"] * 60, now)
             sync.look(common_dir, remote_name, now)
 
     def _keep_team_outcomes(self):
@@ -522,7 +525,7 @@ class Coordinator:
                 self._team_sync().arm(common_dir, self.now_ns())
 
     def busy(self):
-        """Whether team sync has work under way: a record to push, or a push running."""
+        """Whether team sync has work under way: a record to push, a push or a fetch running."""
         return self.team is not None and self.team.pending()
 
     def idle_after(self):

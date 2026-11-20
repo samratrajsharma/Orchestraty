@@ -143,6 +143,19 @@ class Machine:
         args = types.SimpleNamespace(action="on", remote=None, yes=True, repo=str(self.clone))
         assert commands.on(self.state, args, lambda question, assume_yes: True) == 0
 
+    def push_work(self, sid, branch, path, text, message="work"):
+        """A new session on `branch` that writes `path`, commits and pushes it (-u), and this
+        machine's record going out 3 s later, as team sync sends it. Returns the commit pushed."""
+        self.start(sid, branch)
+        self.settle()
+        self.edit(sid, path, text)
+        commit = self.commit(sid, message)
+        self.push(sid, "-u")
+        self.settle()
+        self.clock.advance(3)
+        self.settle()
+        return commit
+
     def device(self):
         path = Path(self.state.root) / "team" / "device.json"
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
