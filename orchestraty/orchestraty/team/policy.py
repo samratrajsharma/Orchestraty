@@ -85,6 +85,8 @@ NO_VISIBILITY = ("the policy does not say whether the repository is public",
                  "the policy must say visibility: private or public")
 PUBLIC = ("the repository is public, and the policy does not say public_sync: true",
           "set public_sync: true if anyone who can read the repository may read what is shared")
+PROBE_PUBLIC = ("anyone can read this repository without signing in, but the policy says visibility: private",
+                "say visibility: public and public_sync: true in the policy, or make the repository private")
 VERIFY_NOTE = "the policy says signatures: verify, which does nothing yet: records are not signed in this version"
 NARROW_NOTE = "the narrowing in config.json cannot be read, so nothing optional is shared"
 NEVER_NOTE = "never_branches in config.json cannot be read, so no branch is shared"
@@ -227,13 +229,15 @@ def in_force(shadow, name, url=None, timeout=remote.FETCH_TIMEOUT, ssh_configure
     return None if data is None else parse(data)
 
 
-def effective(force, consented, narrow=None, never_branches=None):
+def effective(force, consented, narrow=None, never_branches=None, anonymous_read=None):
     """The policy a seal follows: never wider than the copy in force, the copy the person
     agreed to, or their narrowing (config.json's ``narrow``, such as {"task": "none"}, and
     ``never_branches``), which can only remove. A share flag is on only if it is on in all
     three, and task is the least of them; a branch must match branches.share in both copies;
     never globs, deny paths and deny words are those of both; and the repository is public if
-    either copy says so. A local setting that cannot be read removes all it could."""
+    either copy says so. A local setting that cannot be read removes all it could.
+    `anonymous_read` is the last probe's answer (team.probe): True, with a policy that says
+    private, keeps sync off; None changes nothing."""
     if force is None:
         return Policy(problem=NO_POLICY)
     agreed = consented if consented is not None and consented.off() is None else None
@@ -247,6 +251,8 @@ def effective(force, consented, narrow=None, never_branches=None):
         problem = NOT_AGREED
     if problem is None and public and not agreed_public:
         problem = PUBLIC_NOT_AGREED
+    if problem is None and anonymous_read is True and not public:
+        problem = PROBE_PUBLIC
     return Policy(
         sync=force.sync and base.sync,
         visibility="public" if public else force.visibility,

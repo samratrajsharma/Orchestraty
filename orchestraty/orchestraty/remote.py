@@ -242,6 +242,7 @@ class Shadow:
         self.status_path = os.path.join(self.folder, key + ".json")
         self.lock_path = os.path.join(self.folder, key + ".lock")
         self.broken_path = os.path.join(self.folder, key + ".broken")
+        self.team_path = os.path.join(self.folder, key + ".team.json")        # team sync's own, made only by it
 
     def exists(self):
         return os.path.isfile(os.path.join(self.path, "HEAD"))
