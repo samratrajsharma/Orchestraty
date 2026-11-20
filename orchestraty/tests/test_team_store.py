@@ -6,7 +6,7 @@ import json
 import shutil
 from pathlib import Path
 
-from orchestraty import remote
+from orchestraty import gitio, remote
 from orchestraty.team import commands, identity, seal, store, teamfile
 from team_harness import NS, Machine, run_git, team  # noqa: F401  (fixtures)
 
@@ -131,7 +131,7 @@ def test_lost_outbox_continues_from_remote_seq(team):  # noqa: F811
     for n in range(3):
         send(alice, sealed_with(alice, 1_795_000_080 + 60 * n, outbox.next_seq()))
     third = ref_on_remote(team, alice)
-    shutil.rmtree(outbox.shadow.path)                                              # the shadow is lost, and with it
+    gitio.remove_tree(outbox.shadow.path)                                          # the shadow is lost, and with it
     teamfile.update(outbox.shadow, seq=None, last_pushed=None)                     # what it kept
     fetch(alice)
     outbox = outbox_of(alice)
