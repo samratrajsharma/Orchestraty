@@ -46,7 +46,7 @@ def tables(page):
     for line in (DOCS / page).read_text(encoding="utf-8").splitlines():
         if line.startswith("#"):
             heading = line.lstrip("#").strip()
-        m = re.match(r"^\| `([a-z_]+)` \|", line)
+        m = re.match(r"^\| `([a-z0-9_]+)` \|", line)
         if m:
             out.setdefault(heading, []).append(m.group(1))
     return out
@@ -78,7 +78,7 @@ def test_the_json_docs_name_every_field(state, repo, git, tmp_path):
         assert set(data) == set(doc["The object"])
         assert set(data["coordinator"]) == set(doc["`coordinator`"])
         [repository] = data["repositories"]
-        assert set(repository) == set(doc["Repository"])
+        assert set(repository) == set(doc["Repository"]) - {"team"}               # team only where it is on
         a = repository["sessions"][0]
         assert set(a) == set(doc["Session"]) and set(a["changes"]) == set(doc["`changes`"])
         assert set(a["changes"]["symbols"][0]) == set(doc["Symbol"]) and set(a["declared"][0]) == set(doc["`declared`"])
@@ -111,3 +111,34 @@ def test_the_json_docs_name_every_field(state, repo, git, tmp_path):
         assert f"| `{kind}` |" in page
     for key in sorted({k for e in got for k in e}):
         assert f"`{key}`" in page, key
+
+
+def test_the_team_block_is_documented_both_ways(state, repo, git, tmp_path, monkeypatch):
+    """The team block's fields, each named in status-json.md and none named there that it lacks."""
+    from test_team_cli import PEOPLE, POLICY
+    from test_team_status import BOB, with_rows
+    from orchestraty import cli
+    from orchestraty.team import seal
+    git(repo, "config", "user.email", "alice@example.com")
+    bare = tmp_path / "origin.git"
+    git(tmp_path, "clone", "-q", "--bare", str(repo), str(bare))
+    git(repo, "remote", "add", "origin", str(bare))
+    for rel, text in ((".orchestraty/policy.yml", POLICY), (".orchestraty/people.yml", PEOPLE)):
+        (repo / rel).parent.mkdir(exist_ok=True)
+        (repo / rel).write_text(text, encoding="utf-8")
+        git(repo, "add", rel)
+    git(repo, "commit", "-q", "-m", "team files")
+    git(repo, "push", "-q", "origin", "main")
+    config.watch(state, str(repo / ".git"))
+    monkeypatch.chdir(repo)
+    assert cli.main(["team", "on", "--yes"]) == 0
+    with_rows(state, repo, writers=[{"entries": [BOB]}], withheld=[seal.Withheld("sessions[].branch", "grammar", "1a2b3c4d")],
+              sent=(1, "c" * 40, 900, 1, "pushed"))
+    doc = tables("status-json.md")
+    [repository] = status.collect(state, with_lines=True)["repositories"]
+    t = repository["team"]
+    assert set(repository) == set(doc["Repository"])
+    assert set(t) == set(doc["`team`"]) and set(t["policy"]) == set(doc["`team.policy`"])
+    assert set(t["me"]) == set(doc["`team.me`"]) and set(t["sent"]) == set(doc["`team.sent`"])
+    assert set(t["withheld_24h"][0]) == set(doc["`team.withheld_24h`"])
+    assert set(t["writers"][0]) == set(doc["Team writer"]) and set(t["writers"][0]["entries"][0]) == set(doc["Team writer entry"])

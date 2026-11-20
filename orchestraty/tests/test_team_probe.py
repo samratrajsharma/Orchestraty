@@ -148,9 +148,14 @@ def test_probe_contradiction_turns_sync_off(dumb, shadow):
     assert policy.effective(public, public, anonymous_read=True).sync_on()
 
 
-def test_no_probe_from_hooks_or_doctor(state_root, repo, monkeypatch):
-    for module in (SOURCE / "capture" / "hook.py", SOURCE / "doctor.py"):
-        assert not any(name.startswith("orchestraty.team") for name in _imported_modules(module)), module
+def test_no_probe_from_hooks_or_doctor(state_root, repo, git, monkeypatch):
+    hook = SOURCE / "capture" / "hook.py"
+    assert not any(name.startswith("orchestraty.team") for name in _imported_modules(hook))     # nothing of team at all
+    state = State(str(state_root))
+    from orchestraty import config, doctor, team
+    config.watch(state, str(repo / ".git"))
+    git(repo, "remote", "add", "origin", "https://git.example.invalid/acme/app.git")      # one the probe would ask
+    team.save_settings(state, str(repo / ".git"), on=True, remote="origin")
     seen, real = [], subprocess.Popen
 
     class Spy(real):
@@ -158,6 +163,6 @@ def test_no_probe_from_hooks_or_doctor(state_root, repo, monkeypatch):
             seen.append([str(x) for x in args])
             super().__init__(args, *a, **k)
     monkeypatch.setattr(subprocess, "Popen", Spy)
-    from orchestraty import doctor
-    list(doctor.checks(State(str(state_root)), str(repo), index=False))
+    lines = list(doctor.checks(state, str(repo), index=False))
+    assert any(c.text.startswith("team policy:") for c in lines)                  # the team checks ran
     assert seen and not any("ls-remote" in argv for argv in seen)

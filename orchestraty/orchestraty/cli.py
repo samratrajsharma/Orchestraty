@@ -448,11 +448,12 @@ def cmd_config(args):
 def cmd_status(args):
     from orchestraty import config, status
     state = State()
-    data = status.collect(state, include_ended=args.all)
+    tty = not args.json and sys.stdout.isatty()
+    data = status.collect(state, include_ended=args.all, with_lines=args.with_lines or tty)
     if args.json:
         print(json.dumps(data, indent=2))
     else:
-        sys.stdout.write(status.render(data, wake=config.load(state)["wake"]))
+        sys.stdout.write(status.render(data, wake=config.load(state)["wake"], tty=tty))
     return 0
 
 
@@ -1264,6 +1265,8 @@ def build_parser():
                                  description="Show the coordinator and the sessions on each watched repository.")
     status.add_argument("--json", action="store_true", help="print JSON (schema in the 'schema' field)")
     status.add_argument("--all", action="store_true", help="include ended sessions")
+    status.add_argument("--with-lines", action="store_true", help="with --json: teammates' confirmed task lines too "
+                                                                  "(for people, not for agents)")
     status.set_defaults(handler=cmd_status)
 
     findings = commands.add_parser("findings", help="the findings, numbered for orch label",

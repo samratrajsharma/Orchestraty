@@ -213,6 +213,29 @@ def _agent_view(repo, mine):
         cloud["fetch"] = dict(cloud["fetch"], error=_first_words(cloud["fetch"].get("error")))
     cloud["branches"] = [_session_view(s, False) for s in cloud.get("branches", [])]
     out["cloud"] = cloud
+    if isinstance(repo.get("team"), dict):
+        out["team"] = _team_view(repo["team"])
+    return out
+
+
+def _team_view(t):
+    """The team block as an agent sees it: teammates' names, devices, branches and tickets cleaned
+    as notes clean them, never a task line, and of the messages only our own words."""
+    out = dict(t)
+    out["policy"] = dict(t["policy"], why=_first_words(t["policy"].get("why")), fix=_first_words(t["policy"].get("fix")))
+    if isinstance(t.get("me"), dict):
+        out["me"] = dict(t["me"], person=templates.clean(t["me"]["person"], 60),
+                         label=templates.clean(t["me"]["label"], 30))
+    if isinstance(t.get("sent"), dict):
+        out["sent"] = dict(t["sent"], error=_first_words(t["sent"].get("error")))
+    out["writers"] = [dict(w, person=templates.clean(w["person"], 60), device=templates.clean(w["device"], 20),
+                           label=templates.clean(w.get("label", ""), 30), why=templates.clean(w.get("why", ""), 80),
+                           entries=[{"agent": templates.clean(e.get("agent", ""), 20),
+                                     "state": templates.clean(e.get("state", ""), 10),
+                                     "branch": templates.clean(e.get("branch", ""), 200), "pushed": e.get("pushed") is True,
+                                     "ticket": templates.clean(e.get("ticket", ""), 20)}
+                                    for e in w.get("entries", []) if isinstance(e, dict)])
+                      for w in t.get("writers", []) if isinstance(w, dict)]
     return out
 
 

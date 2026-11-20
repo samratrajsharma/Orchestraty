@@ -9,7 +9,9 @@ agent can be handed (``adapters``), and the text says what an agent there cannot
 live session's claims (``orch claim``) that hold are listed with it, and each repository has
 its merge-order advice (``mergeorder``) and its together check: the settings, and the latest
 result for each pair of its sessions (``together``); and its TypeScript contracts: the settings,
-and how each session's exports were last read (``livemap.typescript``).
+and how each session's exports were last read (``livemap.typescript``). A repository with team sync
+on, or teammates' records known, has a team block (``team.view``); one without has none, so a solo
+user's status is as it was.
 """
 import calendar
 import json
@@ -68,11 +70,14 @@ def _session(s, now, changes, declared=(), claims=()):
             "claims": [_claim(c) for c in claims]}
 
 
-def collect(state, include_ended=False, now=None):
+def collect(state, include_ended=False, now=None, with_lines=False):
+    """What orch status reports. `with_lines`: teammates' confirmed task lines too (for people
+    only: never in status.json, a note or an MCP answer)."""
     now = time.time() if now is None else now
     cfg = config.load(state)
     data = {"schema": STATUS_SCHEMA, "coordinator": _coordinator(state, now), "repositories": []}
     sessions_by_repo, repo_rows, changes, findings, declared, claimed, every = {}, {}, {}, {}, {}, {}, {}
+    teams = {}
     if os.path.exists(state.record):
         record = Record(state.record, readonly=True)
         try:
@@ -89,6 +94,11 @@ def collect(state, include_ended=False, now=None):
                 every.setdefault(f["repo_id"], []).append(f)
                 if include_ended or not f["detail"].get("latent"):
                     findings.setdefault(f["repo_id"], []).append(f)
+            if cfg["team"]:                                 # only where team sync was ever turned on
+                for r in repo_rows.values():
+                    sent = record.team_sent(r["id"], limit=1)
+                    teams[r["id"]] = (record.team_writers(r["id"]), record.withheld(r["id"], int((now - 86400) * NS)),
+                                      sent[0] if sent else None)
         finally:
             record.close()
     checked = {}
@@ -111,6 +121,12 @@ def collect(state, include_ended=False, now=None):
             "together": _together(cfg, common_dir, checked.get(repo_key(common_dir), {}), {s["id"] for s in local}),
             "typescript": _typescript(state, cfg, common_dir, {s["id"] for s in local}),
             "cloud": _cloud(state, cfg, common_dir, now, cloud, changes)})
+        if cfg["team"]:
+            from orchestraty.team import view
+            block = view.block(state, cfg, common_dir, *teams.get(row["id"] if row else None, ([], [], None)), now,
+                               with_lines=with_lines)
+            if block is not None:
+                data["repositories"][-1]["team"] = block
     return data
 
 
@@ -296,8 +312,9 @@ def _ago(seconds):
     return f"{seconds // 3600}h ago"
 
 
-def render(data, wake=False):
-    """The text of orch status; `wake`: whether wake is on (it says then who cannot be woken)."""
+def render(data, wake=False, tty=False):
+    """The text of orch status; `wake`: whether wake is on (it says then who cannot be woken);
+    `tty`: whether it goes to a terminal, the one place teammates' task lines are shown."""
     c = data["coordinator"]
     if c["running"]:
         lines = [f"Coordinator: running (pid {c.get('pid', '?')}, since {c.get('since', '?')})"]
@@ -317,6 +334,9 @@ def render(data, wake=False):
             lines.append("  no live sessions")
         if cloud.get("on") or cloud.get("branches"):
             lines += _cloud_lines(cloud)
+        if repo.get("team"):
+            from orchestraty.team import view
+            lines += view.lines(repo["team"], tty=tty, local=_local)
         if repo["overlaps"]:
             lines.append("  overlaps:")
             lines += ["    " + _overlap_line(f, names) for f in repo["overlaps"]]

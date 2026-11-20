@@ -699,7 +699,39 @@ function glance (live) {
     h('div', { class: 'card pad stack', 'data-anim': 'g:coord' }, h('span', { class: 'meta' }, 'Coordinator'),
       h('div', { class: 'row-flex' }, chip(c && c.running ? 'Running' : 'Stopped', c && c.running ? 'ok' : 'medium', true),
         h('span', { class: 'meta' }, c && c.running ? 'since ' + clock(c.since) : 'starts with the next agent event')),
-      h('button', { type: 'button', class: 'btn sm', onclick: () => { go('#/settings'); runDoctor() } }, 'Run health checks')))
+      h('button', { type: 'button', class: 'btn sm', onclick: () => { go('#/settings'); runDoctor() } }, 'Run health checks')),
+    teamCards())
+}
+
+// Team sync, one card a repository that has it. A teammate's words (handle, branch, ticket, task
+// line) come from their record: like every name here, they reach the page as text, never as HTML.
+function teamCards () {
+  return repos().filter((r) => r.team).map((r) => {
+    const t = r.team
+    const pol = t.policy || {}
+    const sharing = t.on && pol.sync
+    const who = t.me ? 'as ' + t.me.person + (t.me.label ? ' on ' + t.me.label : '') : 'no git email is set'
+    const held = (t.withheld_24h || []).reduce((n, w) => n + w.count, 0)
+    const rows = []
+    for (const w of t.writers || []) {
+      if (w.verdict !== 'admitted') {
+        rows.push(h('li', { class: 'meta' }, 'Dropped: ' + w.person + ' (' + w.why + ')'))
+        continue
+      }
+      for (const e of w.entries || []) {
+        rows.push(h('li', {}, h('b', {}, w.person), ' ', h('span', { class: 'mono' }, e.branch),
+          e.ticket ? ' [' + e.ticket + ']' : '', e.line ? h('span', { class: 'meta' }, ' ' + e.line) : '',
+          e.pushed ? '' : h('span', { class: 'faint' }, ' nothing pushed')))
+      }
+    }
+    return h('div', { class: 'card pad stack', 'data-anim': 'g:team' },
+      h('span', { class: 'meta' }, 'Team sync · ' + r.name),
+      h('div', { class: 'row-flex' }, chip(sharing ? 'Sharing' : t.on ? 'Not sharing' : 'Off', sharing ? 'ok' : 'medium', true),
+        h('span', { class: 'meta' }, pol.why ? pol.why : who)),
+      pol.widened ? h('span', { class: 'meta' }, 'The policy allows more than you agreed to: orch team on to review it.') : null,
+      held ? h('span', { class: 'faint' }, 'Withheld from your record in the last 24 h: ' + held) : null,
+      rows.length ? h('ul', { class: 'list' }, rows) : h('span', { class: 'faint' }, 'No teammate’s record read yet'))
+  })
 }
 
 // ------------------------------------------------------------------------------- activity
@@ -1043,7 +1075,9 @@ function settingsView () {
             ? 'Runs “' + s.together.command + '” on two overlapping sessions’ work merged.' : 'Run your tests on two overlapping sessions’ work merged, and tell both if they fail together.',
           s.together && s.together.on ? 'orch together off --repo ' + folder : 'orch together on "<your test command>" --repo ' + folder),
           line('Cloud agents’ branches', s.cloud && s.cloud.on, 'Fetch cloud agents’ branches read-only and compare them. The one use of the network; it asks first.',
-            s.cloud && s.cloud.on ? 'orch remote off --repo ' + folder : 'orch remote on --repo ' + folder))
+            s.cloud && s.cloud.on ? 'orch remote off --repo ' + folder : 'orch remote on --repo ' + folder),
+          line('Team sync', s.team && s.team.on, 'Share a closed record of your sessions with teammates through git, as the repository’s policy allows. It asks first.',
+            s.team && s.team.on ? 'orch team off --repo ' + folder : 'orch team on --repo ' + folder))
       })))
   }
   out.push(h('section', { class: 'section' }, h('h2', { class: 'h2' }, 'Agents'),

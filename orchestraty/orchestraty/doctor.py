@@ -27,6 +27,10 @@ line) or ``note`` (worth knowing, not a problem). The checks, in order:
   state folder moved or deleted), or a hook added to the earlier hooks folder is not run yet
   (``orch init`` again in that repository fixes each);
 * the engine: that it imports;
+* inside a repository with team sync on, the team checks (``team.checks``): the git email, the
+  policy and the people file in force, the probe's last answer, a policy that widened, a working
+  copy of the policy that differs, the secret scanner's self-test, and what the shadow cannot use;
+  with team sync off, a note when the repository's own ``origin/HEAD`` has a policy. All offline;
 * inside a repository, the time its first index takes: the engine reading every file at HEAD
   with no cache, as the coordinator does before the first note about that repository can come.
 
@@ -567,8 +571,24 @@ def checks(state, cwd, index=True, say=None):
     if hooks_line:
         yield hooks_line
     yield engine_check()
+    if cfg["team"] or os.path.exists(os.path.join(state.root, "team", "enabled")) or _has_policy(cwd):
+        from orchestraty.team import checks as team_checks
+        yield from team_checks.checks(state, cwd, ok, problem, note)
     if index:
         yield index_check(cwd, say)
+
+
+def _has_policy(cwd):
+    """Whether the repository holding `cwd` has a team policy on its own origin/HEAD (read locally)."""
+    from orchestraty import gitio
+    try:
+        info = gitio.worktree_info(cwd)
+        if not info:
+            return False
+        gitio.run(["cat-file", "-e", "refs/remotes/origin/HEAD:.orchestraty/policy.yml"], info["common_dir"])
+    except (gitio.GitError, gitio.UntrustedRepositoryError):
+        return False
+    return True
 
 
 def run(state, cwd, out=None, index=True):

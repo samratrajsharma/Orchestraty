@@ -161,7 +161,7 @@ def _main_worktree(common_dir):
 # --------------------------------------------------------------------------------------- #
 def status_payload(state, include_ended=False, demo=False):
     """orch status --json as it is, plus what the page needs to know about the server."""
-    data = status.collect(state, include_ended=include_ended)
+    data = status.collect(state, include_ended=include_ended, with_lines=True)     # the page is for the person
     data["ui"] = {"version": __version__, "demo": bool(demo)}
     return data
 

@@ -46,6 +46,7 @@ Times are UTC, as `YYYY-MM-DDTHH:MM:SSZ`. Paths of files in a repository are rel
 | `together` | object | The together check (`orch together`): its settings, and the latest result for each pair of the sessions listed. See [together](#together). |
 | `typescript` | object | TypeScript contracts (`orch ts`): the settings, and how the exports of each listed session were last read. See [typescript](#typescript). |
 | `cloud` | object | Its cloud agents' branches (`orch remote`): the settings, the last fetch, and the branches followed. See [cloud](#cloud). |
+| `team` | object | Team sync (`orch team`), only while it is on for the repository or teammates' records of it are known: a repository without it has no `team` key. See [team](#team). |
 
 ### Session
 
@@ -231,6 +232,84 @@ Opt-in, for each repository. For a session that changes .ts files, the project's
 | `last_ok` | string (time) or null | The last fetch that worked. |
 | `branches` | integer | How many branches matched the patterns at the last fetch that worked. |
 
+### `team`
+
+What team sync does for the repository. It is read locally, from config.json, the record and the shadow repository: no network.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `on` | boolean | Whether team sync is on for the repository (`orch team on`). |
+| `remote` | string | The team remote. |
+| `store` | string | Where records are kept on it: `ref`, one ref per writer under `refs/orchestraty/`. |
+| `agents_told` | boolean | Whether teammates' work reaches this machine's agents. `false` in this version. |
+| `policy` | object | The policy in force and the effective policy. See [team.policy](#teampolicy). |
+| `me` | object or null | Who this machine shares as; null when no git email is set for the repository. See [team.me](#teamme). |
+| `sent` | object or null | The last record this machine sent, null before any. See [team.sent](#teamsent). |
+| `withheld_24h` | array | What was withheld from this machine's records in the last 24 hours, by rule and field, never a value. See [team.withheld_24h](#teamwithheld_24h). |
+| `writers` | array | Each teammate's record as last read. See [team writer](#team-writer). |
+
+### `team.policy`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `blob` | string | The first seven hex digits of the policy's blob on the remote's default branch, as last fetched; `""` when none was read. |
+| `sync` | boolean | Whether the effective policy lets team sync run. |
+| `visibility` | string | `private`, `public`, or `""` when the policy does not say. |
+| `share` | object | What the effective policy shares: `claims`, `unpushed` and `activity` (booleans) and `task` (`none`, `ticket` or `confirmed`). |
+| `widened` | boolean | Whether the policy in force allows more than the copy the person agreed to; `orch team on` reviews it. |
+| `why` | string | Why nothing is shared, or `""`. |
+| `fix` | string | What to do about it, or `""`. |
+
+### `team.me`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `person` | string | The handle this machine shares as: the people file's, or `unlisted-` and eight hex digits. |
+| `listed` | boolean | Whether the people file lists the git email. |
+| `device` | string | The device id, or `""` before `orch team on` made one. |
+| `label` | string | The device's label, or `""`. |
+
+### `team.sent`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `at` | string (time) | When it was sent, or tried. |
+| `ok` | boolean | Whether the remote took it. |
+| `error` | string | Why not, or `""`. |
+| `seq` | integer | Its sequence number. |
+| `sessions` | integer | How many sessions it held. |
+
+### `team.withheld_24h`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `rule` | string | The rule that withheld it: a secret scanner rule (such as `github-token`), `grammar`, `deny-path` or `deny-word`. |
+| `field` | string | The field it was in, such as `sessions[].branch`. |
+| `count` | integer | How many times in the last 24 hours. |
+
+### Team writer
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `person` | string | The teammate's handle, from their record (from the ref's name when the record was dropped). |
+| `device` | string | Their device id. |
+| `label` | string | Their device's label, or `""`. |
+| `written` | string (time) | When they sealed the record, by their clock. |
+| `verdict` | string | `admitted`, or `dropped`. |
+| `why` | string | For a dropped record, its reason (`writer-mismatch`, `unlisted`, `rollback`, `too-large`, `bad-json`, `duplicate-key`, `bad-structure`, `newer-format`, `bad-grammar:<field>` or `not-a-record`); for an admitted one, what was dropped from it, counted. |
+| `entries` | array | One object a session it shares. See [team writer entry](#team-writer-entry). |
+
+### Team writer entry
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `agent` | string | The agent kind. |
+| `state` | string | `live` or `ended`. |
+| `branch` | string | The branch. |
+| `pushed` | boolean | Whether the remote has the branch. |
+| `ticket` | string | Its ticket, or `""`. |
+| `line` | string | The task line its author confirmed. Only in `orch status --json --with-lines`: never in status.json or in the MCP tool's answer. |
+
 ## The MCP tool `status`
 
 The MCP server's `status` tool returns, as its structured content:
@@ -239,7 +318,7 @@ The MCP server's `status` tool returns, as its structured content:
 | --- | --- | --- |
 | `schema` | integer | As above. |
 | `coordinator` | object | As above. |
-| `repository` | object | The caller's repository, as above, with these differences, so that no session's words reach another agent: every name in it (session ids, branches, worktree folders, changed files and functions, claims, declared paths and functions, findings' keys, symbols, files and details, merge-order entries, cloud branches) is cleaned as notes clean them, a folder keeping its separators as `/`; another session's declarations have no `task`; an O5 overlap's path, in its key, its `detail` and each session's `to` and `from`, is shown as notes show it (left out when it is not made of a path's characters and parameters, a parameter in braces); a together result's `first_failing_line` holds only the error's name and where it happened (`TypeError at tests/test_a.py::test_x`), and its `error`, a TypeScript run's `why` and `error` and a cloud fetch's `error` keep only Orchestraty's own words, before the first `: `. |
+| `repository` | object | The caller's repository, as above, with these differences, so that no session's words reach another agent: every name in it (session ids, branches, worktree folders, changed files and functions, claims, declared paths and functions, findings' keys, symbols, files and details, merge-order entries, cloud branches) is cleaned as notes clean them, a folder keeping its separators as `/`; another session's declarations have no `task`; an O5 overlap's path, in its key, its `detail` and each session's `to` and `from`, is shown as notes show it (left out when it is not made of a path's characters and parameters, a parameter in braces); a together result's `first_failing_line` holds only the error's name and where it happened (`TypeError at tests/test_a.py::test_x`), and its `error`, a TypeScript run's `why` and `error` and a cloud fetch's `error` keep only Orchestraty's own words, before the first `: `; in `team`, teammates' handles, devices, branches and tickets are cleaned as notes clean them, an entry never has a `line`, and the policy's `why` and `fix` and the last send's `error` keep only Orchestraty's own words. |
 | `you` | string or null | The caller's session id, when the server found it. |
 
 ## `orch team preview --json`
