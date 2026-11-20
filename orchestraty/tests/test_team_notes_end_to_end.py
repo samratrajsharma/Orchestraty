@@ -203,7 +203,6 @@ def test_nothing_raw_from_alices_record_reaches_bob(team):  # noqa: F811
     seen += [p.read_text(encoding="utf-8", errors="replace") for p in Path(bob.state.root, "notes").rglob("*")
              if p.is_file()]
     seen += [p.read_text(encoding="utf-8") for p in Path(bob.state.root, "push").glob("*.txt")]
-    seen.append(Path(bob.state.status).read_text(encoding="utf-8"))                # status.json, which the mod reads
     top = worktree_of(bob, "B1")
     for name, args in (("who_is_changing", {"path": "pkg/billing.py"}), ("check_before_edit", {"path": "pkg/refunds.py"}),
                        ("my_overlaps", {}), ("status", {})):
@@ -212,6 +211,9 @@ def test_nothing_raw_from_alices_record_reaches_bob(team):  # noqa: F811
     assert any("teammate alice" in text for text in seen)                         # bob's agent was told, by name
     for word in words:
         assert not [text for text in seen if word in text], word
+    people = Path(bob.state.status).read_text(encoding="utf-8")   # status.json, for people and the mod: it may
+    for word in words[:2] + words[3:]:                            # name their device, never anything else of theirs
+        assert word not in people, word
 
 
 def solo_record(state, tmp_path):
