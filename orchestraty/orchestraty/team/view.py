@@ -171,6 +171,10 @@ def lines(t, tty=False, local=None):
                    "machines)")
     for w in t["writers"]:
         name = f"{w['person']} ({w['device'][:6]})"
+        if w["verdict"] == "ignored":
+            out.append(f"    ignored: refs/orchestraty/{w['person']}/{w['device']} (past one read's limits: 64 writers, "
+                       "4 devices a person, 4 MiB)")
+            continue
         if w["verdict"] != "admitted":
             why = DROPPED.get(w["why"].split(":", 1)[0], "a field that breaks its grammar")
             out.append(f"    dropped: refs/orchestraty/{w['person']}/{w['device']} ({why.format(person=w['person'])})")

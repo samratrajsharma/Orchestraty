@@ -15,7 +15,6 @@ the team fetch; never from a hook or from doctor, which show the last answer kep
   or says there is no such repository, and None for anything else (no network, no answer, an
   unknown host, a URL not asked). None changes nothing.
 """
-import os
 import re
 import subprocess
 import tempfile

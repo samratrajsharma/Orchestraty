@@ -295,7 +295,7 @@ What team sync does for the repository. It is read locally, from config.json, th
 | `device` | string | Their device id. |
 | `label` | string | Their device's label, or `""`. |
 | `written` | string (time) | When they sealed the record, by their clock. |
-| `verdict` | string | `admitted`, or `dropped`. |
+| `verdict` | string | `admitted`; `dropped`, with its reason in `why`; or `ignored`, when one read's limits (64 writers, 4 devices a person, 4 MiB) left it unread. |
 | `why` | string | For a dropped record, its reason (`writer-mismatch`, `unlisted`, `rollback`, `too-large`, `bad-json`, `duplicate-key`, `bad-structure`, `newer-format`, `bad-grammar:<field>` or `not-a-record`); for an admitted one, what was dropped from it, counted. |
 | `entries` | array | One object a session it shares. See [team writer entry](#team-writer-entry). |
 

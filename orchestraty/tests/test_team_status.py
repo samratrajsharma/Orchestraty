@@ -6,9 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 
-import pytest
-
-from orchestraty import cli, config, doctor, remote, status
+from orchestraty import cli, doctor, remote, status
 from orchestraty.coordinator.record import Record
 from orchestraty.mcp import tools
 from orchestraty.team import checks, policy, scan, seal, teamfile

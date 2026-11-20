@@ -6,9 +6,8 @@ from pathlib import Path
 import pytest
 
 from helpers import spool_event
-from orchestraty import cli, config, remote, team
+from orchestraty import cli, config, team
 from orchestraty.coordinator import main as cmain
-from orchestraty.coordinator.record import Record
 from orchestraty.paths import State
 from orchestraty.team import identity, policy, recordfile, seal
 

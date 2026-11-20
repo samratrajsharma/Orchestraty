@@ -13,7 +13,6 @@ transport that writes records exists.
 """
 import json
 import os
-import secrets
 import subprocess
 import types
 from pathlib import Path
@@ -24,7 +23,6 @@ from conftest import GIT_SWITCHES
 from helpers import spool_event
 from orchestraty import config
 from orchestraty.coordinator import main as cmain
-from orchestraty.coordinator.record import repo_key
 from orchestraty.paths import State
 
 NS = 1_000_000_000
@@ -137,23 +135,13 @@ class Machine:
             self._coordinator = cmain.Coordinator(State(self.state.root), now_ns=self.clock)
         return self._coordinator
 
-    def team_on(self, consent="all"):
-        """What orch team on will leave for this clone: its device file (made once, private on
-        POSIX), the marker the pre-push hook looks for, and the repository's team settings in
-        config.json. config.py keeps those settings only once it knows the key."""
-        team = Path(self.state.root) / "team"
-        team.mkdir(parents=True, exist_ok=True)
-        device = team / "device.json"
-        if not device.exists():
-            device.write_text(json.dumps({"id": secrets.token_hex(6), "label": "", "secret": secrets.token_hex(16),
-                                          "created": self.clock() // NS}), encoding="utf-8")
-            if os.name != "nt":
-                os.chmod(device, 0o600)
-        (team / "enabled").write_bytes(b"")
-        path = Path(self.state.config)
-        cfg = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        cfg.setdefault("team", {})[repo_key(str(self.clone / ".git"))] = {"on": True, "consent": consent}
-        path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    def team_on(self):
+        """orch team on for this clone, answering yes: it reads the policy in force on the remote's
+        default branch, makes this machine's device (once), keeps the policy agreed to and makes
+        the marker the pre-push hook looks for."""
+        from orchestraty.team import commands
+        args = types.SimpleNamespace(action="on", remote=None, yes=True, repo=str(self.clone))
+        assert commands.on(self.state, args, lambda question, assume_yes: True) == 0
 
     def device(self):
         path = Path(self.state.root) / "team" / "device.json"
