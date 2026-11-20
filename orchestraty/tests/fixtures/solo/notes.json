@@ -1,0 +1,135 @@
+{
+ "findings": [
+  {
+   "changer": "A",
+   "detail": {
+    "kind": "modified",
+    "latent": true,
+    "moved_to": "",
+    "reasons": [
+     "parameter currency removed"
+    ],
+    "symbol": "a.py::charge",
+    "uses": [
+     {
+      "lines": [
+       5
+      ],
+      "symbol": "b.py::pay"
+     }
+    ]
+   },
+   "file": "b.py",
+   "key": "O3|a.py::charge|A|B|b.py",
+   "receiver": "B",
+   "rule": "O3",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "state": "open",
+   "strength": "strong",
+   "symbol": "a.py::charge"
+  },
+  {
+   "changer": "A",
+   "detail": {
+    "kind": "modified",
+    "latent": false,
+    "moved_to": "",
+    "reasons": [
+     "parameter currency removed"
+    ],
+    "symbol": "a.py::charge",
+    "uses": [
+     {
+      "lines": [
+       5
+      ],
+      "symbol": "c.py::use"
+     }
+    ]
+   },
+   "file": "c.py",
+   "key": "O3|a.py::charge|A|B|c.py",
+   "receiver": "B",
+   "rule": "O3",
+   "sessions": [
+    "A",
+    "B"
+   ],
+   "state": "open",
+   "strength": "strong",
+   "symbol": "a.py::charge"
+  },
+  {
+   "changer": "A",
+   "detail": {
+    "kind": "modified",
+    "left": [
+     {
+      "file": "b.py",
+      "lines": [
+       5
+      ],
+      "symbol": "b.py::pay"
+     }
+    ],
+    "reasons": [
+     "parameter currency removed"
+    ],
+    "symbol": "a.py::charge"
+   },
+   "file": "a.py",
+   "key": "O6|a.py::charge|A",
+   "receiver": "",
+   "rule": "O6",
+   "sessions": [
+    "A"
+   ],
+   "state": "open",
+   "strength": "strong",
+   "symbol": "a.py::charge"
+  }
+ ],
+ "notes": [
+  {
+   "finding_key": "O3|a.py::charge|A|B|b.py",
+   "kind": "edit",
+   "session_id": "B",
+   "state": "written",
+   "text": "Orchestraty: another Claude Code session (worktree wt-a, branch feat-a) changed the contract of charge in a.py: parameter currency removed. The change is in that worktree, so your copy does not show it yet; both meet when merged. b.py uses it: pay (line 5). Check these uses before you change this file: leaving that argument out works with both forms, where it was optional; otherwise agree with that session if the old form must stay. Static calls only; dynamic calls are not analysed."
+  },
+  {
+   "finding_key": "O3|a.py::charge|A|B|c.py",
+   "kind": "next",
+   "session_id": "A",
+   "state": "written",
+   "text": "Orchestraty: charge in a.py, which you changed (parameter currency removed), is used in c.py by another Claude Code session (worktree wt-b, branch feat-b): use (line 5). That session is told before it next edits that file. Static calls only; dynamic calls are not analysed."
+  },
+  {
+   "finding_key": "O3|a.py::charge|A|B|c.py",
+   "kind": "edit",
+   "session_id": "B",
+   "state": "written",
+   "text": "Orchestraty: another Claude Code session (worktree wt-a, branch feat-a) changed the contract of charge in a.py: parameter currency removed. The change is in that worktree, so your copy does not show it yet; both meet when merged. c.py uses it: use (line 5). Check these uses before you change this file: leaving that argument out works with both forms, where it was optional; otherwise agree with that session if the old form must stay. Static calls only; dynamic calls are not analysed."
+  },
+  {
+   "finding_key": "O3|a.py::charge|A|B|c.py",
+   "kind": "next",
+   "session_id": "B",
+   "state": "written",
+   "text": "Orchestraty: another Claude Code session (worktree wt-a, branch feat-a) changed the contract of charge in a.py: parameter currency removed. The change is in that worktree, so your copy does not show it yet; both meet when merged. c.py uses it: use (line 5). Check these uses in the code you changed: leaving that argument out works with both forms, where it was optional; otherwise agree with that session if the old form must stay. Static calls only; dynamic calls are not analysed."
+  },
+  {
+   "finding_key": "O6|a.py::charge|A",
+   "kind": "stop",
+   "session_id": "A",
+   "state": "written",
+   "text": "Orchestraty: you changed the contract of charge in a.py (parameter currency removed). These callers still use it and no session has updated them: pay in b.py (line 5). Update them, or say why they need no change. Static calls only; dynamic calls are not analysed."
+  }
+ ],
+ "push_lines": [
+  "orchestraty: 1 caller(s) of charge still use its old form (pay). Run: orch status\n"
+ ]
+}

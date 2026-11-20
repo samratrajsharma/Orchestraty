@@ -219,17 +219,18 @@ def _agent_view(repo, mine):
 
 
 def _team_view(t):
-    """The team block as an agent sees it: teammates' names, devices, branches and tickets cleaned
-    as notes clean them, never a task line, and of the messages only our own words."""
+    """The team block as an agent sees it: teammates' handles, branches and tickets cleaned as
+    notes clean them, never a task line, a device or a label, and of the messages only our own
+    words."""
     out = dict(t)
     out["policy"] = dict(t["policy"], why=_first_words(t["policy"].get("why")), fix=_first_words(t["policy"].get("fix")))
     if isinstance(t.get("me"), dict):
-        out["me"] = dict(t["me"], person=templates.clean(t["me"]["person"], 60),
-                         label=templates.clean(t["me"]["label"], 30))
+        out["me"] = dict(t["me"], person=templates.clean(t["me"]["person"], 60), label="")
     if isinstance(t.get("sent"), dict):
         out["sent"] = dict(t["sent"], error=_first_words(t["sent"].get("error")))
-    out["writers"] = [dict(w, person=templates.clean(w["person"], 60), device=templates.clean(w["device"], 20),
-                           label=templates.clean(w.get("label", ""), 30), why=templates.clean(w.get("why", ""), 80),
+    out["writers"] = [dict(person=templates.clean(w["person"], 60), verdict=templates.clean(w.get("verdict", ""), 10),
+                           device="", label="", written=templates.clean(w.get("written", ""), 25),
+                           why=templates.clean(w.get("why", ""), 80),     # our own closed set of reasons
                            entries=[{"agent": templates.clean(e.get("agent", ""), 20),
                                      "state": templates.clean(e.get("state", ""), 10),
                                      "branch": templates.clean(e.get("branch", ""), 200), "pushed": e.get("pushed") is True,

@@ -214,15 +214,15 @@ def lines(t, tty=False, local=None):
                        f"branches{nxt}")
         else:
             out.append(f"    last read {local(f['at'])}: failed ({f['failures']} in a row): {f['error']}{nxt}")
-    for w in t["writers"]:
-        name = f"{w['person']} ({w['device'][:6]})"
+    for w in t["writers"]:                          # an agent's view has no device: "bob's record"
+        name = f"{w['person']} ({w['device'][:6]})" if w["device"] else w["person"]
+        ref = f"refs/orchestraty/{w['person']}/{w['device']}" if w["device"] else f"{w['person']}'s record"
         if w["verdict"] == "ignored":
-            out.append(f"    ignored: refs/orchestraty/{w['person']}/{w['device']} (past one read's limits: 64 writers, "
-                       "4 devices a person, 4 MiB)")
+            out.append(f"    ignored: {ref} (past one read's limits: 64 writers, 4 devices a person, 4 MiB)")
             continue
         if w["verdict"] != "admitted":
             why = DROPPED.get(w["why"].split(":", 1)[0], "a field that breaks its grammar")
-            out.append(f"    dropped: refs/orchestraty/{w['person']}/{w['device']} ({why.format(person=w['person'])})")
+            out.append(f"    dropped: {ref} ({why.format(person=w['person'])})")
             continue
         if not w["entries"]:
             out.append(f"    {name}  no sessions shared, as of {local(w['written'])}")
