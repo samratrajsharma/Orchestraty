@@ -91,7 +91,11 @@ def read_as(machine, remote_path, now):
     return {(p, d): v for p, d, _, v in verdicts}
 
 
-def test_canaries_never_reach_the_remote(team, monkeypatch):  # noqa: F811
+def plant(team, monkeypatch):  # noqa: F811
+    """Canaries in everything alice's machine holds that is no field of a record: her prompt
+    (through the real hook script), transcript, a changed file's contents, the commit message, a
+    declared task, orch missed and label text, together-check output, the worktree path, the
+    host name and the environment. She pushes her branch, and confirms a task line. Returns them."""
     alice = team.alice
     marks = {k: canary(k) for k in ("prompt", "transcript", "file", "commit", "declare", "missed", "why", "together",
                                     "path", "host", "env")}
@@ -126,14 +130,34 @@ def test_canaries_never_reach_the_remote(team, monkeypatch):  # noqa: F811
     assert run("task", alice, session="A1", ticket=None, line="Refund flow for annual plans", from_declared=False,
                clear=False) == 0
     alice.settle()
-    sealed = commands.sealed_now(alice.state, str(alice.clone / ".git"), time.time())
-    assert sealed.data is not None and sealed.held == ""
-    device = alice.device()["id"]
-    publish_raw(team.remote, "alice", device, sealed.data, "alice@example.com")
+    return marks
+
+
+def nowhere_on_the_remote(team, marks):  # noqa: F811
     found = everything_on_the_remote(team.remote)
     assert b"feat/PAY-142-refunds" in found and b"Refund flow for annual plans" in found     # the record is there
     for where, mark in marks.items():
         assert mark.encode() not in found, where
+
+
+def test_canaries_never_reach_the_remote(team, monkeypatch):  # noqa: F811
+    marks = plant(team, monkeypatch)
+    alice = team.alice
+    sealed = commands.sealed_now(alice.state, str(alice.clone / ".git"), time.time())
+    assert sealed.data is not None and sealed.held == ""
+    publish_raw(team.remote, "alice", alice.device()["id"], sealed.data, "alice@example.com")
+    nowhere_on_the_remote(team, marks)
+
+
+def test_canaries_never_reach_the_remote_on_the_real_transport(team, monkeypatch):  # noqa: F811
+    marks = plant(team, monkeypatch)
+    alice = team.alice
+    assert run_git(team.remote, "for-each-ref", "refs/orchestraty") == ""          # not before 3 s after her push
+    team.clock.advance(3)
+    alice.settle()                                                                 # the coordinator sends it
+    assert run_git(team.remote, "for-each-ref", "--format=%(refname)", "refs/orchestraty") == \
+        f"refs/orchestraty/alice/{alice.device()['id']}"
+    nowhere_on_the_remote(team, marks)
 
 
 def forged(device, **changes):
