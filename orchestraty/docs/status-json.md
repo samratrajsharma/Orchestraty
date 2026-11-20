@@ -241,3 +241,15 @@ The MCP server's `status` tool returns, as its structured content:
 | `coordinator` | object | As above. |
 | `repository` | object | The caller's repository, as above, with these differences, so that no session's words reach another agent: every name in it (session ids, branches, worktree folders, changed files and functions, claims, declared paths and functions, findings' keys, symbols, files and details, merge-order entries, cloud branches) is cleaned as notes clean them, a folder keeping its separators as `/`; another session's declarations have no `task`; an O5 overlap's path, in its key, its `detail` and each session's `to` and `from`, is shown as notes show it (left out when it is not made of a path's characters and parameters, a parameter in braces); a together result's `first_failing_line` holds only the error's name and where it happened (`TypeError at tests/test_a.py::test_x`), and its `error`, a TypeScript run's `why` and `error` and a cloud fetch's `error` keep only Orchestraty's own words, before the first `: `. |
 | `you` | string or null | The caller's session id, when the server found it. |
+
+## `orch team preview --json`
+
+The record this machine would send its teammates for the repository now, exactly as it would be sent, and what was withheld from it. Nothing is stored or sent.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `schema` | integer | 1. |
+| `bytes` | string or null | The record's canonical bytes (ASCII JSON and a newline), or null when it is held back. |
+| `record` | object or null | The same record, parsed: format 1 of `record.json`. |
+| `withheld` | list | One object a withheld item: its `field` (such as `sessions[].branch`) and the `rule` that withheld it (a scanner rule such as `github-token`, `grammar`, `deny-path` or `deny-word`). Never the value. |
+| `held` | string | Why the whole record is held back (`final scan` when the scan of its bytes found what an earlier step should have withheld), or "" when it is not. |

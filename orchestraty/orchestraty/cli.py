@@ -953,6 +953,11 @@ def cmd_remote(args):
     return 0 if result["ok"] else 1
 
 
+def cmd_team(args):
+    from orchestraty.team import commands
+    return commands.run(args, confirm)
+
+
 def cmd_together(args):
     from orchestraty import config, together
     state = State()
@@ -1411,6 +1416,55 @@ def build_parser():
     pat.add_argument("glob", nargs="?", help="a branch pattern, such as agent/*")
     rem.add_argument("--repo", metavar="DIR", help="a folder inside the repository (default: here)")
     rem.set_defaults(handler=cmd_remote)
+
+    tm = commands.add_parser("team", help="team sync: teammates' agents told of each other's work, through git",
+                             description="Share a closed record of the sessions here with teammates, through the "
+                                         "repository's remote, as the policy on its default branch "
+                                         "(.orchestraty/policy.yml) allows. Off by default, for each watched "
+                                         "repository. Without an action: the repository's team settings.")
+    tm_actions = tm.add_subparsers(dest="action", metavar="<action>")
+    t_init = tm_actions.add_parser("init", parents=[where], help="print a policy and a people file to start from",
+                                   description="Print .orchestraty/policy.yml and people.yml (with your entry) to "
+                                               "start from, and a CODEOWNERS line.")
+    t_init.add_argument("--write", action="store_true", help="write the two files (asks first; commits nothing)")
+    t_on = tm_actions.add_parser("on", parents=[where], help="turn team sync on (asks first)",
+                                 description="Read the policy in force on the remote's default branch, show what "
+                                             "will be shared, where and when, and ask.")
+    t_on.add_argument("--remote", metavar="NAME", help="the team remote (default: origin)")
+    t_on.add_argument("--yes", action="store_true", help="do not ask first")
+    t_off = tm_actions.add_parser("off", parents=[where], help="turn team sync off",
+                                  description="Send and read nothing more.")
+    t_off.add_argument("--forget", action="store_true", help="also delete this device's record ref on the remote "
+                                                             "(asks first)")
+    t_off.add_argument("--yes", action="store_true", help="do not ask first")
+    tm_actions.add_parser("whoami", parents=[where], help="who this machine shares as",
+                          description="Your git email, handle, whether people.yml lists you, and your device; the "
+                                      "lines to add to people.yml when it does not.")
+    t_preview = tm_actions.add_parser("preview", parents=[where], help="the exact record that would be sent now",
+                                      description="The exact bytes of the record this machine would send now, and "
+                                                  "each item withheld from it (field and rule).")
+    t_preview.add_argument("--json", action="store_true", help="as JSON")
+    t_task = tm_actions.add_parser("task", parents=[where], help="give a session a ticket or a task line to share",
+                                   description="The ticket or the task line a session works on, confirmed by you; "
+                                               "a line is shared only under the policy's share.task: confirmed.")
+    t_task.add_argument("--session", metavar="ID", help="the session (default: the one working here)")
+    what = t_task.add_mutually_exclusive_group(required=True)
+    what.add_argument("--ticket", metavar="T", help="a ticket: KEY-123, #123 or GH-123")
+    what.add_argument("--line", metavar="L", help="a task line, one line of at most 120 characters")
+    what.add_argument("--from-declared", action="store_true", help="start from the line the session's agent "
+                                                                   "declared: edit it, then confirm")
+    what.add_argument("--clear", action="store_true", help="clear the session's ticket and line")
+    t_device = tm_actions.add_parser("device", parents=[where], help="this machine's device: label it or renew it",
+                                     description="Without an option: the device id and label.")
+    which = t_device.add_mutually_exclusive_group()
+    which.add_argument("--label", metavar="NAME", help="a label, such as laptop (lowercase words and dashes)")
+    which.add_argument("--new", action="store_true", help="a new id and secret (for a copied state folder)")
+    t_check = tm_actions.add_parser("check", parents=[where], help="check .orchestraty/*.yml in a working copy",
+                                    description="Read .orchestraty/policy.yml and people.yml offline; exit 1, with "
+                                                "the line, when something is wrong.")
+    t_check.add_argument("path", nargs="?", help="the working copy or .orchestraty folder (default: here)")
+    tm.add_argument("--repo", metavar="DIR", help="a folder inside the repository (default: here)")
+    tm.set_defaults(handler=cmd_team)
 
     tog = commands.add_parser("together", help="the together check: run a check on two sessions' changes merged",
                               description="Opt-in, for each repository: when the rules flag a medium or strong "

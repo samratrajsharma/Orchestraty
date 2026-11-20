@@ -385,10 +385,11 @@ class Shadow:
         """(returncode, stdout) of a local git command in the shadow, for team sync's reads."""
         return self._git(args, raw=raw)
 
-    def read_file(self, ref, path, max_bytes):
+    def read_file(self, ref, path, max_bytes, with_id=False):
         """The bytes of the file `path` (a plain file, not a link or a folder) at `ref` in the
-        shadow, or None when the shadow, the ref or such a file is not there. Raises TooLarge,
-        without reading the file, when it is larger than `max_bytes`."""
+        shadow, or None when the shadow, the ref or such a file is not there; with `with_id`,
+        (blob id, bytes). Raises TooLarge, without reading the file, when it is larger than
+        `max_bytes`."""
         if not self.exists():
             return None
         rc, tip = self._git(["rev-parse", "--verify", "--quiet", ref + "^{commit}"])
@@ -406,7 +407,7 @@ class Shadow:
                 rc, data = self._git(["cat-file", "blob", fields[2]], raw=True)
                 if rc != 0:
                     raise gitio.GitError("cat-file failed in the shadow")
-                return data
+                return (fields[2], data) if with_id else data
         return None
 
     def refs(self, remote):

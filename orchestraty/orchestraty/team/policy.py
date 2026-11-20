@@ -45,7 +45,7 @@ text. At most 200 entries of each kind, each at most 200 characters.
 import fnmatch
 import re
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cached_property, lru_cache
 
 from orchestraty import remote
@@ -118,6 +118,7 @@ class Policy:
     also_share: tuple = ()               # the effective policy only: more branches.share lists a branch must match
     ignored: tuple = field(default=(), compare=False)        # unknown keys under share, granting nothing
     notes: tuple = field(default=(), compare=False)
+    blob: str = field(default="", compare=False)             # the copy in force's blob id, when read from git
 
     def off(self):
         """(why, fix) when this policy keeps sync off, or None when sync runs."""
@@ -223,10 +224,13 @@ def in_force(shadow, name, url=None, timeout=remote.FETCH_TIMEOUT, ssh_configure
             except remote.ShadowBroken as exc:
                 raise remote.RemoteError(str(exc)) from None
     try:
-        data = shadow.read_file(ref, FILE, MAX_BYTES)
+        found = shadow.read_file(ref, FILE, MAX_BYTES, with_id=True)
     except remote.TooLarge:
         return Policy(problem=_bad(f"the file is larger than {MAX_BYTES // 1024} KiB").problem)
-    return None if data is None else parse(data)
+    if found is None:
+        return None
+    blob, data = found
+    return replace(parse(data), blob=blob)
 
 
 def effective(force, consented, narrow=None, never_branches=None, anonymous_read=None):
@@ -273,6 +277,7 @@ def effective(force, consented, narrow=None, never_branches=None, anonymous_read
         problem=problem,
         ignored=force.ignored,
         notes=force.notes + notes + more,
+        blob=force.blob,
     )
 
 

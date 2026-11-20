@@ -31,6 +31,15 @@ changes. A missing or unreadable file means the defaults.
   "command": "", "timeout": 120}``; see ``together``. ``orch together`` changes it.
 * ``typescript``: TypeScript contracts, per repository (keyed like ``remote``): ``{"on": false,
   "timeout": 300}``; see ``livemap.typescript``. ``orch ts`` changes it.
+* ``team``: team sync, per repository (keyed like ``remote``): ``{"on": false, "remote": "origin",
+  "consented": {...}, "narrow": {...}, "never_branches": [...]}``, where ``consented`` is the policy
+  the person agreed to at ``orch team on`` and ``narrow`` and ``never_branches`` can only share less;
+  see ``team``. ``orch team`` changes it.
+* ``team_fetch_minutes``, ``team_stale_days``, ``team_idle_seconds``, ``team_compact_commits`` and
+  ``team_max_sessions``: how often teammates' records are read, how long an ended session is
+  still shared, how long the coordinator waits before sealing a change, how many record commits a
+  device keeps before it starts its chain again, and at most how many teammates' sessions are
+  followed.
 """
 import json
 import os
@@ -38,7 +47,8 @@ import os
 DEFAULTS = {"repos": [], "idle_seconds": 600, "session_timeout": 1800, "level0_seconds": 5,
             "steer": False, "wake": False, "settings": "", "acted_minutes": 30,
             "declare_minutes": 120, "remote": {}, "remote_fetch_minutes": 5, "claim_minutes": 120, "together": {},
-            "typescript": {}, "installed": []}
+            "typescript": {}, "installed": [], "team": {}, "team_fetch_minutes": 2, "team_stale_days": 14,
+            "team_idle_seconds": 60, "team_compact_commits": 100, "team_max_sessions": 50}
 
 
 def _same(a, b):

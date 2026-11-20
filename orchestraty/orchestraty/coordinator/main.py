@@ -156,6 +156,9 @@ class Coordinator:
             return False
         self._cfg_stamp = stamp
         self.cfg = config.load(self.state)
+        if self.cfg["team"] or os.path.exists(os.path.join(self.state.root, "team", "enabled")):
+            from orchestraty import team
+            team.sync_marker(self.state, self.cfg)          # orch team on/off, or config.json edited by hand
         self.ignored = {sid: why for sid, why in self.ignored.items() if why != "not watched"}
         if hasattr(self, "livemap"):
             self.livemap.ts.cfg = self.cfg
@@ -575,6 +578,8 @@ class Coordinator:
                 self.handle_declaration(line, ts)
             elif line.get("event") in ("claim", "release"):
                 self.handle_claim(line, ts)
+            elif line.get("event") == "team-task":
+                self.handle_team_task(line, ts)
             else:
                 self.handle_feedback(line, ts)
             return
@@ -643,6 +648,24 @@ class Coordinator:
             self._status_dirty = True
             if item["session_id"] in self.sessions:                 # O7 compares it with the others'
                 self._dirty_repos.add(self.sessions[item["session_id"]]["repo_id"])
+
+    def handle_team_task(self, line, ts):
+        """A line orch team task appended: the ticket and task line a session's author confirmed
+        for sharing. The latest word is kept, for a session with a working copy here."""
+        from orchestraty.team import tasks
+        item = tasks.parse_line(line)
+        if item is None:
+            self.bad_lines += 1
+            return
+        s = self.record.session(item["session_id"])
+        if s is None or s["agent"] in sessionkinds.NO_COPY:
+            self.log.info("a task line for a session with no working copy here was dropped")
+            return
+        old = self.record.confirmed(item["session_id"]) or {"ticket": "", "line": ""}
+        ticket = "" if item["clear"] else item.get("ticket", old["ticket"])
+        task = "" if item["clear"] else item.get("line", old["line"])
+        self.record.put_confirmed(item["session_id"], ticket, task, ts)
+        self._status_dirty = True
 
     def _made(self, ts):
         """When a declaration or a claim counts as made: its line's time, or now when that is
