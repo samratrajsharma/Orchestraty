@@ -296,9 +296,10 @@ class Coordinator:
             with self.record.transaction():                 # a claim that ended takes back its notes
                 self.deliverer.withdraw_claims({c["id"] for c in self.record.claims(active_at=self.now_ns())})
         for repo_id in sorted(repos):
-            ids = sorted(sid for sid, s in self.sessions.items()      # teammates' branches: not in the rules yet
-                         if s["repo_id"] == repo_id and s["state"] == "live" and sid in self.livemap.views
-                         and s["agent"] != sessionkinds.TEAM)
+            ids = sorted(sid for sid, s in self.sessions.items()
+                         if s["repo_id"] == repo_id and s["state"] == "live" and sid in self.livemap.views)
+            team_ids = frozenset(sid for sid in ids if self.sessions[sid]["agent"] == sessionkinds.TEAM)
+            apart, evidence = self._team_relations(repo_id, ids, team_ids) if team_ids else (None, None)
             views = {sid: self.livemap.views[sid] for sid in ids}
             graph_ready = {sid: self.livemap.graph(sid) is not None for sid in ids}
             base_ready = {sid: self.livemap.base_graph(sid) is not None for sid in ids}
@@ -306,7 +307,7 @@ class Coordinator:
             hooked = {sid for sid in ids if self.sessions[sid]["agent"] not in NO_NOTES}
             found = overlap.evaluate(views, self.livemap.graph, self.livemap.base_graph, hooked=hooked,
                                      planned=self._planned(repo_id, ids, self.now_ns()), routes=self.livemap.routes,
-                                     ts_uses=self.livemap.ts_uses)
+                                     ts_uses=self.livemap.ts_uses, others=team_ids, apart=apart, evidence=evidence)
             now = self.now_ns()
             with self.record.transaction():
                 # Resolve first: a note withdrawn here must not count as already told when a
@@ -390,6 +391,32 @@ class Coordinator:
                 with self.record.transaction():
                     self.deliverer.add_together(result, self.sessions)
 
+    def _team_relations(self, repo_id, ids, team_ids):
+        """(apart, evidence) for the rules of a repository with teammates' branches: which pairs
+        are left alone (one's copy holds the other's commits), kept in team_sessions too."""
+        key = self._repo_keys.get(repo_id)
+        common_dir = next((c for c in self.cfg["repos"] if repo_key(c) == key), None)
+        if common_dir is None or self.teamwork is None:
+            return None, None
+        local = [sid for sid in ids if sid not in team_ids and self.sessions[sid].get("worktree")]
+        heads = {}
+        if local:
+            try:
+                listed = {os.path.normcase(w["path"]): w["head"]
+                          for w in git_changes.worktrees(self.sessions[local[0]]["worktree"])}
+            except (gitio.GitError, gitio.UntrustedRepositoryError, OSError):
+                listed = {}
+            heads = {sid: listed.get(os.path.normcase(os.path.normpath(self.sessions[sid]["worktree"])), "")
+                     for sid in local}
+        team = {sid: (self.livemap.branches.get(sid, ("", ""))[1], self.sessions[sid]["base_commit"]) for sid in team_ids}
+        for sid, (inside, on) in self.teamwork.relate(common_dir, team, heads).items():
+            row = self.record.team_session(sid)
+            if row is not None and (row["contained_in"], row["builds_on"]) != (inside, on):
+                row["contained_in"], row["builds_on"] = inside, on
+                with self.record.transaction():
+                    self.record.put_team_session(row)
+        return self.teamwork.apart, self.teamwork.evidence
+
     def _planned(self, repo_id, ids, now):
         """{session id: [item]} for O7: what the live sessions `ids` of one repository declared
         (the MCP tool declare) and claimed (orch claim), as far as it holds at `now`. An item is
@@ -409,6 +436,12 @@ class Coordinator:
                 symbol = c["target"] if c["kind"] == "symbol" else ""
                 planned.setdefault(c["session_id"], []).append({"path": claims.path_of(c), "symbol": symbol,
                                                                 "how": "claimed"})
+        for sid in sorted(ids):                         # teammates' claims, as they shared them
+            if self.sessions.get(sid, {}).get("agent") == sessionkinds.TEAM:
+                for c in self.record.team_planned(active_at=now, session_id=sid):
+                    planned.setdefault(sid, []).append({"path": claims.path_of(c),
+                                                        "symbol": c["target"] if c["kind"] == "symbol" else "",
+                                                        "how": "claimed"})
         return planned
 
     def scan_level0(self, forced=()):
@@ -547,12 +580,17 @@ class Coordinator:
                     self.sessions[sid] = session
                     self.record.put_session(session)
                     self.log.info("teammate's branch %s/%s, base %s", remote_name, f.branch, f.base[:12])
-                changed = (f.tip, f.as_of, json.dumps(f.writers, sort_keys=True))
+                changed = (f.tip, f.as_of, json.dumps(f.writers, sort_keys=True), repr(f.claims))
                 if self._team_seen.get(sid) != changed:     # its tip or the records naming it changed
                     self._team_seen[sid] = changed
                     session["base_commit"], session["last_seen"] = f.base, now
                     self.record.put_session(session)
-                    self.record.put_team_session(_team_row(session, remote_name, f))
+                    kept = self.record.team_session(sid) or {}
+                    self.record.put_team_session(dict(_team_row(session, remote_name, f),
+                                                      contained_in=kept.get("contained_in", []),
+                                                      builds_on=kept.get("builds_on", [])))
+                    self.record.put_team_planned(sid, _team_claims(sid, f.claims, now))
+                    self._dirty_repos.add(session["repo_id"])
                 session["people"], session["own"] = list(f.people), f.own     # for the notes (2.3)
                 view = self.livemap.views.get(sid)
                 if view is None or view.base != f.base:
@@ -1037,6 +1075,17 @@ class Coordinator:
         read from elsewhere): they keep nothing awake."""
         return sum(1 for s in self.sessions.values()
                    if s["state"] == "live" and not (hooked_only and s["agent"] in NO_NOTES))
+
+
+def _team_claims(sid, shared, now):
+    """team_planned rows for a teammate's branch's claims, as shared: soft, never honoured here.
+    Times on our clock base; a claim's note key is stable across reads of its record."""
+    out = []
+    for _, c in shared:
+        digest = hashlib.sha1("\0".join((sid, c.kind, c.target, str(c.since))).encode("utf-8", "surrogateescape"))
+        out.append({"kind": c.kind, "target": c.target, "file": c.file, "hard": c.hard,
+                    "since": min(c.since * NS, now), "until": c.until * NS, "note_key": "tclaim|" + digest.hexdigest()[:16]})
+    return out
 
 
 def _team_row(session, remote_name, f):

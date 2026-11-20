@@ -34,6 +34,48 @@ class TeamWork:
         self.state = state
         self._facts = {}                # (shadow, remote, branch) -> ((tip, default tip), (base, merged, tip time))
         self.patch_ids = merged_ladder.PatchIds()
+        self._ancestors = {}            # (shadow, older, newer) -> whether older is an ancestor of newer
+        self._apart = {}                # common_dir -> {frozenset((team sid, local sid))}
+
+    def relate(self, common_dir, team, heads):
+        """{team sid: (contained_in, builds_on)}: the local sessions whose copy holds a teammate's
+        tip (they go on from it), and those whose commits a teammate's branch builds on, which
+        also covers a local copy behind on the same branch. Neither pair is compared: each copy
+        holds the other's commits, and a naive base..tip would show one person's change as the
+        other's. `team` is {sid: (tip, base)} and `heads` {local sid: its worktree's commit}.
+        Asked in the shadow, which reads the user's objects, once per pair of commits."""
+        shadow = remote.Shadow(self.state, common_dir)
+        out, pairs = {}, set()
+        for tsid, (tip, base) in sorted(team.items()):
+            inside, on = [], []
+            for lsid, head in sorted(heads.items()):
+                if not tip or not head:
+                    continue
+                if self._ancestor(shadow, tip, head):
+                    inside.append(lsid)
+                elif self._ancestor(shadow, head, tip) and not (base and self._ancestor(shadow, head, base)):
+                    on.append(lsid)
+            out[tsid] = (inside, on)
+            pairs.update(frozenset((tsid, lsid)) for lsid in inside + on)
+        self._apart[common_dir] = pairs
+        return out
+
+    def apart(self, a, b):
+        """Whether the rules leave a pair alone (one's copy holds the other's commits)."""
+        pair = frozenset((a, b))
+        return any(pair in pairs for pairs in self._apart.values())
+
+    @staticmethod
+    def evidence(sid):
+        """What a teammate's branch was read from: its commits, for every pushed branch."""
+        return "commits"
+
+    def _ancestor(self, shadow, older, newer):
+        key = (shadow.path, older, newer)
+        if key not in self._ancestors:
+            rc, _ = shadow.git(["merge-base", "--is-ancestor", older, newer]) if shadow.exists() else (1, "")
+            self._ancestors[key] = rc == 0
+        return self._ancestors[key]
 
     def settle(self, common_dir, remote_name, admitted, me, fetched, now, max_sessions=50):
         """{session id: TeamFacts} of the branches the admitted records name. `admitted` is

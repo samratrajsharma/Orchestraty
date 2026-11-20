@@ -1,8 +1,8 @@
 """Teammates' branches as sessions (coordinator/team.py): each remote branch an admitted record
 names becomes a session of agent team, read from the commits the team fetch brought, whoever
 named it. It lives while a record names it, it is not merged, the branch is there and it is not
-stale; it gets no notes, never times out, keeps no coordinator awake and, in this stage, takes
-no part in the rules. A branch a cloud pattern also matches is followed once, as a team session."""
+stale; it gets no notes, never times out and keeps no coordinator awake; the rules compare it with this
+machine's sessions. A branch a cloud pattern also matches is followed once, as a team session."""
 import json
 
 from helpers import spool_event
@@ -180,7 +180,7 @@ def test_team_sessions_receive_no_notes_and_never_time_out(team):  # noqa: F811
     assert slots == []
 
 
-def test_team_sessions_make_no_findings_in_2_2(team):  # noqa: F811
+def test_team_sessions_take_part_in_the_rules(team):  # noqa: F811
     alice, bob = team.alice, team.bob
     alice.team_on()
     bob.team_on()
@@ -197,7 +197,9 @@ def test_team_sessions_make_no_findings_in_2_2(team):  # noqa: F811
         found = [f for f in rec.findings() if sid in (f["changer"], f["receiver"])]
     finally:
         rec.close()
-    assert found == []
+    (o3,) = [f for f in found if f["rule"] == "O3" and not f["detail"].get("latent")]
+    assert (o3["changer"], o3["receiver"], o3["file"], o3["strength"]) == (sid, "B1", "pkg/refunds.py", "strong")
+    assert o3["detail"]["evidence"] == "commits"                                   # read from alice's commits
 
 
 def test_restart_tracks_team_sessions_from_records(team):  # noqa: F811
