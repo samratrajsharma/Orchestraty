@@ -1,15 +1,19 @@
 # Two kinds of run, from one codebase that is pure Python and standard library only, so
 # nothing is built per operating system; CI only checks that the same code runs everywhere.
+# Minutes are counted (Windows twice, macOS ten times), so each run does only what it must.
 #
-# - Every push and pull request: the quick check, on Windows and Linux with Python 3.12; the
-#   TypeScript helper's tests (helpers/typescript) with Node 20 on both; the TypeScript
-#   contract tests that run the compiler, with the TypeScript that orchestraty/tests/fixtures/ts
-#   pins, on both; the editor extension's tests (editors/vscode) with Node 22 on both, and its
-#   .vsix packaged on Linux and kept as a build artifact (nothing is published); and the one
-#   distribution, its sdist and wheel built on Linux, with the smoke test of that wheel in a
-#   clean virtual environment on Windows and Linux.
-# - Weekly, on manual runs and on release tags (v*): the full matrix, which adds Python 3.10
-#   and 3.11, and macOS (the smoke test too). Releases themselves are release.yml's.
+# - Pushes to main and phase-2, and pull requests (a work branch gets its run through its pull
+#   request): the quick check with Python 3.12 on Linux (every test) and Windows (every test
+#   but the slow, git-heavy ones marked heavy, which run on Windows in the full run); the
+#   TypeScript helper's tests (helpers/typescript, Node 20), the TypeScript contract tests that
+#   run the compiler pinned in orchestraty/tests/fixtures/ts, and the editor extension's tests
+#   (editors/vscode, Node 22), on Linux, with its .vsix packaged and kept as a build artifact
+#   (nothing is published); and the one distribution, its sdist and wheel built on Linux, with
+#   the smoke test of that wheel in a clean virtual environment on Windows and Linux.
+# - Weekly (main), on manual runs and on release tags (v*): the full run, which adds Python
+#   3.10 and 3.11 on Linux, the whole suite on Windows, and the Node jobs on Windows; macOS (the
+#   suite and the smoke test) only on manual runs and release tags. Releases are release.yml's.
+# - A newer push to the same branch or pull request cancels the run it makes out of date.
 #
 # The quick and full jobs run both suites (the main package and the engine); every job fails
 # if the tests leave any file behind. pytest is the only Python dependency.
@@ -17,6 +21,8 @@ name: CI
 
 on:
   push:
+    branches: [main, phase-2]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
   schedule:
@@ -25,11 +31,19 @@ on:
 permissions:
   contents: read
 
+# One run at a time per branch or pull request: a newer push cancels the older run. Never for
+# release tags or the weekly run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') && github.event_name != 'schedule' }}
+
 jobs:
   quick:
     name: quick (${{ matrix.os }}, Python 3.12)
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # The tests marked heavy run many git commands, which take about ten times as long on the
+    # Windows runner as on Linux, so the Windows quick run leaves them to the full run.
+    timeout-minutes: 30
     strategy:
       # Report both platforms, even when one of them fails.
       fail-fast: false
@@ -54,12 +68,19 @@ jobs:
       - name: Show the git version
         run: git --version
 
-      # No cache and no bytecode, so the leftover check below finds nothing.
+      # No cache and no bytecode, so the leftover check below finds nothing. On Windows the
+      # heavy team tests are left to the full run.
       - name: Run the main package tests
         working-directory: orchestraty
+        shell: bash
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m pytest
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            python -m pytest -m "not heavy"
+          else
+            python -m pytest
+          fi
 
       - name: Run the engine tests
         working-directory: engine
@@ -86,7 +107,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-24.04]
+        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) && '["windows-latest", "ubuntu-24.04"]' || '["ubuntu-24.04"]') }}
     defaults:
       run:
         working-directory: helpers/typescript
@@ -131,7 +152,8 @@ jobs:
           fi
 
   # The VS Code and Cursor extension: its unit tests and the extension against a stand-in for
-  # the editor's API, on both systems; the .vsix packaged on Linux and kept for a week. The
+  # the editor's API, on Linux (and Windows in the full run); the .vsix packaged on Linux and
+  # kept for a week. The
   # packaging tool needs Node 22. Python runs the tests' checks against the orchestraty package.
   editor:
     name: editor extension (${{ matrix.os }}, Node 22)
@@ -140,7 +162,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-24.04]
+        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) && '["windows-latest", "ubuntu-24.04"]' || '["ubuntu-24.04"]') }}
     defaults:
       run:
         working-directory: editors/vscode
@@ -203,7 +225,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-24.04]
+        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) && '["windows-latest", "ubuntu-24.04"]' || '["ubuntu-24.04"]') }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v7
@@ -288,7 +310,7 @@ jobs:
 
   # The built wheel in a clean virtual environment (scripts/smoke.py): orch --version, orch
   # init --print, two scripted sessions through the installed hook script reaching a note, and
-  # orch doctor. No real agent and no network. macOS joins in the full run.
+  # orch doctor. No real agent and no network. macOS joins on manual runs and release tags.
   smoke:
     name: smoke (${{ matrix.os }}, the built wheel)
     needs: package
@@ -297,7 +319,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) && '["windows-latest", "ubuntu-24.04", "macos-latest"]' || '["windows-latest", "ubuntu-24.04"]') }}
+        os: ${{ fromJSON((github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) && '["windows-latest", "ubuntu-24.04", "macos-latest"]' || '["windows-latest", "ubuntu-24.04"]') }}
     steps:
       - name: Check out the repository (for scripts/smoke.py)
         uses: actions/checkout@v7
@@ -336,17 +358,14 @@ jobs:
     name: full (${{ matrix.os }}, Python ${{ matrix.python-version }})
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # The whole suite on Windows, heavy tests included, can take 40 minutes.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            python-version: "3.10"
-          - os: ubuntu-24.04
-            python-version: "3.11"
-          - os: macos-latest
-            python-version: "3.12"
+        # Linux 3.10 and 3.11, and the whole suite on Windows; macOS (whose minutes count ten
+        # times) only on manual runs and release tags, not every week.
+        include: ${{ fromJSON(github.event_name == 'schedule' && '[{"os":"ubuntu-24.04", "python-version":"3.10"},{"os":"ubuntu-24.04", "python-version":"3.11"},{"os":"windows-latest", "python-version":"3.12"}]' || '[{"os":"ubuntu-24.04", "python-version":"3.10"},{"os":"ubuntu-24.04", "python-version":"3.11"},{"os":"windows-latest", "python-version":"3.12"},{"os":"macos-latest", "python-version":"3.12"}]') }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v7

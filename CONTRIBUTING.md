@@ -52,12 +52,16 @@ Everything runs on the user's machine. An agent's hook runs a small script that 
 
 ### Continuous integration
 
+GitHub counts the minutes CI uses (Windows twice, macOS ten times), so each run does only what it must.
+
 | Run | Platforms and Python | When |
 | --- | --- | --- |
-| Quick | Windows 3.12; Linux 3.12 | Every push and pull request |
-| Package and smoke | The sdist and the wheel built on Linux; the smoke test of that wheel on Windows and Linux 3.12 | Every push and pull request |
-| Node | The TypeScript helper, the TypeScript contracts and the editor extension (its `.vsix` kept as an artifact), on Windows and Linux | Every push and pull request |
-| Full | Adds Linux 3.10 and 3.11, and macOS 3.12, and the smoke test on macOS | Weekly on Mondays, on manual runs, and on release tags (`v*`) |
+| Quick | Linux 3.12, every test; Windows 3.12, every test but those marked `heavy` (slow tests that run many git commands, which take about ten times as long on the Windows runner) | Pushes to `main` and `phase-2`, and pull requests |
+| Package and smoke | The sdist and the wheel built on Linux; the smoke test of that wheel on Windows and Linux 3.12 | Pushes to `main` and `phase-2`, and pull requests |
+| Node | The TypeScript helper, the TypeScript contracts and the editor extension (its `.vsix` kept as an artifact), on Linux | Pushes to `main` and `phase-2`, and pull requests |
+| Full | Adds Linux 3.10 and 3.11, the whole suite on Windows (the `heavy` tests too) and the Node jobs on Windows; macOS 3.12 and the smoke test on macOS only on manual runs and release tags | Weekly on Mondays (`main`), on manual runs, and on release tags (`v*`) |
+
+A work branch gets its CI run through its pull request; a push to it alone runs nothing. A newer push to the same branch or pull request cancels the run it makes out of date. Before a push, run the tests on your own machine: `cd orchestraty && python -m pytest` (`-m "not heavy"` leaves out the slow ones while you work).
 
 The smoke test (`scripts/smoke.py`) installs the built wheel in a clean virtual environment and runs `orch --version`, `orch init --print`, two scripted sessions through the installed hook script that reach a note, and `orch doctor`, with no real agent and no network. Every job fails if its tests leave any file behind.
 
