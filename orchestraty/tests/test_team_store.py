@@ -6,9 +6,13 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
+
 from orchestraty import gitio, remote
 from orchestraty.team import commands, identity, seal, store, teamfile
 from team_harness import NS, Machine, run_git, team  # noqa: F401  (fixtures)
+
+pytestmark = pytest.mark.heavy        # git-heavy: the quick Windows run in CI leaves it to the full run
 
 
 def common(machine):

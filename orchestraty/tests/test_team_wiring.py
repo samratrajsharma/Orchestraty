@@ -4,11 +4,15 @@ on local commits, or a local copy behind on the same branch); teammates' claims 
 and never become claims here; and no claim or declaration attaches to a teammate's session."""
 import time
 
+import pytest
+
 from helpers import spool_event
 from orchestraty import claims, declarations
 from orchestraty.coordinator.record import Record
 from orchestraty.coordinator.team import session_id
 from team_harness import BILLING, NS, run_git, team  # noqa: F401  (fixtures)
+
+pytestmark = pytest.mark.heavy        # git-heavy: the quick Windows run in CI leaves it to the full run
 
 TAX = BILLING.replace("currency)", "currency, tax)")
 FEE = BILLING.replace("currency)", "currency, fee)")

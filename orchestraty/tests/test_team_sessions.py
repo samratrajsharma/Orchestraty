@@ -5,11 +5,15 @@ stale; it gets no notes, never times out and keeps no coordinator awake; the rul
 machine's sessions. A branch a cloud pattern also matches is followed once, as a team session."""
 import json
 
+import pytest
+
 from helpers import spool_event
 from orchestraty import config, remote
 from orchestraty.coordinator.record import Record
 from orchestraty.coordinator.team import session_id
 from team_harness import BILLING, NS, Machine, publish_raw, run_git, team  # noqa: F401  (fixtures)
+
+pytestmark = pytest.mark.heavy        # git-heavy: the quick Windows run in CI leaves it to the full run
 
 TAX = BILLING.replace("currency)", "currency, tax)")
 DAY = 86400

@@ -8,6 +8,8 @@ import pytest
 from team_sample import catalog, run
 from team_sample.oracle import KNOWN_MISSES, ORACLE
 
+pytestmark = pytest.mark.heavy        # git-heavy: the quick Windows run in CI leaves it to the full run
+
 # Pinned after the first run (71 scenarios): 21 of the 26 findings counted are real, 5 harmless
 # and none false (lenient precision 1.0); 21 of the 27 real findings the oracle expects are found.
 FLOORS = {"precision_strict": 21 / 26, "recall": 21 / 27}

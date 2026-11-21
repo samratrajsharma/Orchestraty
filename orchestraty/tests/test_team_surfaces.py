@@ -18,6 +18,8 @@ from orchestraty.mcp import tools
 from orchestraty.team import checks, commands, teamfile
 from team_harness import BILLING, NS, publish_raw, run_git, team  # noqa: F401  (fixtures)
 
+pytestmark = pytest.mark.heavy        # git-heavy: the quick Windows run in CI leaves it to the full run
+
 TAX = BILLING.replace("currency)", "currency, tax)")
 REGISTER = Path(__file__).resolve().parents[1] / "orchestraty" / "mod" / "hooks" / "register.js"
 CONFIRMED = "version: 1\nsync: on\nvisibility: private\nshare:\n  task: confirmed\n"

@@ -18,6 +18,8 @@ from orchestraty.coordinator.record import Record
 from orchestraty.team import identity, store
 from team_harness import BILLING, NS, run_git, team  # noqa: F401  (fixtures)
 
+pytestmark = pytest.mark.heavy        # git-heavy: the quick Windows run in CI leaves it to the full run
+
 REFUSE_FEATURES = ("#!/bin/sh\n"
                    "while read old new ref; do\n"
                    "  case \"$ref\" in refs/heads/feat/*) echo \"no feature branches here\" >&2; exit 1;; esac\n"

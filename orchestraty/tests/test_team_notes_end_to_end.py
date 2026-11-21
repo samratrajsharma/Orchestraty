@@ -19,6 +19,8 @@ from orchestraty.mcp import tools
 from team_harness import BILLING, NS, run_git, team  # noqa: F401  (fixtures)
 from test_team_solo import GOLDEN, local_json, play, solo  # noqa: F401  (fixtures)
 
+pytestmark = pytest.mark.heavy        # git-heavy: the quick Windows run in CI leaves it to the full run
+
 TAX = BILLING.replace("currency)", "currency, tax)")         # a new required parameter: charge(x, 'EUR') breaks
 INVOICES = "from pkg.billing import charge\n\n\ndef invoice(amount):\n    return charge(amount, 'EUR')\n"
 SHARING = "version: 1\nsync: on\nvisibility: private\nshare:\n  claims: true\n  task: confirmed\n"

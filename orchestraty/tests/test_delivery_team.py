@@ -20,6 +20,8 @@ from orchestraty.paths import State
 from orchestraty.rules.overlap import Finding
 from team_harness import BILLING, NS, run_git, team  # noqa: F401  (fixtures)
 
+pytestmark = pytest.mark.heavy        # git-heavy: the quick Windows run in CI leaves it to the full run
+
 T, T2 = "team-3fa94c2b1d0e", "team-0b1d77c2e4aa"
 LOCAL = {"agent": "claude", "repo_id": 1, "cwd": "/w/wt-b", "worktree": "/w/wt-b", "branch": "feat/b", "base_commit": "c",
          "base_guessed": 0, "started": 5, "last_seen": 5, "state": "live", "turn": "", "note": ""}

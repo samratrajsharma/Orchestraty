@@ -4,11 +4,15 @@ Each writer is one file, records/<person>/<device>.json; every commit says [skip
 racing both land; the branch compacts; and readers read both stores, the higher seq winning."""
 import json
 
+import pytest
+
 from orchestraty import remote
 from orchestraty.coordinator.record import Record
 from orchestraty.coordinator.team import session_id
 from orchestraty.team import store, teamfile
 from team_harness import BILLING, Machine, publish_raw, run_git, team, refusing_remote  # noqa: F401  (fixtures)
+
+pytestmark = pytest.mark.heavy        # git-heavy: the quick Windows run in CI leaves it to the full run
 
 TAX = BILLING.replace("currency)", "currency, tax)")
 BRANCH = "refs/heads/orchestraty/records"

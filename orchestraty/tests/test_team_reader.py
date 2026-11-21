@@ -5,10 +5,14 @@ record is skipped and the person's other devices are read. A failed fetch keeps 
 and waits longer; the fetch prunes nothing of the cloud fetch's."""
 import os
 
+import pytest
+
 from orchestraty import config, remote
 from orchestraty.coordinator.record import Record
 from orchestraty.team import identity, store, teamfile
 from team_harness import BILLING, NS, Machine, run_git, team  # noqa: F401  (fixtures)
+
+pytestmark = pytest.mark.heavy        # git-heavy: the quick Windows run in CI leaves it to the full run
 
 TAX = BILLING.replace("currency)", "currency, tax)")
 
