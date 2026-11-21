@@ -2,7 +2,11 @@
 
 Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestraty`.
 
-## Unreleased
+## 0.1.2 (21 November 2026)
+
+Fixes from testers' feedback: every agent session shows in `orch status` and `orch ui`, and within about a second (a session started outside a watched repository, sessions in a repository that is not watched, and a coordinator slowed down by many worktrees).
+
+After upgrading, run `orch coordinator stop`: the next session starts the new version, and `orch doctor` says when an older one still runs. The hook script is unchanged, so `orch init` need not run again.
 
 ### Fixed
 
