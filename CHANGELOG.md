@@ -2,7 +2,11 @@
 
 Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestraty`.
 
-## Unreleased
+## 0.1.3 (22 November 2026)
+
+One `orch init` for the whole computer: every project your agents work in can be followed from then on, with or without git, and the dashboard has one address and a Projects page.
+
+After upgrading, run `orch coordinator stop` (the next session starts the new version), then `orch init` once: it asks whether to follow every project (or run `orch config track on`). The hook script is unchanged.
 
 ### Added
 
