@@ -168,10 +168,14 @@ def test_orch_init_asks_to_follow_every_project_and_sets_up_the_agents_it_finds(
     assert cli.main(["init", "--yes"]) == 0
     out = capsys.readouterr().out
     assert "Following every project your agents work in." in out
-    assert "Codex is on this computer too" not in out        # --yes answers for it
+    assert "Codex is on this computer too: orch init --agent codex sets it up." in out    # named, not changed
     cfg = config.load(state)
-    assert cfg["watch_all"] is True
-    assert {e["agent"] for e in cfg["installed"]} == {"claude", "codex"}
+    assert cfg["watch_all"] is True and {e["agent"] for e in cfg["installed"]} == {"claude"}
+    asked = []
+    monkeypatch.setattr(cli, "confirm", lambda question, yes: asked.append(question) or True)
+    assert cli.main(["init"]) == 0                           # run by hand: it asks
+    assert any(q.startswith("Codex is on this computer too") for q in asked)
+    assert {e["agent"] for e in config.load(state)["installed"]} == {"claude", "codex"}
     assert os.path.isfile(os.path.join(os.environ["CODEX_HOME"], "hooks.json"))
     assert cli.main(["config", "track"]) == 0 and "track: on" in capsys.readouterr().out
     assert cli.main(["config", "track", "off"]) == 0 and config.load(state)["watch_all"] is False

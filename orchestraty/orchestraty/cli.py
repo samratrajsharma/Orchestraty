@@ -183,14 +183,19 @@ def _agents_here():
 
 
 def _offer_other_agents(args):
-    """Offer to set up each other agent found here that orch init has not set up yet."""
+    """Offer to set up each other agent found here that orch init has not set up yet. --yes
+    answers only for what orch init itself does: it names them, and changes no other agent's
+    files unasked."""
     from orchestraty import config
     done = {e.get("agent") for e in config.load(State())["installed"] if isinstance(e, dict)}
     for agent, title in _agents_here():
         if agent in done:
             continue
         print()
-        if not confirm(f"{title} is on this computer too. Set Orchestraty up for it?", args.yes):
+        if args.yes:
+            print(f"{title} is on this computer too: orch init --agent {agent} sets it up.")
+            continue
+        if not confirm(f"{title} is on this computer too. Set Orchestraty up for it?", False):
             print(f"Left {title} as it is: orch init --agent {agent} sets it up later.")
             continue
         nested = argparse.Namespace(**dict(vars(args), agent=agent, project=False, claude_config=None,

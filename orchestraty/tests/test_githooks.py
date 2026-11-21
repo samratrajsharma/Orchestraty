@@ -138,7 +138,7 @@ def test_orch_init_can_skip_the_chain(state, repo, monkeypatch):
 def test_orch_config_steer_and_wake(state, repo, monkeypatch, capsys, tmp_path):
     monkeypatch.chdir(repo)
     assert cli.main(["config"]) == 0
-    assert capsys.readouterr().out == "steer: off\nwake: off\n"
+    assert capsys.readouterr().out == "steer: off\nwake: off\ntrack: off\n"
     assert cli.main(["config", "steer", "on"]) == 0 and config.load(state)["steer"] is True
     assert cli.main(["config", "wake", "on"]) == 0
     assert "Run orch init" in capsys.readouterr().out             # no hooks installed yet
