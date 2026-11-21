@@ -111,3 +111,12 @@ def test_the_json_docs_name_every_field(state, repo, git, tmp_path):
         assert f"| `{kind}` |" in page
     for key in sorted({k for e in got for k in e}):
         assert f"`{key}`" in page, key
+
+
+def test_the_repositories_not_watched_are_documented(state, tmp_path):
+    entry = {"common_dir": str(tmp_path / "api" / ".git"), "name": "api", "folder": str(tmp_path / "api"), "sessions": 1}
+    Path(state.root).mkdir(parents=True, exist_ok=True)
+    Path(state.unwatched).write_text(json.dumps({"schema": 1, "repositories": [entry]}), encoding="utf-8")
+    Path(state.alive).touch()
+    [got] = status.collect(state)["unwatched"]
+    assert set(got) == set(tables("status-json.md")["`unwatched`"])

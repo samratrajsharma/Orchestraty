@@ -90,6 +90,17 @@ class State:
         return self._in("coordinator.stop")
 
     @property
+    def rescan(self):
+        """Made by orch ui's Refresh: the coordinator looks at every worktree again at once."""
+        return self._in("coordinator.rescan")
+
+    @property
+    def unwatched(self):
+        """Kept by the coordinator: the repositories, not watched, that agent sessions work in
+        now, and how many (no session id, no event), so orch status and orch ui can say so."""
+        return self._in("unwatched.json")
+
+    @property
     def mod(self):
         """Orchestraty's Claude Code mod, copied here by orch init."""
         return self._in("mod")

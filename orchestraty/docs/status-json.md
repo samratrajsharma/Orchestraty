@@ -24,6 +24,7 @@ Times are UTC, as `YYYY-MM-DDTHH:MM:SSZ`. Paths of files in a repository are rel
 | `schema` | integer | `1` |
 | `coordinator` | object | Whether the coordinator runs. See [coordinator](#coordinator). |
 | `repositories` | array | One object per watched repository, in the order they were watched. See [repository](#repository). |
+| `unwatched` | array | Repositories Orchestraty does not watch that agent sessions work in now, so their sessions are not compared. Only while the coordinator runs; else empty. See [unwatched](#unwatched). |
 
 ### `coordinator`
 
@@ -230,6 +231,17 @@ Opt-in, for each repository. For a session that changes .ts files, the project's
 | `next` | string (time) or null | When the coordinator fetches next. |
 | `last_ok` | string (time) or null | The last fetch that worked. |
 | `branches` | integer | How many branches matched the patterns at the last fetch that worked. |
+
+### `unwatched`
+
+One object per repository that is not watched, with a hooked agent session working in it now. The coordinator counts them in memory and in `<state>/unwatched.json`; nothing about them goes into the record, and no session id or event is kept. `orch watch` in that folder starts comparing them.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `name` | string | The repository's folder name. |
+| `common_dir` | string | Its git common directory, as `repositories[].common_dir` would be. |
+| `folder` | string | The folder a session works in, for `orch watch`. |
+| `sessions` | integer | How many agent sessions work in it now (heard from within the session timeout). |
 
 ## The MCP tool `status`
 

@@ -9,7 +9,9 @@ agent can be handed (``adapters``), and the text says what an agent there cannot
 live session's claims (``orch claim``) that hold are listed with it, and each repository has
 its merge-order advice (``mergeorder``) and its together check: the settings, and the latest
 result for each pair of its sessions (``together``); and its TypeScript contracts: the settings,
-and how each session's exports were last read (``livemap.typescript``).
+and how each session's exports were last read (``livemap.typescript``). While the coordinator
+runs, ``unwatched`` names the repositories, not watched, that agent sessions work in now, and
+how many, so the user can watch them (its unwatched.json; nothing about them is in the record).
 """
 import calendar
 import json
@@ -111,7 +113,31 @@ def collect(state, include_ended=False, now=None):
             "together": _together(cfg, common_dir, checked.get(repo_key(common_dir), {}), {s["id"] for s in local}),
             "typescript": _typescript(state, cfg, common_dir, {s["id"] for s in local}),
             "cloud": _cloud(state, cfg, common_dir, now, cloud, changes)})
+    data["unwatched"] = unwatched(state, cfg, now)
     return data
+
+
+def unwatched(state, cfg=None, now=None):
+    """The repositories, not watched, that agent sessions work in now, as the running
+    coordinator counts them in unwatched.json: [{name, common_dir, folder, sessions}]. Empty
+    while no coordinator runs."""
+    now = time.time() if now is None else now
+    if not is_fresh(state.alive, STALE_SECONDS, now):
+        return []
+    cfg = config.load(state) if cfg is None else cfg
+    try:
+        with open(state.unwatched, "r", encoding="utf-8") as fh:
+            kept = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    out = []
+    for r in kept.get("repositories", []) if isinstance(kept, dict) else []:
+        if (isinstance(r, dict) and isinstance(r.get("common_dir"), str) and isinstance(r.get("folder"), str)
+                and isinstance(r.get("sessions"), int) and r["sessions"] > 0
+                and not config.is_watched(cfg, r["common_dir"])):
+            out.append({"name": repo_name(r["common_dir"]), "common_dir": r["common_dir"], "folder": r["folder"],
+                        "sessions": r["sessions"]})
+    return out
 
 
 def _cloud(state, cfg, common_dir, now, sessions, changes):
@@ -305,7 +331,8 @@ def render(data, wake=False):
         lines = ["Coordinator: not running (a hook starts it with the next event)"]
     if not data["repositories"]:
         lines += ["", "No repository is watched. Run orch init (or orch watch) inside one."]
-        return "\n".join(lines) + "\n"
+        lines += _unwatched_lines(data.get("unwatched", []))
+        return "\n".join(printable(line) for line in lines) + "\n"
     for repo in data["repositories"]:
         lines += ["", f"{repo['name']}  ({repo['common_dir']})"]
         cloud = repo.get("cloud") or {}
@@ -331,9 +358,21 @@ def render(data, wake=False):
         if ts.get("on") or ts.get("runs"):
             lines.append(f"  TypeScript contracts: {'on' if ts.get('on') else 'off'}")
             lines += ["    " + _ts_line(r) for r in ts.get("runs", [])]
+    lines += _unwatched_lines(data.get("unwatched", []))
     if any(s["base_guessed"] for r in data["repositories"] for s in r["sessions"]):
         lines += ["", "base?: the session was first seen after it started, so its base is the commit at that time."]
     return "\n".join(printable(line) for line in lines) + "\n"
+
+
+def _unwatched_lines(unwatched):
+    """Where agent sessions work that Orchestraty does not compare, and how to change that."""
+    if not unwatched:
+        return []
+    lines = ["", "Not watched, so these sessions are not compared:"]
+    for r in unwatched:
+        count = "1 session" if r["sessions"] == 1 else f"{r['sessions']} sessions"
+        lines.append(f"  {r['name']}: {count}. To watch it: orch watch \"{r['folder']}\"")
+    return lines
 
 
 def _local(iso, form="%H:%M"):

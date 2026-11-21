@@ -2,6 +2,7 @@
 import json
 import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -30,9 +31,25 @@ def record_sessions(state, repo, *events):
 
 def test_nothing_watched_and_no_coordinator(state):
     data = status.collect(state)
-    assert data == {"schema": 1, "coordinator": {"running": False}, "repositories": []}
+    assert data == {"schema": 1, "coordinator": {"running": False}, "repositories": [], "unwatched": []}
     text = status.render(data)
     assert "not running" in text and "No repository is watched" in text
+
+
+def test_repositories_not_watched_are_named_while_the_coordinator_runs(state, repo, tmp_path):
+    other = tmp_path / "api"
+    entry = {"common_dir": str(other / ".git"), "name": "api", "folder": str(other), "sessions": 2}
+    Path(state.root).mkdir(parents=True, exist_ok=True)
+    Path(state.unwatched).write_text(json.dumps({"schema": 1, "repositories": [entry]}), encoding="utf-8")
+    assert status.collect(state)["unwatched"] == []          # a coordinator that stopped counts nothing
+    Path(state.alive).touch()
+    data = status.collect(state)
+    assert data["unwatched"] == [entry]
+    text = status.render(data)
+    assert "Not watched, so these sessions are not compared:" in text
+    assert f'api: 2 sessions. To watch it: orch watch "{other}"' in text
+    config.watch(state, str(other / ".git"))                 # watched since: no longer named
+    assert status.collect(state)["unwatched"] == []
 
 
 def test_sessions_of_a_watched_repository(state, repo, git, tmp_path):
