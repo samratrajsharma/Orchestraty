@@ -84,6 +84,7 @@ class BaseIndexes:
 
     def __init__(self, data_dir, log=None, keep=6):
         self.config = Config(data_dir=data_dir, use_cache=True)
+        self.state_root = os.path.dirname(os.path.abspath(data_dir))
         self.log = log or logging.getLogger("orchestraty.coordinator")
         self.keep = keep
         self._ready = OrderedDict()            # (repo key, commit) -> RepoIndex
@@ -143,7 +144,12 @@ class BaseIndexes:
                 worktree.set()                 # a wait() marker
                 continue
             try:
-                if is_bare(worktree):
+                if key[1].startswith("snap:"):               # a folder project's snapshot
+                    from orch_engine.pipeline import build_index
+                    from orchestraty.livemap import snapshots
+                    idx = build_index(snapshots.tree(self.state_root, worktree, key[1]), self.config, use_cache=True,
+                                      register=False)
+                elif is_bare(worktree):
                     idx = index_from_objects(worktree, key[1], self.config)
                 else:
                     idx = build_index_at(worktree, key[1], self.config, use_cache=True)

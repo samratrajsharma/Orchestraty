@@ -58,7 +58,7 @@ Every note is filled in from a template with facts from git and the code. Orches
 
 ## Quick start
 
-You need Python 3.10 or later, git 2.38 or later, and a recent Claude Code (`claude update`; the status line and pane need 2.1.287 or later).
+You need Python 3.10 or later and a recent Claude Code (`claude update`; the status line and pane need 2.1.287 or later). Projects in git need git 2.38 or later; a project folder without git needs nothing more.
 
 **1. Install.**
 
@@ -68,15 +68,14 @@ python -m pip install orchestraty
 
 `pipx install orchestraty` or `uv tool install orchestraty` work too. If your terminal can't find `orch` afterwards, type `python -m orchestraty` in its place. To try the newest work on `main` before it is released, install from the repository instead: `python -m pip install "git+https://github.com/samratrajsharma/Orchestraty.git"`.
 
-**2. Switch it on**, from a terminal (not from inside an agent session), in a repository your agents work on:
+**2. Switch it on, once for the whole computer**, from a terminal (not from inside an agent session), in any folder:
 
 ```bash
-cd path/to/your/repository
 orch init       # shows what it will change, and asks first
 orch doctor     # checks everything, with a fix for each problem
 ```
 
-`orch init` adds Orchestraty's hooks, the status line and the pane to Claude Code's settings (backing the file up first), and watches this repository. Then it offers the push line: a git hook that adds one line to `git push` when callers of a function you changed are still on the old form. For Codex or Antigravity, also run `orch init --agent codex` or `orch init --agent antigravity`. To include another repository, run `orch watch` inside it.
+`orch init` adds Orchestraty's hooks, the status line and the pane to Claude Code's settings (backing the file up first), and offers the same for Codex and Antigravity when they are on the computer. It asks once whether to follow every project your agents work in, from then on: a git repository, or a folder without git, which Orchestraty follows through its own snapshots in its state folder, writing nothing into the project. Nothing needs running per project; `orch unwatch` in a project leaves it out, and `orch config track off` goes back to following only the projects you `orch watch`. Run in a git repository, it also offers the push line there: a git hook that adds one line to `git push` when callers of a function you changed are still on the old form.
 
 **3. See it before you rely on it.**
 
@@ -93,7 +92,7 @@ Mostly nothing. Notes go to the agents, not to you, and only when one session's 
 | Where | What |
 | --- | --- |
 | In an agent's session | A note: before it edits a file, with its next step, or at the end of its turn |
-| `orch status`, or `orch ui` in your browser | The live sessions, what each has changed, and where they overlap |
+| `orch status`, or `orch ui` in your browser | Every project, its live sessions, what each has changed, and where they overlap. `orch ui` always opens at http://127.0.0.1:47392, and running it again from any folder opens the one already running |
 | At `git push` | One line when callers of a changed function are still on the old form. It never blocks the push |
 | Claude Code 2.1.287 or later | A status line, a highlighted band when an overlap is strong, and `/orch` to open a pane of every session |
 

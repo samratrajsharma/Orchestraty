@@ -42,6 +42,7 @@ from orch_engine.track import diff, file_fingerprint
 from orchestraty import adapters, gitio
 from orchestraty.livemap import changes as git_changes
 from orchestraty.livemap import routes as route_changes
+from orchestraty.livemap import snapshots
 from orchestraty.livemap import tsimports, typescript
 from orchestraty.livemap.contracts import ANY, BREAKING, COMPATIBLE, NONE, REVIEW, classify, worst
 from orchestraty.livemap.index import BaseIndexes, ParseCache, blob_id, view
@@ -190,21 +191,29 @@ def branch_view(git_dir, repo_key, sid, base, tip, before=None, cache=None, base
     return new
 
 
-def _parses(cache, base_blobs, top, base, python, at=None):
+def _parses(cache, base_blobs, top, base, python, at=None, state_root=None):
     """({path: base ParsedFile or None}, {path: head ParsedFile or None}, {path: head blob id},
     {path: why its head is not known}) for the changed .py files: the head as it is on disk in
     `top`, or (with `at`) as it is at that commit of the repository `top`. `base_blobs` keeps
-    each (commit, path)'s blob id once read."""
+    each (commit, path)'s blob id once read. A folder project's base (a snapshot) is read from
+    the state folder `state_root`."""
     head, head_blobs, unread = (_heads_at(cache, top, at, python) if at is not None
                                 else _heads_on_disk(cache, top, python))
     wanted = [p for p, s in python.items() if s != "A" and (base, p) not in base_blobs]
+    snap = snapshots.is_snapshot(base) and state_root is not None
     if wanted:
-        found = git_changes.blob_ids(top, base, wanted)
+        found = (snapshots.blob_ids(state_root, top, base, wanted) if snap
+                 else git_changes.blob_ids(top, base, wanted))
         for p in wanted:
             base_blobs[(base, p)] = found.get(p)
     blobs = {p: base_blobs.get((base, p)) for p, s in python.items() if s != "A"}
     missing = sorted({b for p, b in blobs.items() if b and not cache.known(p, b)})
-    data = read_blobs(top, missing) if missing else {}
+    if not missing:
+        data = {}
+    elif snap:
+        data = snapshots.read_blobs(state_root, missing)
+    else:
+        data = read_blobs(top, missing)
     base_pf = {}
     for path in python:
         blob = blobs.get(path)
@@ -262,6 +271,7 @@ def _stat(path):
 class LiveMap:
     def __init__(self, state, log=None):
         self.log = log or logging.getLogger("orchestraty.coordinator")
+        self.state_root = state.root
         self.cache = ParseCache()
         self.indexes = BaseIndexes(os.path.join(state.root, "engine"), self.log)
         self.views = {}                                # session id -> SessionView
@@ -296,8 +306,8 @@ class LiveMap:
         self.views[sid] = SessionView(sid, repo_key, session["worktree"], session["base_commit"])
         self.edits[sid].update(own)                    # its own, even in a folder it shares
         try:
-            already = {} if adopt_existing else git_changes.changed_files(session["worktree"], session["base_commit"])
-        except (gitio.GitError, gitio.UntrustedRepositoryError):
+            already = {} if adopt_existing else self._changed(session["worktree"], session["base_commit"])
+        except (gitio.GitError, gitio.UntrustedRepositoryError, snapshots.TooLarge, OSError):
             already = {}
         known_before = set(own) | set(unattributed)
         self.dirty_at_start[sid] = {p: _stat(os.path.join(session["worktree"], *p.split("/"))) for p in already
@@ -362,6 +372,12 @@ class LiveMap:
             if paths or line.get("tool_name") not in READ_ONLY_TOOLS:
                 self.pending.add(sid)
 
+    def _changed(self, top, base):
+        """The files of the worktree (or folder project) `top` that differ from its base."""
+        if snapshots.is_snapshot(base):
+            return snapshots.changed_files(self.state_root, top, base)
+        return git_changes.changed_files(top, base)
+
     def mark_all(self, skip_agent=None):
         """Refresh every session at the next refresh_pending(), but those of agent `skip_agent`
         (plain-git sessions, which the coordinator refreshes when their worktree changes)."""
@@ -386,8 +402,8 @@ class LiveMap:
         session, old = self.sessions[sid], self.views[sid]
         top, base = session["worktree"], session["base_commit"]
         try:
-            files = git_changes.changed_files(top, base)
-        except (gitio.GitError, gitio.UntrustedRepositoryError) as exc:
+            files = self._changed(top, base)
+        except (gitio.GitError, gitio.UntrustedRepositoryError, snapshots.TooLarge, OSError) as exc:
             self.log.warning("session %s: no file list: %s", sid[:8], exc)
             return False
         sharing = [o for o, s in self.sessions.items() if o != sid and s["worktree"] == top]
@@ -453,7 +469,7 @@ class LiveMap:
         return new.key() != old.key() or new.error != old.error
 
     def _parses(self, top, base, python, at=None):
-        return _parses(self.cache, self._base_blobs, top, base, python, at)
+        return _parses(self.cache, self._base_blobs, top, base, python, at, self.state_root)
 
     # code graphs
     def graph(self, sid):

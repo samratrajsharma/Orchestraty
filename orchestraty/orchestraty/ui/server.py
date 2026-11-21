@@ -41,8 +41,10 @@ again.
 import atexit
 import hashlib
 import hmac
+import http.client
 import json
 import os
+import re
 import secrets
 import signal
 import socket
@@ -50,6 +52,7 @@ import socketserver
 import sqlite3
 import sys
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -73,7 +76,7 @@ JSON_TYPE = "application/json; charset=utf-8"
 TEXT_TYPE = "text/plain; charset=utf-8"
 MAX_BODY = 4096
 VOLATILE = ("seconds_since_last_event",)          # left out of ETags: the page works them out
-SWITCHES = ("steer", "wake")
+SWITCHES = ("steer", "wake", "track")
 
 NO_HOST = "Forbidden: this server answers only to 127.0.0.1 and localhost on its own port."
 NO_COOKIE = "Forbidden: open the link that orch ui printed in your terminal."
@@ -126,6 +129,57 @@ def cookies(headers, name):
     return found
 
 
+DEFAULT_PORT = 47392                               # one address for the dashboard, on this computer
+LINK_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,64}")
+LINK_SECONDS = 600                                 # a link a second orch ui made, unused, goes after this
+
+
+def _links(state):
+    return os.path.join(state.root, "ui-links")
+
+
+def _info(state):
+    return os.path.join(state.root, "ui.json")
+
+
+def running(state, timeout=1.0):
+    """The port of the orch ui already serving this state folder (its ui.json), or None."""
+    try:
+        with open(_info(state), "r", encoding="utf-8") as fh:
+            port = json.load(fh).get("port")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(port, int) or isinstance(port, bool) or not 0 < port < 65536:
+        return None
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        conn.request("GET", "/", headers={"Host": f"127.0.0.1:{port}"})
+        answer = conn.getresponse()
+        answer.read()
+        conn.close()
+    except (OSError, http.client.HTTPException):
+        return None
+    return port if (answer.getheader("Server") or "").startswith("orch-ui") else None
+
+
+def new_link(state, port):
+    """A one-time link to the orch ui on `port`: a token file in the state folder, which only
+    this user can write, that the running server takes once."""
+    folder = _links(state)
+    os.makedirs(folder, exist_ok=True)
+    now = time.time()
+    for name in os.listdir(folder):                    # links nobody opened
+        try:
+            if now - os.path.getmtime(os.path.join(folder, name)) > LINK_SECONDS:
+                os.remove(os.path.join(folder, name))
+        except OSError:
+            pass
+    token = secrets.token_urlsafe(32)
+    with open(os.path.join(folder, token), "w", encoding="utf-8"):
+        pass
+    return f"http://127.0.0.1:{port}/?token={token}"
+
+
 class Server(ThreadingHTTPServer):
     """The HTTP server, with the secrets of this launch."""
 
@@ -155,14 +209,23 @@ class Server(ThreadingHTTPServer):
         return f"http://127.0.0.1:{self.port}/?token={self.token}"
 
     def redeem(self, token):
-        """"ok" the first time the right token comes, "used" after that, "wrong" for any other."""
+        """"ok" the first time the right token comes, "used" after that, "wrong" for any other.
+        A link another orch ui made for this one (a token file in the state folder) is taken once."""
         with self._lock:
-            if not _same_secret(token, self.token):
-                return "wrong"
-            if self._redeemed:
-                return "used"
-            self._redeemed = True
-            return "ok"
+            if _same_secret(token, self.token):
+                if self._redeemed:
+                    return "used"
+                self._redeemed = True
+                return "ok"
+            if self.demo is None and isinstance(token, str) and LINK_TOKEN.fullmatch(token):
+                path = os.path.join(_links(self.state), token)
+                try:
+                    fresh = time.time() - os.path.getmtime(path) <= LINK_SECONDS
+                    os.remove(path)
+                except OSError:
+                    return "wrong"
+                return "ok" if fresh else "wrong"
+            return "wrong"
 
     def handle_error(self, request, client_address):
         exc = sys.exc_info()[1]
@@ -515,13 +578,14 @@ class Handler(BaseHTTPRequestHandler):
         """{"steer": "on"|"off"} or {"wake": "on"|"off"}, checked as orch config checks them."""
         from orchestraty import cli, config
         if len(body) != 1 or next(iter(body)) not in SWITCHES or next(iter(body.values())) not in ("on", "off"):
-            raise BadRequest('send {"steer": "on"} or "off", or {"wake": "on"} or "off"')
+            raise BadRequest('send {"steer": "on"} or "off", or the same for "wake" or "track"')
         [(name, value)] = body.items()
         lines, refused = cli.set_switch(self.server.state, name, value == "on")
         if self.server.demo is not None and name == "wake":
             lines = lines[:1] + [DEMO_WAKE]                # the demo has no hooks to reinstall
         cfg = config.load(self.server.state)
-        return 200, {"schema": data.SCHEMA, "steer": cfg["steer"], "wake": cfg["wake"], "lines": lines,
+        return 200, {"schema": data.SCHEMA, "steer": cfg["steer"], "wake": cfg["wake"], "track": cfg["watch_all"],
+                     "lines": lines,
                      "error": f"orch config: {refused}" if refused else None}
 
 
@@ -556,16 +620,60 @@ def serve(server, browser=True, out=None):
                 signal.signal(sig, _interrupt)
     if browser:
         threading.Thread(target=_open, args=(server.url,), name="open-browser", daemon=True).start()
+    mine = server.demo is None and _announce(server)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
         print("orch ui: stopped.", file=out)
     finally:
         server.server_close()
+        if mine:
+            _withdraw(server)
     return 0
 
 
-def main(port=0, browser=True, demo=False):
+def _announce(server):
+    """Write ui.json, so a second orch ui opens this one; True when written."""
+    try:
+        os.makedirs(server.state.root, exist_ok=True)
+        tmp = _info(server.state) + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"pid": os.getpid(), "port": server.port, "started": time.time()}, fh)
+        os.replace(tmp, _info(server.state))
+        return True
+    except OSError:
+        return False
+
+
+def _withdraw(server):
+    try:
+        with open(_info(server.state), "r", encoding="utf-8") as fh:
+            ours = json.load(fh).get("pid") == os.getpid()
+        if ours:
+            os.remove(_info(server.state))
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def main(port=None, browser=True, demo=False):
+    """orch ui. With no port, the dashboard's one address (DEFAULT_PORT), or a free port when
+    something else holds it; and when an orch ui already serves this state folder, a new
+    one-time link to it, opened instead of starting a second one."""
+    if not demo:
+        state = State()
+        existing = running(state)
+        if existing and port in (None, existing):
+            url = new_link(state, existing)
+            print(f"orch ui is already running: {url}")
+            print("The link works once, in one browser on this computer.", flush=True)
+            if browser:
+                _open(url)
+            return 0
+    if port is None:
+        port = 0 if demo else DEFAULT_PORT
+        fallback = not demo
+    else:
+        fallback = False
     sandbox = None
     if demo:
         from orchestraty.ui.demo import Demo
@@ -579,8 +687,11 @@ def main(port=0, browser=True, demo=False):
         try:
             server = Server(sandbox.state if sandbox else State(), port)
         except OSError as exc:
-            print(f"orch ui: cannot listen on 127.0.0.1:{port}: {exc.strerror or exc}", file=sys.stderr)
-            return 2
+            if not fallback:
+                print(f"orch ui: cannot listen on 127.0.0.1:{port}: {exc.strerror or exc}", file=sys.stderr)
+                return 2
+            server = Server(State(), 0)
+            print(f"orch ui: port {port} is taken by another program, so this one uses {server.port}.")
         server.demo = sandbox
         return serve(server, browser)
     finally:

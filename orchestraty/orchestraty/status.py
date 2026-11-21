@@ -110,13 +110,14 @@ def collect(state, include_ended=False, now=None, with_lines=False):
     for r in checking.results(state):                     # oldest first: the latest for a pair wins
         if isinstance(r.get("repo"), str) and isinstance(r.get("sessions"), list):
             checked.setdefault(repo_key(r["repo"]), {})[tuple(r["sessions"])] = r
-    for common_dir in cfg["repos"]:
+    shown = [r["common_dir"] for r in repo_rows.values() if r["id"] in sessions_by_repo]
+    for common_dir in config.watched(cfg, shown):         # listed ones, then others with sessions (watch_all)
         row = repo_rows.get(repo_key(common_dir))
         sessions = sessions_by_repo.get(row["id"], []) if row else []
         local = [s for s in sessions if s["agent"] not in sessionkinds.REMOTE]
         cloud = [s for s in sessions if s["agent"] == sessionkinds.CLOUD]
         data["repositories"].append({
-            "name": repo_name(common_dir), "common_dir": common_dir,
+            "name": repo_name(common_dir), "common_dir": common_dir, "kind": project_kind(common_dir),
             "sessions": [_session(s, now, changes.get(s["id"], ({}, [], [], {})),
                                   declared.get(s["id"], ()) if s["state"] == "live" else (),
                                   claimed.get(s["id"], ()) if s["state"] == "live" else ())
@@ -149,6 +150,13 @@ def _named(sessions, team):
     rows = team[3] if team else {}
     return {s["id"]: dict(s, people=rows[s["id"]]["people"], own=bool(rows[s["id"]]["own"])) if s["id"] in rows else s
             for s in sessions}
+
+
+def project_kind(common_dir):
+    """"git" for a repository's git folder (or a bare repository), "folder" for a folder project."""
+    if os.path.isfile(os.path.join(common_dir, "HEAD")) and os.path.isdir(os.path.join(common_dir, "objects")):
+        return "git"
+    return "folder"
 
 
 def unwatched(state, cfg=None, now=None):
@@ -381,7 +389,8 @@ def render(data, wake=False, tty=False):
         lines += _unwatched_lines(data.get("unwatched", []))
         return "\n".join(printable(line) for line in lines) + "\n"
     for repo in data["repositories"]:
-        lines += ["", f"{repo['name']}  ({repo['common_dir']})"]
+        where = repo["common_dir"] if repo.get("kind") != "folder" else "a folder without git: " + repo["common_dir"]
+        lines += ["", f"{repo['name']}  ({where})"]
         cloud = repo.get("cloud") or {}
         names = {s["id"]: s["branch"] for s in cloud.get("branches", [])}
         names.update(team_names((repo.get("team") or {}).get("sessions", [])))
@@ -506,7 +515,7 @@ def _session_lines(sessions):
         state = s["turn"] if s["state"] == "live" else (s["note"] or s["state"])
         base = (s["base_commit"][:9] or "-") + ("?" if s["base_guessed"] else "")
         rows.append((s["id"][:8], s["agent"], os.path.basename(s["worktree"]) or s["worktree"],
-                     s["branch"] or "(detached)", base, _ago(s["seconds_since_last_event"]), state or "-"))
+                     s["branch"] or ("-" if s["base_commit"].startswith("snap:") else "(detached)"), base, _ago(s["seconds_since_last_event"]), state or "-"))
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     lines = ["  " + "  ".join(v.ljust(w) for v, w in zip(rows[0], widths)).rstrip()]
     for row, s in zip(rows[1:], sessions):

@@ -147,10 +147,60 @@ def _init_for_plugin(args, state, path, python, wake, current, plugin_id):
 
 
 def _init_rest(args, state, python):
+    _offer_tracking(state, args.yes)
     code = _watch_here(state, os.getcwd(), quiet_outside=True)
     if code == 0 and not args.no_git_hooks:
         _git_chain_here(state, python, args.yes)
+    if args.agent == "claude" and not args.project:
+        _offer_other_agents(args)
     return code
+
+
+def _offer_tracking(state, assume_yes):
+    """Ask once whether every project an agent works in is followed (watch_all)."""
+    from orchestraty import config
+    if config.load(state)["watch_all"]:
+        return
+    print("Orchestraty can follow every project your agents work in, from wherever you run orch init: a git "
+          "repository, or a folder without git, through its own snapshots in its state folder. Each one is "
+          "recorded on this computer only, and nothing is sent anywhere; orch unwatch in a project leaves it out.")
+    if confirm("Follow every project?", assume_yes):
+        config.set_watch_all(state, True)
+        print("Following every project your agents work in.")
+    else:
+        print("Only the projects you watch are followed: run orch watch in each (orch config track on changes this).")
+
+
+def _agents_here():
+    """The other agents found on this computer, by the folders they keep: [(agent, title)]."""
+    from orchestraty.adapters import antigravity, codex
+    found = []
+    if os.path.isdir(os.path.dirname(codex.config_path())):
+        found.append(("codex", "Codex"))
+    if os.path.isdir(os.path.dirname(os.path.dirname(antigravity.config_path()))):
+        found.append(("antigravity", "Antigravity"))
+    return found
+
+
+def _offer_other_agents(args):
+    """Offer to set up each other agent found here that orch init has not set up yet. --yes
+    answers only for what orch init itself does: it names them, and changes no other agent's
+    files unasked."""
+    from orchestraty import config
+    done = {e.get("agent") for e in config.load(State())["installed"] if isinstance(e, dict)}
+    for agent, title in _agents_here():
+        if agent in done:
+            continue
+        print()
+        if args.yes:
+            print(f"{title} is on this computer too: orch init --agent {agent} sets it up.")
+            continue
+        if not confirm(f"{title} is on this computer too. Set Orchestraty up for it?", False):
+            print(f"Left {title} as it is: orch init --agent {agent} sets it up later.")
+            continue
+        nested = argparse.Namespace(**dict(vars(args), agent=agent, project=False, claude_config=None,
+                                           codex_home=None, antigravity_config=None, nested=True))
+        _init_agent(nested)
 
 
 _ONLY_FOR = {"claude_config": "claude", "codex_home": "codex", "antigravity_config": "antigravity"}
@@ -235,6 +285,9 @@ def _init_agent(args):
         print("Conversations started from now on are seen.")
     if args.project:
         _offer_exclude(state, path, args.yes)
+    if getattr(args, "nested", False):             # set up from orch init for Claude Code, which did the rest
+        return 0
+    _offer_tracking(state, args.yes)
     code = _watch_here(state, os.getcwd(), quiet_outside=True)
     if code == 0 and not args.no_git_hooks:
         _git_chain_here(state, python, args.yes)
@@ -355,11 +408,19 @@ def _watch_here(state, path, quiet_outside=False):
         print(f"Not watched: {exc}", file=sys.stderr)
         return 2
     if info is None:
-        if quiet_outside:
-            print("Run orch watch inside a repository to have its sessions compared.")
+        if quiet_outside:                          # orch init outside a repository: tracking said what is followed
             return 0
-        print(f"orch watch: {path} is not inside a git worktree", file=sys.stderr)
-        return 2
+        from orchestraty.livemap import snapshots
+        ok, why = snapshots.can_follow(path, state.root)
+        if not ok:
+            print(f"orch watch: {path} cannot be followed: it is {why}", file=sys.stderr)
+            return 2
+        folder = os.path.normpath(path)
+        added = config.watch(state, folder)
+        name = os.path.basename(folder)
+        print(f"Watching {name}, a folder without git: Orchestraty follows it through its own snapshots, in its "
+              "state folder; nothing is written into it." if added else f"Already watching {name}.")
+        return 0
     added = config.watch(state, info["common_dir"])
     name = os.path.basename(info["top"])
     print(f"Watching {name} ({info['common_dir']})." if added else f"Already watching {name}.")
@@ -398,12 +459,22 @@ def cmd_doctor(args):
     return doctor.run(State(), os.getcwd(), index=not args.no_index)
 
 
+SWITCH_KEYS = {"track": "watch_all"}           # orch config's name -> config.json's key
+TRACK_ON = ("Every project an agent works in is followed from its next step, on this computer only: a git repository, "
+            "or a folder without git through Orchestraty's own snapshots in its state folder. orch unwatch in a "
+            "project leaves it out.")
+TRACK_OFF = "Only the projects you watch (orch watch) are followed."
+
+
 def set_switch(state, name, on):
-    """Turn steer or wake on or off in config.json; for wake, also update the plugin's switch
+    """Turn steer, wake or track (watch_all) on or off in config.json; for wake, also update the plugin's switch
     when the plugin runs the hooks, or else reinstall the hooks where orch init installed them. orch config and orch ui both
     use it. Returns (the lines to show, hooks.Refused or None when the settings file would not
     take the change; config.json is saved either way)."""
     from orchestraty import config
+    if name == "track":
+        config.set_watch_all(state, on)
+        return [f"track: {'on' if on else 'off'}", TRACK_ON if on else TRACK_OFF], None
     cfg = config.load(state)
     cfg[name] = on
     config.save(state, cfg)
@@ -432,11 +503,11 @@ def cmd_config(args):
     state = State()
     cfg = config.load(state)
     if args.name is None:
-        for name in ("steer", "wake"):
-            print(f"{name}: {'on' if cfg[name] else 'off'}")
+        for name in ("steer", "wake", "track"):
+            print(f"{name}: {'on' if cfg[SWITCH_KEYS.get(name, name)] else 'off'}")
         return 0
     if args.value is None:
-        print(f"{args.name}: {'on' if cfg[args.name] else 'off'}")
+        print(f"{args.name}: {'on' if cfg[SWITCH_KEYS.get(args.name, args.name)] else 'off'}")
         return 0
     lines, refused = set_switch(state, args.name, args.value == "on")
     print("\n".join(lines))
@@ -1498,8 +1569,10 @@ def build_parser():
     cfg = commands.add_parser("config", help="show or switch steer and wake",
                               description="steer: a strong note stops the edit it rides on, so the agent re-plans "
                                           "(off: the note only informs). wake: a strong note wakes a session that "
-                                          "waits for its user (installs a background hook).")
-    cfg.add_argument("name", nargs="?", choices=["steer", "wake"])
+                                          "waits for its user (installs a background hook). track: every project an "
+                                          "agent works in is followed, with or without git (orch unwatch leaves one "
+                                          "out).")
+    cfg.add_argument("name", nargs="?", choices=["steer", "wake", "track"])
     cfg.add_argument("value", nargs="?", choices=["on", "off"])
     cfg.set_defaults(handler=cmd_config)
 
@@ -1514,7 +1587,8 @@ def build_parser():
     ui = commands.add_parser("ui", help="the dashboard, in your browser (this computer only)",
                              description="Serve the dashboard on 127.0.0.1 and open it in the browser through a link "
                                          "that works once. Runs until Ctrl+C.")
-    ui.add_argument("--port", type=_port, default=0, metavar="N", help="the port to listen on (default: a free one)")
+    ui.add_argument("--port", type=_port, default=None, metavar="N",
+                    help="the port to listen on (default: 47392, or a free one when that is taken)")
     ui.add_argument("--no-browser", action="store_true", help="only print the link")
     ui.add_argument("--demo", action="store_true",
                     help="a sandbox: two pretend sessions in a temporary folder, run step by step from the page")

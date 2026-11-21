@@ -17,6 +17,7 @@
         "remote": "origin"
       },
       "common_dir": "<tmp>/repo/.git",
+      "kind": "git",
       "merge_order": [
         {
           "first": "A",

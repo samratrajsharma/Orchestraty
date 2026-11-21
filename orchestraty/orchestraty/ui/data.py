@@ -326,5 +326,6 @@ def config_payload(state):
             folder = common_dir
         repos.append({"name": repo_name(common_dir), "common_dir": common_dir, "folder": folder,
                       "watch": "orch watch " + _shell(folder), "unwatch": "orch unwatch " + _shell(folder)})
-    return {"schema": SCHEMA, "steer": cfg["steer"], "wake": cfg["wake"], "repos": repos, "state": state.root,
+    return {"schema": SCHEMA, "steer": cfg["steer"], "wake": cfg["wake"], "track": cfg["watch_all"], "repos": repos,
+            "state": state.root,
             "settings": cfg["settings"], "commands": {"init": "orch init", "restore": "orch restore"}}

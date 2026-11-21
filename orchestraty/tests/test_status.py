@@ -112,8 +112,12 @@ def test_orch_watch_and_unwatch(state, repo, tmp_path, monkeypatch, capsys):
     assert config.load(state)["repos"] == []
     plain = tmp_path / "plain"
     plain.mkdir()
-    assert cli.main(["watch", str(plain)]) == 2
-    assert "not inside a git worktree" in capsys.readouterr().err
+    assert cli.main(["watch", str(plain)]) == 0                   # a folder without git is followed too
+    assert "a folder without git" in capsys.readouterr().out
+    assert config.is_watched(config.load(state), str(plain))
+    os.makedirs(os.path.expanduser("~"), exist_ok=True)
+    assert cli.main(["watch", os.path.expanduser("~")]) == 2       # never the home folder
+    assert "the home folder" in capsys.readouterr().err
 
 
 def test_orch_init_watches_the_repository_it_runs_in(state, repo, monkeypatch, capsys):
