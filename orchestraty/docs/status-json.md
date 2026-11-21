@@ -40,7 +40,8 @@ Times are UTC, as `YYYY-MM-DDTHH:MM:SSZ`. Paths of files in a repository are rel
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `name` | string | A short name: the folder name of its main worktree. |
-| `common_dir` | string (folder) | Its git common directory, as watched: what makes worktrees one repository. |
+| `common_dir` | string (folder) | Its git common directory, as watched: what makes worktrees one repository. For a folder project, the folder itself. |
+| `kind` | string | `git` for a git repository; `folder` for a folder project, a folder with no git that Orchestraty follows through its own snapshots (with `watch_all`, or `orch watch` there). |
 | `sessions` | array | Its live sessions, oldest first; with `--all`, also the ended ones. See [session](#session). |
 | `overlaps` | array | The open findings between its sessions, strongest first. Latent findings only with `--all`. See [overlap](#overlap). |
 | `merge_order` | array | Merge-order advice, one entry per pair of sessions that it concerns; `[]` when there is nothing to say. See [merge_order](#merge_order). |
@@ -59,7 +60,7 @@ A session is an agent session with hooks, or a plain-git one: a worktree with ch
 | `hears` | array of strings | The kinds of note its agent can be handed: `edit` (before it edits a file), `next` (with its next step), `stop` (at the end of a turn), `wake` (woken while it waits for its user, when wake is on). Claude Code takes all four, Codex all but `wake`, Antigravity `next` and `stop`; `[]` for plain git and cloud branches, which are never told. |
 | `worktree` | string (folder) | The top of the worktree it works in. |
 | `branch` | string | The branch checked out there; `""` for a detached HEAD. |
-| `base_commit` | string | The commit its changes are measured from (40 hex digits); `""` before the first commit. |
+| `base_commit` | string | The commit its changes are measured from (40 hex digits); `""` before the first commit. In a folder project, the snapshot taken when the session was first seen: `snap:` and 16 hex digits. |
 | `base_guessed` | boolean | It was first seen after it started, so `base_commit` is the commit at that time. |
 | `state` | string | `live` or `ended`. |
 | `turn` | string | For a live session with hooks: `working` (from a prompt to the end of the turn) or `idle`. Otherwise `""`. |

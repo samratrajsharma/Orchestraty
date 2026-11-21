@@ -86,13 +86,15 @@ def test_sessions_outside_watched_repositories_leave_no_trace(state, repo, tmp_p
     assert c.step() == 2
     assert c.record.events() == [] and c.record.sessions() == [] and c.record.repos() == []
     assert {sid: [why for why, *_ in folders.values()] for sid, folders in c.ignored.items()} == {
-        "unwatched": ["not watched"], "nogit": ["not a git worktree"]}
-    # Only the repository it works in is counted, for orch status and orch ui: no id, no event.
+        "unwatched": ["not watched"], "nogit": ["not watched"]}           # a folder without git can be watched too
+    # Only the project each works in is counted, for orch status and orch ui: no id, no event.
     kept = json.loads(open(state.unwatched, encoding="utf-8").read())
-    assert kept["schema"] == 1 and len(kept["repositories"]) == 1
-    r = kept["repositories"][0]
-    assert sorted(r) == ["common_dir", "folder", "name", "sessions"] and r["name"] == "repo" and r["sessions"] == 1
+    assert kept["schema"] == 1 and len(kept["repositories"]) == 2
+    named = {r["name"]: r for r in kept["repositories"]}
+    r = named["repo"]
+    assert sorted(r) == ["common_dir", "folder", "name", "sessions"] and r["sessions"] == 1
     assert same(r["common_dir"], repo / ".git") and same(r["folder"], repo)
+    assert same(named["plain"]["common_dir"], plain) and same(named["plain"]["folder"], plain)
     # Watching the repository later: the session is picked up at its next event.
     config.watch(state, str(repo / ".git"))
     os.utime(state.config, (time.time() + 5, time.time() + 5))     # a visibly newer file
@@ -101,7 +103,8 @@ def test_sessions_outside_watched_repositories_leave_no_trace(state, repo, tmp_p
     c.step()
     s = c.record.session("unwatched")
     assert s and s["base_guessed"] == 1                     # first seen after its start
-    assert not os.path.exists(state.unwatched)              # nothing is left unwatched
+    left = json.loads(open(state.unwatched, encoding="utf-8").read())["repositories"]
+    assert [r["name"] for r in left] == ["plain"]           # the repository is no longer listed as not watched
 
 
 def test_a_session_started_in_a_parent_folder_counts_once_it_works_in_a_watched_repository(

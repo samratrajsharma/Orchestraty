@@ -48,7 +48,7 @@ from orchestraty.coordinator.spool import SpoolReader
 from orchestraty.delivery import slots
 from orchestraty.delivery.deliver import NO_NOTES, Deliverer
 from orchestraty.livemap import changes as git_changes
-from orchestraty.livemap import typescript
+from orchestraty.livemap import snapshots, typescript
 from orchestraty.livemap.map import LiveMap
 from orchestraty.rules import overlap
 
@@ -434,7 +434,8 @@ class Coordinator:
         hooked = [s for s in live if s["agent"] != LEVEL0_AGENT]
         repos = {}
         for s in live:
-            repos.setdefault(s["repo_id"], s["worktree"])
+            if not snapshots.is_snapshot(s["base_commit"]):   # a folder project has no worktrees to list
+                repos.setdefault(s["repo_id"], s["worktree"])
         for repo_id in forced:
             if repo_id in self._repo_paths:
                 repos.setdefault(repo_id, self._repo_paths[repo_id])
@@ -814,7 +815,7 @@ class Coordinator:
             if folder not in passed:
                 if len(passed) >= MAX_FOLDERS_LOOKED_AT:
                     continue
-                passed[folder] = self._judge(folder)
+                passed[folder] = self._judge(folder, from_cwd=bool(cwd) and _same(folder, cwd))
                 found = passed[folder]
                 if found[0] is None:
                     info = found[2]
@@ -828,6 +829,13 @@ class Coordinator:
             if event == "SessionEnd":
                 del self.ignored[sid]
             return None
+        if info.get("folder"):                         # a folder project: its base is a snapshot taken now
+            try:
+                info = dict(info, head=snapshots.take(self.state.root, info["top"]))
+            except (snapshots.TooLarge, OSError) as exc:
+                passed[info["top"]] = (f"too large to follow without git ({exc})", None, None)
+                self.log.info("ignoring a %s session: %s", agent, passed[info["top"]][0])
+                return None
         del self.ignored[sid]
         self._count_unwatched(sid, None, ts, ended=True)
         fresh = event == "SessionStart" and self.now_ns() - ts < FRESH_START_SECONDS * NS
@@ -842,9 +850,10 @@ class Coordinator:
                       "" if fresh else " (guessed)")
         return session
 
-    def _judge(self, folder):
-        """(why a session there is passed over or None, its repository's common dir or None,
-        the worktree's info when it counts)."""
+    def _judge(self, folder, from_cwd=False):
+        """(why a session there is passed over or None, its project's key or None, the
+        worktree's info when it counts). A session's own folder (`from_cwd`) that is no git
+        worktree can be a folder project, followed through snapshots: its key is the folder."""
         if not folder:
             return "not a git worktree", None, None
         try:
@@ -852,9 +861,14 @@ class Coordinator:
         except gitio.UntrustedRepositoryError:
             return "untrusted", None, None
         except gitio.GitError:
-            return "not a git worktree", None, None
+            info = None
         if info is None:
-            return "not a git worktree", None, None
+            ok = from_cwd and snapshots.can_follow(folder, self.state.root)[0]
+            if not ok:
+                return "not a git worktree", None, None
+            if not config.is_watched(self.cfg, folder):
+                return "not watched", folder, None
+            return None, folder, {"top": folder, "common_dir": folder, "branch": "", "head": "", "folder": True}
         if not config.is_watched(self.cfg, info["common_dir"]):
             return "not watched", info["common_dir"], None
         return None, info["common_dir"], info

@@ -41,6 +41,7 @@ from orch_engine.track import diff, file_fingerprint
 from orchestraty import adapters, gitio
 from orchestraty.livemap import changes as git_changes
 from orchestraty.livemap import routes as route_changes
+from orchestraty.livemap import snapshots
 from orchestraty.livemap import tsimports, typescript
 from orchestraty.livemap.contracts import ANY, BREAKING, COMPATIBLE, NONE, REVIEW, classify, worst
 from orchestraty.livemap.index import BaseIndexes, ParseCache, blob_id, view
@@ -180,6 +181,7 @@ def _stat(path):
 class LiveMap:
     def __init__(self, state, log=None):
         self.log = log or logging.getLogger("orchestraty.coordinator")
+        self.state_root = state.root
         self.cache = ParseCache()
         self.indexes = BaseIndexes(os.path.join(state.root, "engine"), self.log)
         self.views = {}                                # session id -> SessionView
@@ -209,8 +211,8 @@ class LiveMap:
         self.views[sid] = SessionView(sid, repo_key, session["worktree"], session["base_commit"])
         self.edits[sid].update(own)                    # its own, even in a folder it shares
         try:
-            already = {} if adopt_existing else git_changes.changed_files(session["worktree"], session["base_commit"])
-        except (gitio.GitError, gitio.UntrustedRepositoryError):
+            already = {} if adopt_existing else self._changed(session["worktree"], session["base_commit"])
+        except (gitio.GitError, gitio.UntrustedRepositoryError, snapshots.TooLarge, OSError):
             already = {}
         known_before = set(own) | set(unattributed)
         self.dirty_at_start[sid] = {p: _stat(os.path.join(session["worktree"], *p.split("/"))) for p in already
@@ -273,6 +275,12 @@ class LiveMap:
             if paths or line.get("tool_name") not in READ_ONLY_TOOLS:
                 self.pending.add(sid)
 
+    def _changed(self, top, base):
+        """The files of the worktree (or folder project) `top` that differ from its base."""
+        if snapshots.is_snapshot(base):
+            return snapshots.changed_files(self.state_root, top, base)
+        return git_changes.changed_files(top, base)
+
     def mark_all(self, skip_agent=None):
         """Refresh every session at the next refresh_pending(), but those of agent `skip_agent`
         (plain-git sessions, which the coordinator refreshes when their worktree changes)."""
@@ -297,8 +305,8 @@ class LiveMap:
         session, old = self.sessions[sid], self.views[sid]
         top, base = session["worktree"], session["base_commit"]
         try:
-            files = git_changes.changed_files(top, base)
-        except (gitio.GitError, gitio.UntrustedRepositoryError) as exc:
+            files = self._changed(top, base)
+        except (gitio.GitError, gitio.UntrustedRepositoryError, snapshots.TooLarge, OSError) as exc:
             self.log.warning("session %s: no file list: %s", sid[:8], exc)
             return False
         sharing = [o for o, s in self.sessions.items() if o != sid and s["worktree"] == top]
@@ -377,12 +385,18 @@ class LiveMap:
                                     else self._heads_on_disk(top, python))
         wanted = [p for p, s in python.items() if s != "A" and (base, p) not in self._base_blobs]
         if wanted:
-            found = git_changes.blob_ids(top, base, wanted)
+            found = (snapshots.blob_ids(self.state_root, top, base, wanted) if snapshots.is_snapshot(base)
+                     else git_changes.blob_ids(top, base, wanted))
             for p in wanted:
                 self._base_blobs[(base, p)] = found.get(p)
         blobs = {p: self._base_blobs.get((base, p)) for p, s in python.items() if s != "A"}
         missing = sorted({b for p, b in blobs.items() if b and not self.cache.known(p, b)})
-        data = read_blobs(top, missing) if missing else {}
+        if not missing:
+            data = {}
+        elif snapshots.is_snapshot(base):
+            data = snapshots.read_blobs(self.state_root, missing)
+        else:
+            data = read_blobs(top, missing)
         base_pf = {}
         for path in python:
             blob = blobs.get(path)
