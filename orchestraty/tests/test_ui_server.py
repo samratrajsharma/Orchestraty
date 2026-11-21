@@ -588,3 +588,45 @@ def test_the_page_watches_only_a_repository_status_lists_as_not_watched(srv, sta
     code, out = act(srv, "/api/watch", {"common_dir": str(repo / ".git")})
     assert code == 200 and config.is_watched(config.load(state), str(repo / ".git"))
     assert out["lines"] == ["Watching repo: its sessions show with their next step."]
+
+
+def test_a_second_orch_ui_opens_the_running_one_through_a_link_that_works_once(srv, state, capsys):
+    os.makedirs(state.root, exist_ok=True)
+    with open(os.path.join(state.root, "ui.json"), "w", encoding="utf-8") as fh:
+        json.dump({"pid": os.getpid(), "port": srv.port}, fh)
+    assert ui_server.running(state) == srv.port
+    assert ui_server.main(browser=False) == 0
+    out = capsys.readouterr().out
+    assert "orch ui is already running" in out
+    link = re.search(r"http://127\.0\.0\.1:(\d+)(/\?token=\S+)", out)
+    assert int(link.group(1)) == srv.port
+    code, headers, _ = ask(srv, "GET", link.group(2), cookie=False)
+    assert code == 303 and headers["set-cookie"].startswith(f"{srv.cookie}={srv.secret};")
+    code, _, _ = ask(srv, "GET", link.group(2), cookie=False)             # taken once
+    assert code == 403
+    assert os.listdir(os.path.join(state.root, "ui-links")) == []
+    code, _, _ = ask(srv, "GET", "/?token=" + "x" * 43, cookie=False)     # no such link
+    assert code == 403
+
+
+def test_orch_ui_uses_one_address_and_another_when_that_one_is_taken(state, monkeypatch, capsys):
+    seen = []
+
+    def fake_serve(s, browser=True, out=None):
+        seen.append(s.port)
+        s.server_close()
+        return 0
+    monkeypatch.setattr(ui_server, "serve", fake_serve)
+    taken = socket.socket()
+    try:
+        taken.bind(("127.0.0.1", ui_server.DEFAULT_PORT))
+        taken.listen(1)
+    except OSError:
+        taken.close()
+        pytest.skip("the default port is in use on this machine")
+    try:
+        assert ui_server.main(browser=False) == 0
+        assert seen[-1] != ui_server.DEFAULT_PORT and f"port {ui_server.DEFAULT_PORT} is taken" in capsys.readouterr().out
+    finally:
+        taken.close()
+    assert ui_server.main(browser=False) == 0 and seen[-1] == ui_server.DEFAULT_PORT

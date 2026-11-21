@@ -23,7 +23,7 @@ const RULE_NAMES = {
 const VERDICTS = [['real', 'Real'], ['harmless', 'Harmless'], ['false', 'False alarm']]
 const PALETTE = ['#A9BCD3', '#E3B7AF', '#FBEFEC']
 const PAGES = [
-  ['home', 'Home', 'home', 'h'], ['sessions', 'Sessions', 'users', 's'], ['overlaps', 'Overlaps', 'overlap', 'o'],
+  ['home', 'Home', 'home', 'h'], ['projects', 'Projects', 'repo', 'p'], ['sessions', 'Sessions', 'users', 's'], ['overlaps', 'Overlaps', 'overlap', 'o'],
   ['activity', 'Activity', 'activity', 'a'], ['claims', 'Claims', 'lock', 'c'], ['merge', 'Merge order', 'merge', 'm']
 ]
 const ICONS = {
@@ -240,7 +240,7 @@ function parseRoute () {
   if (name === 'session' && rest) return { name: 'session', id: rest, params }
   if (name === 'overlap' && rest) return { name: 'overlap', key: rest, params }
   if (name === 'notes') return { name: 'activity', params }
-  if (['sessions', 'overlaps', 'activity', 'claims', 'merge', 'settings'].includes(name)) return { name, params }
+  if (['projects', 'sessions', 'overlaps', 'activity', 'claims', 'merge', 'settings'].includes(name)) return { name, params }
   return { name: 'home', params }
 }
 
@@ -344,7 +344,7 @@ function render () {
   clearTimeout(skeletonTimer)
   const main = $('main')
   for (const a of main.getAnimations()) a.cancel()
-  const views = { home: homeView, sessions: sessionsView, session: sessionView, overlaps: overlapsView, overlap: overlapView,
+  const views = { home: homeView, projects: projectsView, sessions: sessionsView, session: sessionView, overlaps: overlapsView, overlap: overlapView,
     activity: activityView, claims: claimsView, merge: mergeView, settings: settingsView }
   swap(main, [h('div', { class: 'view' }, (views[ui.route.name] || homeView)())])
   settle(main)
@@ -761,6 +761,37 @@ function activityView () {
       : empty('Nothing to show', 'Notes, overlaps, push lines and sessions appear here as they happen.')]
 }
 
+// ------------------------------------------------------------------------------- projects
+// Every project agents work in, git or not, each with its sessions; a click shows that one.
+function projectsView () {
+  const all = allRepos()
+  const lead = 'Every project your agents work in, each with its own sessions. ' +
+    (ui.status && ui.status.unwatched && ui.status.unwatched.length ? 'Some aren’t watched yet.' : '')
+  const out = [pageHead('Projects', lead.trim())]
+  if (!all.length) return [out, noRepos()]
+  out.push(unwatchedCards(), h('div', { class: 'card rows' }, all.map(projectRow)))
+  return out
+}
+function projectFolder (r) {
+  return r.kind === 'folder' ? r.common_dir : r.common_dir.replace(/[\\/]\.git[\\/]?$/i, '')
+}
+function projectRow (r) {
+  const live = r.sessions.filter((s) => s.state === 'live')
+  const count = (k) => r.overlaps.filter((o) => o.strength === k).length
+  const agents = {}
+  for (const s of live) agents[agentName(s.agent)] = (agents[agentName(s.agent)] || 0) + 1
+  return h('a', { class: 'row', href: '#/sessions', 'data-anim': 'prow:' + r.common_dir,
+    onclick: () => { ui.repo = r.common_dir; store(REPO_KEY, r.common_dir); seen.clear() } },
+  h('div', { class: 'row-flex min0' }, h('span', { class: 'av git', 'aria-hidden': 'true' }, (r.name || '?').slice(0, 1).toUpperCase()),
+    h('div', { class: 'min0' }, h('div', { class: 'row-flex' }, h('b', {}, r.name),
+      h('span', { class: 'meta' }, r.kind === 'folder' ? 'folder without git' : 'git repository')),
+    h('div', { class: 'meta mono', title: projectFolder(r) }, middle(projectFolder(r), 64)))),
+  h('div', { class: 'tags' },
+    chip(live.length ? plural(live.length, 'session', 'sessions') + ': ' + Object.entries(agents).map(([k, v]) => v + ' ' + k).join(', ') : 'No live session'),
+    count('strong') ? chip(plural(count('strong'), 'strong overlap', 'strong overlaps'), 'strong') : null,
+    count('medium') ? chip(plural(count('medium'), 'medium overlap', 'medium overlaps'), 'medium') : null))
+}
+
 // ------------------------------------------------------------------------------- sessions
 function sessionsView () {
   learn(sessionsById())
@@ -1074,12 +1105,13 @@ function settingsView () {
         h('p', { class: 'meta' }, 'Built, in testing. Without it, its changes still count through git.'), command('orch init --agent codex')), h('span')),
       h('div', { class: 'setting' }, h('div', { class: 'min0' }, h('b', {}, 'Antigravity'),
         h('p', { class: 'meta' }, 'Built, in testing. Without it, its changes still count through git.'), command('orch init --agent antigravity')), h('span')))))
-  out.push(h('section', { class: 'section' }, h('h2', { class: 'h2' }, 'Repositories'),
+  out.push(h('section', { class: 'section' }, h('h2', { class: 'h2' }, 'Projects'),
     h('div', { class: 'card' },
+      sw('track', 'Track every project', 'Follow every project your agents work in, with or without git, on this computer only. Off: only the ones you watch.'),
       cfg.repos.map((r) => h('div', { class: 'setting' }, h('div', { class: 'min0' }, h('b', {}, r.name), h('p', { class: 'meta mono', title: r.folder }, middle(r.folder, 64)),
         h('details', { 'data-key': 'unwatch:' + r.common_dir }, h('summary', {}, icon('next', 'sm'), 'Stop watching it'), command(r.unwatch))), h('span'))),
       h('div', { class: 'setting' }, h('div', { class: 'min0' }, h('b', {}, 'Watch another repository'),
-        h('p', { class: 'meta' }, 'Run this inside it; Orchestraty compares the sessions in it from then on.'), command('orch watch')), h('span')))))
+        h('p', { class: 'meta' }, 'Run this inside it, a git repository or a folder without git; Orchestraty compares the sessions in it from then on.'), command('orch watch')), h('span')))))
   const c = health && health.coordinator
   const doc = ui.doctor
   out.push(h('section', { class: 'section' }, h('h2', { class: 'h2' }, 'Health'),
@@ -1210,11 +1242,13 @@ function drawTop () {
   const pick = $('repo-pick')
   const all = allRepos()
   if (all.length > 1) {
-    const sel = h('select', { 'aria-label': 'Repository', id: 'repo-select' },
-      h('option', { value: '' }, 'All repositories'), all.map((r) => h('option', { value: r.common_dir }, r.name)))
+    const sel = h('select', { 'aria-label': 'Project', id: 'repo-select' },
+      h('option', { value: '' }, 'All projects'), all.map((r) => h('option', { value: r.common_dir }, r.name)))
     sel.value = all.some((r) => r.common_dir === ui.repo) ? ui.repo : ''
     sel.addEventListener('change', () => { ui.repo = sel.value; store(REPO_KEY, sel.value); seen.clear(); refresh() })
-    if (!pick.querySelector('select') || pick.querySelector('select').options.length !== sel.options.length) pick.replaceChildren(sel)
+    const shown = pick.querySelector('select')
+    if (!shown || shown.options.length !== sel.options.length) pick.replaceChildren(sel)
+    else if (shown.value !== sel.value) shown.value = sel.value        // a project picked elsewhere (Projects)
   } else if (all.length === 1) {
     if (pick.textContent !== all[0].name) pick.replaceChildren(h('span', { class: 'repo-name', title: all[0].common_dir }, icon('repo', 'sm'), all[0].name))
   } else pick.replaceChildren()
@@ -1347,7 +1381,7 @@ function openHelp () {
       h('dl', { class: 'glossary' }, terms.map(([t, d]) => [h('dt', {}, t), h('dd', {}, d)])),
       h('h3', {}, 'Shortcuts'),
       h('div', { class: 'keys' }, [['Ctrl K', 'search or run'], ['/', 'search'], ['G then H', 'home'], ['G then S', 'sessions'], ['G then O', 'overlaps'],
-        ['G then A', 'activity'], ['G then C', 'claims'], ['G then M', 'merge order'], ['?', 'this help'], ['Esc', 'close']].map(([k, t]) =>
+        ['G then P', 'projects'], ['G then A', 'activity'], ['G then C', 'claims'], ['G then M', 'merge order'], ['?', 'this help'], ['Esc', 'close']].map(([k, t]) =>
         h('span', {}, h('kbd', { class: 'kbd' }, k), ' ' + t))))))
   close.focus()
 }
