@@ -2,6 +2,19 @@
 
 Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestraty`.
 
+## Unreleased
+
+### Fixed
+
+- A session that started outside a watched repository (in a parent folder, say) was passed over for its whole life, even once it worked in a watched one. It now counts from its first step there: a line from another folder, or one naming a file in a watched worktree, gets it another look.
+- With many worktrees (the Claude desktop app keeps one per session) a new session could take a minute or more to show in `orch status` and `orch ui`: every few seconds the coordinator looked at every worktree in one pass, idle ones too, before it read any new event. A worktree that stays the same is now looked at less often, down to once a minute, each pass looks at a share of them, and the merge base of a new one is worked out once; a new session shows within about a second.
+- `orch ui`'s settings gave `orch together on "<command>"` for the together check, which does not set the command; they now give `orch together set "<command>"`, then `orch together on`.
+
+### Added
+
+- `orch status` and `orch ui` name each repository that is not watched where agent sessions work now, and how many, so their sessions are not silently left out: `orch status` gives the `orch watch` to run, and `orch ui` a Watch button. Only the repository's folder and the count are kept, by the running coordinator (`unwatched.json`); nothing goes into the record. `orch status --json` has them as `unwatched`.
+- A Refresh button in `orch ui`'s top bar (and in Ctrl+K): the coordinator looks at every worktree again at once.
+
 ## 0.1.1 (19 November 2026)
 
 Fixes from an external audit of 0.1.0, in three parts: the notes are right (findings worked out again after every change that matters, no false or missed notes, nothing lost across a restart), no session's words reach another (what agents declare, the MCP tools' answers, notes and the hook's payload readers hold names only), and install and lifecycle leave no mess (uninstall, settings files that cannot be written, a moved state folder, git hooks, a damaged record, output through a pipe).
