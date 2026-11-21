@@ -18,19 +18,28 @@ Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestr
 - `orch team push`, `orch team fetch` and `orch team log`: send this device's record now, read teammates' records now, and list the records this device wrote and what was sent. `orch team off --forget` deletes this device's record ref through the remote's push URL, and `orch uninstall` asks whether to delete it, never anyone else's.
 - `orch status` lists teammates' branches under the team block, each with who, its last commit and what its commits changed, and `--json` gains `team.sessions` and `team.fetch`; the dashboard's team card lists them, the MCP `status` tool gives them cleaned, and the Claude Code mod names teammates' and cloud sessions. `orch doctor` says how a push is seen (git's reflog, or the remote-tracking refs where there is none), where records go, a git too old for merge-tree, another machine writing as this device, the last push and fetch, and records sealed under another policy.
 - `orch status` and the dashboard show a team block where team sync is on, and `orch status --json --with-lines` adds teammates' confirmed task lines (shown otherwise only on a terminal and in the dashboard); the MCP status tool shows the block cleaned, with teammates' handles but never their devices or labels. `orch doctor` checks team sync where it is on, offline.
-- `orch status` and `orch ui` name each repository that is not watched where agent sessions work now, and how many, so their sessions are not silently left out: `orch status` gives the `orch watch` to run, and `orch ui` a Watch button. Only the repository's folder and the count are kept, by the running coordinator (`unwatched.json`); nothing goes into the record. `orch status --json` has them as `unwatched`.
-- A Refresh button in `orch ui`'s top bar (and in Ctrl+K): the coordinator looks at every worktree again at once.
 
 ### Changed
 
 - The record becomes schema 6 when the coordinator opens it. Schema 6 only adds tables, for teammates' work read through git and the task lines you confirm with `orch team task` (only those are written in this version), and every row a 0.1.1 record holds stays as it was. After that, 0.1.x refuses the record with its "newer Orchestraty" message; to go back, move the record aside, with its `-wal` and `-shm` files. `orch events` knows three new kinds for those records: `team_sent`, `team_withheld` and `team_dropped`.
 - The coordinator drops a declaration for a cloud agent's branch, as it already dropped a claim for one: nobody works in that branch here, so there is nothing to declare.
 
+## 0.1.2 (21 November 2026)
+
+Fixes from testers' feedback: every agent session shows in `orch status` and `orch ui`, and within about a second (a session started outside a watched repository, sessions in a repository that is not watched, and a coordinator slowed down by many worktrees).
+
+After upgrading, run `orch coordinator stop`: the next session starts the new version, and `orch doctor` says when an older one still runs. The hook script is unchanged, so `orch init` need not run again.
+
 ### Fixed
 
 - A session that started outside a watched repository (in a parent folder, say) was passed over for its whole life, even once it worked in a watched one. It now counts from its first step there: a line from another folder, or one naming a file in a watched worktree, gets it another look.
 - With many worktrees (the Claude desktop app keeps one per session) a new session could take a minute or more to show in `orch status` and `orch ui`: every few seconds the coordinator looked at every worktree in one pass, idle ones too, before it read any new event. A worktree that stays the same is now looked at less often, down to once a minute, each pass looks at a share of them, and the merge base of a new one is worked out once; a new session shows within about a second.
 - `orch ui`'s settings gave `orch together on "<command>"` for the together check, which does not set the command; they now give `orch together set "<command>"`, then `orch together on`.
+
+### Added
+
+- `orch status` and `orch ui` name each repository that is not watched where agent sessions work now, and how many, so their sessions are not silently left out: `orch status` gives the `orch watch` to run, and `orch ui` a Watch button. Only the repository's folder and the count are kept, by the running coordinator (`unwatched.json`); nothing goes into the record. `orch status --json` has them as `unwatched`.
+- A Refresh button in `orch ui`'s top bar (and in Ctrl+K): the coordinator looks at every worktree again at once.
 
 ## 0.1.1 (19 November 2026)
 
