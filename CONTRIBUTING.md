@@ -2,6 +2,8 @@
 
 Thank you for helping. Read [the rules](docs/rules.md) first: they decide what Orchestraty will and will not do, and a change that breaks one of them will not be merged, however good it is.
 
+Everyone who takes part follows the [code of conduct](CODE_OF_CONDUCT.md). For a bug or an idea, open an issue: its templates ask for what helps. A security or conduct problem goes privately to the Security tab, as [SECURITY.md](SECURITY.md) and the code of conduct say. A pull request's template lists the checks below.
+
 ## Setting up
 
 You need Python 3.10 or later, git, and pytest 8 or 9.
