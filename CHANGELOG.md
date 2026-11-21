@@ -2,6 +2,19 @@
 
 Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestraty`.
 
+## Unreleased
+
+### Added
+
+- One `orch init` for the whole computer: run from any folder, it asks once whether to follow every project your agents work in from then on, and offers to set up Codex and Antigravity when they are on the computer. Nothing needs running per project. `orch unwatch` in a project leaves it out; `orch config track on|off` changes the choice later (`watch_all` in `config.json`). A config written before this follows only the projects watched, as before.
+- Folder projects: a project folder without git is followed too, through Orchestraty's own snapshots of its files in the state folder (`folders/`), never written into the project and needing no git at all. Its sessions, what each changed, contract changes, notes before an edit, callers left behind at the end of a turn and the same-file and same-folder overlaps all work; the push line, merge order and cloud branches need git. Never the home folder, a drive's top folder or the state folder. `orch status --json` gives each project's `kind` (`git` or `folder`), and a folder project's base as `snap:<id>`.
+- `orch ui` at one address, http://127.0.0.1:47392 (a free port when something else holds it). Run again from any folder while it runs, it opens the one already running through a new one-time link, instead of starting a second dashboard.
+- A Projects page in `orch ui`: every project, git or not, with its live sessions and open overlaps; a click shows that project, and the switcher at the top follows. Settings has the "Track every project" switch.
+
+### Changed
+
+- A session in a folder without git, which was passed over, is now named as not watched (with a Watch button in `orch ui`) when following every project is off.
+
 ## 0.1.2 (21 November 2026)
 
 Fixes from testers' feedback: every agent session shows in `orch status` and `orch ui`, and within about a second (a session started outside a watched repository, sessions in a repository that is not watched, and a coordinator slowed down by many worktrees).
