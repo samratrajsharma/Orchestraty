@@ -362,8 +362,10 @@ class LiveMap:
             if paths or line.get("tool_name") not in READ_ONLY_TOOLS:
                 self.pending.add(sid)
 
-    def mark_all(self):
-        self.pending.update(self.sessions)
+    def mark_all(self, skip_agent=None):
+        """Refresh every session at the next refresh_pending(), but those of agent `skip_agent`
+        (plain-git sessions, which the coordinator refreshes when their worktree changes)."""
+        self.pending.update(sid for sid, s in self.sessions.items() if skip_agent is None or s["agent"] != skip_agent)
 
     # refresh
     def refresh_pending(self):

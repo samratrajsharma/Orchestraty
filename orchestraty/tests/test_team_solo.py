@@ -1,8 +1,9 @@
-"""Guards on what a solo user sees: with no team set up, Orchestraty behaves exactly as 0.1.1.
+"""Guards on what a solo user sees: with no team set up, Orchestraty behaves exactly as main
+(0.1.1, and the fixes made on main since: the JSON's empty `unwatched` comes from main).
 
 A fixed scenario (two worktree sessions of one repository, a breaking change in one used in the
 other, cloud branches off) is played through the coordinator with a fixed clock and fixed commit
-dates, and what it leaves is compared with what 0.1.1 left: the text and JSON of orch status, the
+dates, and what it leaves is compared with what main leaves: the text and JSON of orch status, the
 files in the state folder, the git commands the coordinator runs (and no network at all), and the
 command line of the cloud fetch. Team code must change none of them for a user who never turned
 it on. Paths are written relative to the test's temporary folder, so the files hold no machine's

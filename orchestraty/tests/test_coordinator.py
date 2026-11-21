@@ -85,7 +85,14 @@ def test_sessions_outside_watched_repositories_leave_no_trace(state, repo, tmp_p
     c = coordinator()
     assert c.step() == 2
     assert c.record.events() == [] and c.record.sessions() == [] and c.record.repos() == []
-    assert c.ignored == {"unwatched": "not watched", "nogit": "not a git worktree"}
+    assert {sid: [why for why, *_ in folders.values()] for sid, folders in c.ignored.items()} == {
+        "unwatched": ["not watched"], "nogit": ["not a git worktree"]}
+    # Only the repository it works in is counted, for orch status and orch ui: no id, no event.
+    kept = json.loads(open(state.unwatched, encoding="utf-8").read())
+    assert kept["schema"] == 1 and len(kept["repositories"]) == 1
+    r = kept["repositories"][0]
+    assert sorted(r) == ["common_dir", "folder", "name", "sessions"] and r["name"] == "repo" and r["sessions"] == 1
+    assert same(r["common_dir"], repo / ".git") and same(r["folder"], repo)
     # Watching the repository later: the session is picked up at its next event.
     config.watch(state, str(repo / ".git"))
     os.utime(state.config, (time.time() + 5, time.time() + 5))     # a visibly newer file
@@ -94,6 +101,46 @@ def test_sessions_outside_watched_repositories_leave_no_trace(state, repo, tmp_p
     c.step()
     s = c.record.session("unwatched")
     assert s and s["base_guessed"] == 1                     # first seen after its start
+    assert not os.path.exists(state.unwatched)              # nothing is left unwatched
+
+
+def test_a_session_started_in_a_parent_folder_counts_once_it_works_in_a_watched_repository(
+        state, watched, tmp_path, coordinator):
+    parent = tmp_path / "projects"
+    parent.mkdir()
+    spool_event(state.root, "p1", "SessionStart", parent)
+    spool_event(state.root, "p2", "SessionStart", parent)
+    c = coordinator()
+    c.step()
+    assert c.record.sessions() == []
+    # One edits a file of the watched repository by its full path, from the parent folder ...
+    spool_event(state.root, "p1", "PostToolUse", parent, tool_name="Edit", file_path=str(watched / "a.py"))
+    # ... the other moved into it.
+    spool_event(state.root, "p2", "UserPromptSubmit", watched)
+    c.step()
+    p1, p2 = c.record.session("p1"), c.record.session("p2")
+    assert same(p1["worktree"], watched) and same(p2["worktree"], watched)
+    assert p1["base_guessed"] == 1 and p1["turn"] == "working"
+    assert c.record.events("p1")[0]["file_path"] == str(watched / "a.py")
+
+
+def test_counted_sessions_of_a_repository_not_watched_end_and_time_out(state, repo, coordinator):
+    spool_event(state.root, "u1", "SessionStart", repo)
+    spool_event(state.root, "u2", "SessionStart", repo)
+    c = coordinator()
+    c.step()
+    assert json.loads(open(state.unwatched, encoding="utf-8").read())["repositories"][0]["sessions"] == 2
+    spool_event(state.root, "u1", "SessionEnd", repo, reason="exit")
+    c.step()
+    assert json.loads(open(state.unwatched, encoding="utf-8").read())["repositories"][0]["sessions"] == 1
+    c.expire_unwatched(time.time_ns() + (c.cfg["session_timeout"] + 1) * 1_000_000_000)
+    c.write_unwatched()
+    assert not os.path.exists(state.unwatched) and "u2" not in c.ignored
+    spool_event(state.root, "u3", "SessionStart", repo)
+    c.step()
+    assert os.path.exists(state.unwatched)
+    c.close()                                                # a stopped coordinator counts nothing
+    assert not os.path.exists(state.unwatched)
 
 
 def test_the_lifecycle(state, watched, coordinator):
@@ -481,3 +528,76 @@ def test_a_failed_step_is_read_again_without_asking_the_record_where(state, watc
     monkeypatch.setattr(c.record, "positions", positions)
     assert c.step() == 1                                   # read again, not skipped
     assert [e["event"] for e in c.record.events("s1")] == ["SessionStart"]
+
+
+def _tree(c, folder):
+    [key] = [k for k in c._trees if same(k, folder)]
+    return c._trees[key]
+
+
+def _due_now(c):
+    """The timer is due, and so is every worktree (as if their time had come)."""
+    c._last_scan = float("-inf")
+    for seen in c._trees.values():
+        seen["next"] = 0
+
+
+def test_a_worktree_that_stays_the_same_is_looked_at_less_often(state, watched, git, tmp_path, coordinator):
+    idle = tmp_path / "idle"
+    git(watched, "worktree", "add", "-q", "-b", "idle", str(idle))
+    spool_event(state.root, "s1", "SessionStart", watched)
+    c = coordinator()
+    c.step()
+    every = c.cfg["level0_seconds"]
+    assert _tree(c, idle)["every"] == every
+    for expected in (2 * every, 4 * every, 8 * every, cmain.LEVEL0_MAX_SECONDS, cmain.LEVEL0_MAX_SECONDS):
+        _due_now(c)
+        c.step()
+        assert _tree(c, idle)["every"] == min(expected, cmain.LEVEL0_MAX_SECONDS)
+    # Not due: the next pass leaves it alone, even with a change in it ...
+    (idle / "new.py").write_text("x = 1\n", encoding="utf-8")
+    c._last_scan = float("-inf")
+    c.step()
+    assert not [s for s in c.record.sessions() if s["agent"] == "git"]
+    # ... until its time comes: then it is a plain-git session, looked at every level0_seconds again.
+    _due_now(c)
+    c.step()
+    [plain] = [s for s in c.record.sessions() if s["agent"] == "git"]
+    assert same(plain["worktree"], idle) and _tree(c, idle)["every"] == every
+
+
+def test_a_pass_looks_at_a_share_of_the_worktrees(state, watched, git, tmp_path, coordinator, monkeypatch):
+    for k in range(5):
+        git(watched, "worktree", "add", "-q", "-b", f"w{k}", str(tmp_path / f"w{k}"))
+    monkeypatch.setattr(cmain, "LEVEL0_BUDGET_SECONDS", 0)
+    monkeypatch.setattr(cmain, "LEVEL0_MIN_PER_PASS", 2)
+    spool_event(state.root, "s1", "SessionStart", watched)
+    c = coordinator()
+    c.step()                                    # the hooked session's own worktree is not queued
+    assert len(c._trees) == 2 and len(c._tree_queue) == 3
+    spool_event(state.root, "s2", "SessionStart", tmp_path / "w4")
+    c.step()                                    # read at once, between shares of the queue
+    assert c.record.session("s2") is not None
+    c.step()
+    assert not c._tree_queue and len(c._trees) == 5
+    c._last_scan = None                         # a full pass: every worktree at once
+    c.step()
+    assert not c._tree_queue
+
+
+def test_the_refresh_file_makes_every_worktree_due(state, watched, git, tmp_path, coordinator):
+    idle = tmp_path / "idle"
+    git(watched, "worktree", "add", "-q", "-b", "idle", str(idle))
+    spool_event(state.root, "s1", "SessionStart", watched)
+    c = coordinator()
+    c.step()
+    for _ in range(3):
+        _due_now(c)
+        c.step()
+    assert _tree(c, idle)["every"] > c.cfg["level0_seconds"]
+    (idle / "new.py").write_text("x = 1\n", encoding="utf-8")
+    open(state.rescan, "w").close()             # orch ui's Refresh
+    c.step()
+    assert not os.path.exists(state.rescan)
+    [plain] = [s for s in c.record.sessions() if s["agent"] == "git"]
+    assert same(plain["worktree"], idle)

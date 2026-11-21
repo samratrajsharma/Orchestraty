@@ -147,3 +147,12 @@ def test_the_team_block_is_documented_both_ways(state, repo, git, tmp_path, monk
     assert set(view.session_team(None, with_lines=True)) == set(doc["Team session"])
     claim = {"kind": "area", "target": "pkg", "file": "", "hard": 1, "since": 5_000_000_000, "until": 9_000_000_000}
     assert set(view.team_claim(claim)) == set(doc["Team claim"])
+
+
+def test_the_repositories_not_watched_are_documented(state, tmp_path):
+    entry = {"common_dir": str(tmp_path / "api" / ".git"), "name": "api", "folder": str(tmp_path / "api"), "sessions": 1}
+    Path(state.root).mkdir(parents=True, exist_ok=True)
+    Path(state.unwatched).write_text(json.dumps({"schema": 1, "repositories": [entry]}), encoding="utf-8")
+    Path(state.alive).touch()
+    [got] = status.collect(state)["unwatched"]
+    assert set(got) == set(tables("status-json.md")["`unwatched`"])

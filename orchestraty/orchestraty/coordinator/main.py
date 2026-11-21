@@ -43,7 +43,7 @@ import time
 from orchestraty import __version__, claims, config, declarations, feedback, gitio, remote, sessionkinds, together
 from orchestraty.coordinator.cloud import CloudBranches, session_id as cloud_session_id
 from orchestraty.coordinator.lock import Heartbeat, Lock, touch
-from orchestraty.coordinator.record import Record, SchemaError, repo_key
+from orchestraty.coordinator.record import Record, SchemaError, repo_key, repo_name
 from orchestraty.coordinator.spool import SpoolReader
 from orchestraty.delivery import slots
 from orchestraty.delivery.deliver import TEAM_CLAIM, Deliverer
@@ -58,6 +58,10 @@ FRESH_START_SECONDS = 60          # a SessionStart read later than this gives a 
 TOGETHER_SECONDS = 60             # a pair of sessions is checked together at most once in this
 KEEP_ENDED_SPOOL_SECONDS = 24 * 3600
 MAX_FAILURES = 20
+MAX_FOLDERS_LOOKED_AT = 16        # a session passed over is looked at again in at most this many folders
+LEVEL0_BUDGET_SECONDS = 0.5       # plain-git worktrees looked at in one pass, at most this long ...
+LEVEL0_MIN_PER_PASS = 4           # ... and at least this many of the queue
+LEVEL0_MAX_SECONDS = 60           # a worktree that stays the same is looked at less often, down to this
 NS = 1_000_000_000
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")   # as the hook names a session's spool file
 WORKING_EVENTS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
@@ -85,13 +89,18 @@ class Coordinator:
         self.record = Record(state.record)
         self.reader = SpoolReader(state.spool, self.record.positions())
         self.sessions = {s["id"]: s for s in self.record.sessions(states=("live",))}
-        self.ignored = {}                  # session id -> why (kept in memory only)
+        self.ignored = {}                  # session id -> {folder: why it was passed over} (in memory only)
+        self.unwatched = {}                # repository key -> {common_dir, folder, sessions: {id: last line}}
+        self._unwatched_dirty = True       # a stale unwatched.json from an earlier coordinator goes
         self.cfg = dict(config.DEFAULTS)
         self._cfg_stamp = object()
         self.bad_lines = 0
         self._last_housekeeping = 0
-        self._last_scan = None
+        self._last_scan = float("-inf")    # due at once, a share per pass; None: a full pass (tests set it)
         self._scan_now = set()             # repositories to look at now (a hooked session ended)
+        self._trees = {}                   # worktree (normcase) -> {repo, print, every, next}: when to look again
+        self._tree_queue = []              # worktrees queued to be looked at (see look_at_trees)
+        self._bases = {}                   # (worktree, head, main head) -> the merge base a new one starts from
         self._repo_paths = {}              # repository id -> a worktree of it, to list the others
         self._stayed = set()               # (session id, folder): an edit there that is no move
         self.changed = set()               # sessions whose live map changed in the last step
@@ -121,6 +130,7 @@ class Coordinator:
 
     def close(self):
         self.record.close()
+        _remove(self.state.unwatched)          # counted by a running coordinator only
 
     def _ended_hooked(self, session):
         """A hooked session ended: look at its repository's worktrees at once."""
@@ -151,8 +161,8 @@ class Coordinator:
 
     # configuration
     def reload_config(self):
-        """Read config.json again if it changed. Sessions ignored as "not watched" get another
-        look at their next event. Returns True when it changed."""
+        """Read config.json again if it changed. Every session passed over gets another look at
+        its next line (its repository may be watched now). Returns True when it changed."""
         try:
             stamp = os.stat(self.state.config).st_mtime_ns
         except OSError:
@@ -164,7 +174,10 @@ class Coordinator:
         if self.cfg["team"] or os.path.exists(os.path.join(self.state.root, "team", "enabled")):
             from orchestraty import team
             team.sync_marker(self.state, self.cfg)          # orch team on/off, or config.json edited by hand
-        self.ignored = {sid: why for sid, why in self.ignored.items() if why != "not watched"}
+        self.ignored = {sid: {} for sid in self.ignored}
+        for key in [k for k, r in self.unwatched.items() if config.is_watched(self.cfg, r["common_dir"])]:
+            del self.unwatched[key]                 # watched now: its sessions count at their next line
+            self._unwatched_dirty = True
         if hasattr(self, "livemap"):
             self.livemap.ts.cfg = self.cfg
             self.livemap.mark_all()                         # TypeScript contracts may have been turned on or off
@@ -188,6 +201,7 @@ class Coordinator:
         if now - self._last_housekeeping >= HOUSEKEEPING_SECONDS * NS:
             self._last_housekeeping = now
             self.expire(now)
+            self.expire_unwatched(now)
             self.clean_spool(now)
             if not self.together.busy():            # a check that runs for hours keeps its folder
                 together.clean_scratch(self.state)
@@ -202,6 +216,7 @@ class Coordinator:
         self.deliver()
         if lines or self.changed:
             self._status_dirty = True
+        self.write_unwatched()
         self.write_status()
         return len(lines)
 
@@ -265,15 +280,28 @@ class Coordinator:
 
     def update_map(self):
         """Refresh the live map where needed and record what changed. On the timer every live
-        session is refreshed and the plain-git worktrees are looked at."""
+        hooked session is refreshed and the plain-git worktrees due are queued; each pass then
+        looks at a share of the queue (look_at_trees), so a pass stays short. A full pass (the
+        first after `_last_scan` is cleared) refreshes every session and every worktree at once.
+        orch ui's Refresh (the rescan file) makes every worktree due now."""
         mono = time.monotonic()
-        if self._last_scan is None or mono - self._last_scan >= self.cfg["level0_seconds"] or self._scan_now:
+        if os.path.exists(self.state.rescan):
+            _remove(self.state.rescan)
+            for seen in self._trees.values():
+                seen["every"], seen["next"] = 0, 0
+            self.ignored = {sid: {} for sid in self.ignored}
+            if self._last_scan is not None:
+                self._last_scan = float("-inf")
+            self._status_dirty = True
+        full = self._last_scan is None
+        if full or mono - self._last_scan >= self.cfg["level0_seconds"] or self._scan_now:
             self._last_scan = mono
-            self.livemap.mark_all()
+            self.livemap.mark_all(skip_agent=None if full else LEVEL0_AGENT)
             forced, self._scan_now = self._scan_now, set()
-            self.scan_level0(forced)
+            self.scan_level0(forced, full)
             self.scan_team()
             self.scan_cloud()
+        self.look_at_trees(None if full else LEVEL0_BUDGET_SECONDS)
         self.changed = self.livemap.refresh_pending()
         if self.changed:
             with self.record.transaction():
@@ -450,9 +478,12 @@ class Coordinator:
                                                         "how": "claimed", "until": c["until"]})
         return planned
 
-    def scan_level0(self, forced=()):
+    def scan_level0(self, forced=(), full=False):
         """Plain-git sessions: worktrees with changes and no live hooked session, in each
-        repository with a live session of any kind, or whose hooked session just ended."""
+        repository with a live session of any kind, or whose hooked session just ended. Lists
+        each repository's worktrees and queues the ones due: every one in a full pass and in a
+        forced repository (looked at in this pass), else those whose time has come (see
+        look_at_trees)."""
         live = [s for s in self.sessions.values() if s["state"] == "live" and s["worktree"]]
         hooked = [s for s in live if s["agent"] != LEVEL0_AGENT]
         repos = {}
@@ -461,6 +492,9 @@ class Coordinator:
         for repo_id in forced:
             if repo_id in self._repo_paths:
                 repos.setdefault(repo_id, self._repo_paths[repo_id])
+        mono = time.monotonic()
+        queued = {item[1]: item for item in self._tree_queue}
+        listed = set()
         for repo_id, any_worktree in repos.items():
             try:
                 trees = git_changes.worktrees(any_worktree)
@@ -469,9 +503,44 @@ class Coordinator:
             busy = {os.path.normcase(s["worktree"]) for s in hooked if s["repo_id"] == repo_id}
             main_head = trees[0]["head"] if trees else ""
             for i, tree in enumerate(trees):
-                self._scan_tree(repo_id, tree, i == 0, main_head, busy)
+                key = os.path.normcase(tree["path"])
+                listed.add(key)
+                if key in busy:                             # nothing to look at: a hooked session works here
+                    self._scan_tree(repo_id, tree, i == 0, main_head, busy)
+                    queued.pop(key, None)
+                    continue
+                now = full or repo_id in forced
+                seen = self._trees.get(key)
+                if now or seen is None or seen["next"] <= mono:
+                    old = queued.get(key)
+                    queued[key] = (0 if now or (old and old[0] == 0) else 1, key, repo_id, tree, i == 0, main_head)
+        for key in [k for k in self._trees if k not in listed and self._trees[k]["repo"] in repos]:
+            del self._trees[key]                            # a worktree that is gone
+        self._tree_queue = sorted(queued.values(), key=lambda item: (item[0], self._trees.get(item[1], {}).get("next", 0)))
+
+    def look_at_trees(self, budget):
+        """Look at the queued worktrees: the ones due now in full, the rest in turn until
+        `budget` seconds have passed (at least LEVEL0_MIN_PER_PASS of them), so a pass stays short
+        and new spool lines are read soon; the others wait for the next pass. A worktree that
+        looks the same as last time (the same files, of the same size and time) is looked at
+        less often, up to every LEVEL0_MAX_SECONDS; one that changed, every level0_seconds."""
+        start, done = time.monotonic(), 0
+        while self._tree_queue:
+            in_turn, key, repo_id, tree, is_main, main_head = self._tree_queue[0]   # in_turn 0: due now
+            if in_turn and budget is not None and done >= LEVEL0_MIN_PER_PASS \
+                    and time.monotonic() - start >= budget:
+                break
+            self._tree_queue.pop(0)
+            done += 1
+            seen = self._trees.get(key)
+            print_ = self._scan_tree(repo_id, tree, is_main, main_head, ())
+            step = self.cfg["level0_seconds"]
+            if seen is not None and print_ is not None and print_ == seen["print"]:
+                step = min(LEVEL0_MAX_SECONDS, max(step, seen["every"] * 2))
+            self._trees[key] = {"repo": repo_id, "print": print_, "every": step, "next": time.monotonic() + step}
 
     def _scan_tree(self, repo_id, tree, is_main, main_head, busy):
+        """Look at one worktree; returns what it looked like (None when git could not say)."""
         path = tree["path"]
         sid = "git-" + hashlib.sha1(os.path.normcase(path).encode("utf-8", "surrogateescape")).hexdigest()[:12]
         existing = self.sessions.get(sid)
@@ -479,22 +548,29 @@ class Coordinator:
             if existing:
                 with self.record.transaction():
                     self._end(existing, "a hooked session works here")
-            return
+            return None
         if existing:
             base = existing["base_commit"]
         elif is_main or not main_head:
             base = tree["head"]
         else:
-            base = git_changes.merge_base(path, tree["head"], main_head) or tree["head"]
+            known = (os.path.normcase(path), tree["head"], main_head)
+            if known not in self._bases:
+                if len(self._bases) > 1000:
+                    self._bases.clear()
+                self._bases[known] = git_changes.merge_base(path, tree["head"], main_head) or tree["head"]
+            base = self._bases[known]
         try:
             files = git_changes.changed_files(path, base)
         except (gitio.GitError, gitio.UntrustedRepositoryError):
-            return
+            return None
+        looks = (base, tuple(sorted((p, s, _size_and_time(os.path.join(path, *p.split("/"))))
+                                    for p, s in files.items())))
         with self.record.transaction():
             if not files:
                 if existing:
                     self._end(existing, "clean")
-                return
+                return looks
             now = self.now_ns()
             if existing is None:
                 existing = {"id": sid, "agent": LEVEL0_AGENT, "repo_id": repo_id, "cwd": path, "worktree": path,
@@ -503,8 +579,13 @@ class Coordinator:
                 self.sessions[sid] = existing
                 self._track(existing)
                 self.log.info("plain-git session %s in %s, base %s", sid, path, base[:12])
+            else:
+                seen = self._trees.get(os.path.normcase(path))
+                if sid in self.livemap.sessions and (seen is None or seen["print"] != looks):
+                    self.livemap.pending.add(sid)          # its view follows the worktree, not the timer
             existing["last_seen"] = now
             self.record.put_session(existing)
+        return looks
 
     # team sync
     def _team_repos(self):
@@ -961,25 +1042,39 @@ class Coordinator:
         return True
 
     def session_for(self, sid, agent, line, event, ts):
-        if sid in self.ignored:
-            return None
-        session = self.sessions.get(sid) or self.record.session(sid)
-        if session is not None:
-            self.sessions[sid] = session
-            return session
+        """The session a line belongs to, made from its first line in a watched worktree. A
+        session passed over (its folder is not a git worktree of a watched repository) is looked
+        at again whenever a line comes from another folder or names a file in one, so a session
+        started in a parent folder counts once it works in a watched repository. One working in
+        a repository that is not watched is counted in unwatched.json, by its repository only."""
+        if sid not in self.ignored:
+            session = self.sessions.get(sid) or self.record.session(sid)
+            if session is not None:
+                self.sessions[sid] = session
+                return session
         cwd = line.get("cwd") if isinstance(line.get("cwd"), str) else ""
-        try:
-            info = gitio.worktree_info(cwd)
-        except gitio.UntrustedRepositoryError:
-            info, why = None, "untrusted"
-        else:
-            why = "not a git worktree" if info is None else None
-        if info is not None and not config.is_watched(self.cfg, info["common_dir"]):
-            why = "not watched"
-        if why:
-            self.ignored[sid] = why
-            self.log.info("ignoring a %s session: %s", agent, why)
+        passed = self.ignored.setdefault(sid, {})      # folder -> (why, common dir or None)
+        info, unwatched_in = None, None
+        for folder in _folders(line, cwd) or [""]:
+            if folder not in passed:
+                if len(passed) >= MAX_FOLDERS_LOOKED_AT:
+                    continue
+                passed[folder] = self._judge(folder)
+                found = passed[folder]
+                if found[0] is None:
+                    info = found[2]
+                    break
+                self.log.info("ignoring a %s session: %s", agent, found[0])
+            why, common_dir = passed[folder][:2]
+            if why == "not watched" and unwatched_in is None:
+                unwatched_in = (common_dir, folder)
+        if info is None:
+            self._count_unwatched(sid, unwatched_in, ts, ended=event == "SessionEnd")
+            if event == "SessionEnd":
+                del self.ignored[sid]
             return None
+        del self.ignored[sid]
+        self._count_unwatched(sid, None, ts, ended=True)
         fresh = event == "SessionStart" and self.now_ns() - ts < FRESH_START_SECONDS * NS
         rid = self.record.repo_id(info["common_dir"])
         self._repo_keys[rid] = repo_key(info["common_dir"])
@@ -993,6 +1088,77 @@ class Coordinator:
         self.log.info("session %s (%s) in %s, base %s%s", sid[:8], agent, info["top"], info["head"][:12] or "-",
                       "" if fresh else " (guessed)")
         return session
+
+    def _judge(self, folder):
+        """(why a session there is passed over or None, its repository's common dir or None,
+        the worktree's info when it counts)."""
+        if not folder:
+            return "not a git worktree", None, None
+        try:
+            info = gitio.worktree_info(folder)
+        except gitio.UntrustedRepositoryError:
+            return "untrusted", None, None
+        except gitio.GitError:
+            return "not a git worktree", None, None
+        if info is None:
+            return "not a git worktree", None, None
+        if not config.is_watched(self.cfg, info["common_dir"]):
+            return "not watched", info["common_dir"], None
+        return None, info["common_dir"], info
+
+    def _count_unwatched(self, sid, where, ts, ended=False):
+        """Count a passed-over session in the repository it works in (`where`: (common dir,
+        folder)), or no longer (`ended`). Only the repository is kept, in memory and in
+        unwatched.json; never the session's events."""
+        if where is None and not ended:                 # a line from elsewhere: it is counted where it was
+            return
+        for key in [k for k, repo in self.unwatched.items() if sid in repo["sessions"]]:
+            if ended or key != repo_key(where[0]):
+                del self.unwatched[key]["sessions"][sid]
+                if not self.unwatched[key]["sessions"]:
+                    del self.unwatched[key]
+                self._unwatched_dirty = True
+        if ended:
+            return
+        common_dir, folder = where
+        repo = self.unwatched.setdefault(repo_key(common_dir), {"common_dir": common_dir, "folder": folder,
+                                                                "sessions": {}})
+        if sid not in repo["sessions"]:
+            self._unwatched_dirty = True
+        repo["sessions"][sid] = max(ts, repo["sessions"].get(sid, 0))
+        repo["folder"] = folder
+
+    def expire_unwatched(self, now):
+        """Stop counting sessions not heard from for the session timeout."""
+        limit = now - self.cfg["session_timeout"] * NS
+        for key in list(self.unwatched):
+            sessions = self.unwatched[key]["sessions"]
+            for sid in [s for s, seen in sessions.items() if seen < limit]:
+                del sessions[sid]
+                self.ignored.pop(sid, None)
+                self._unwatched_dirty = True
+            if not sessions:
+                del self.unwatched[key]
+
+    def write_unwatched(self, force=False):
+        """Keep <state>/unwatched.json current: one entry per repository that is not watched and
+        has sessions working in it now."""
+        if not (force or self._unwatched_dirty):
+            return
+        self._unwatched_dirty = False
+        repos = [{"common_dir": r["common_dir"], "name": repo_name(r["common_dir"]), "folder": r["folder"],
+                  "sessions": len(r["sessions"])} for r in sorted(self.unwatched.values(),
+                                                                   key=lambda r: r["common_dir"])]
+        if not repos:
+            _remove(self.state.unwatched)
+            return
+        tmp = self.state.unwatched + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"schema": 1, "repositories": repos}, fh)
+            os.replace(tmp, self.state.unwatched)
+        except OSError:
+            self.log.exception("unwatched.json not written")
 
     @staticmethod
     def apply(session, event, line, ts):
@@ -1122,6 +1288,28 @@ def _record_failed(exc):
 
 def _same(a, b):
     return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def _size_and_time(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_size, st.st_mtime_ns
+
+
+def _folders(line, cwd):
+    """The folders a spool line places its session in: its cwd, then the folder of the file it
+    names (an agent started in a parent folder edits files of a repository below it)."""
+    out = [os.path.normpath(cwd)] if cwd and os.path.isabs(cwd) else []
+    path = line.get("file_path")
+    if isinstance(path, str) and path:
+        if not os.path.isabs(path):
+            path = os.path.join(cwd, path) if out else ""
+        folder = os.path.dirname(os.path.normpath(path)) if path else ""
+        if folder and not any(_same(folder, f) for f in out):
+            out.append(folder)
+    return out
 
 
 def _inside(path, top):
