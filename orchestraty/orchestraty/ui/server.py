@@ -26,11 +26,14 @@ The API answers in JSON, always with a ``schema`` number:
 | POST /api/label                              | the user's verdict on a finding, as orch label gives it    |
 | POST /api/claims, POST /api/release          | claim a file, folder or function for a session; end a claim|
 | POST /api/doctor                             | orch doctor's checks, without timing a first index          |
+| POST /api/rescan                             | Refresh: the coordinator looks at every worktree again now |
+| POST /api/watch                              | watch a repository status lists as not watched (orch watch)|
 | GET /api/demo, POST /api/demo/next           | the sandbox's steps; run the next (orch ui --demo only)    |
 
 It reads the state folder through ``ui.data`` (the record read-only, per request); the
-switches go through the same code as orch config, and labels, claims and releases are lines in
-orch's spool for the coordinator to store, as orch label, orch claim and orch release write them. JSON comes with an ETag, and an unchanged
+switches go through the same code as orch config, and watching a repository through the same as
+orch watch; labels, claims and releases are lines in orch's spool for the coordinator to store,
+as orch label, orch claim and orch release write them. JSON comes with an ETag, and an unchanged
 answer gets a 304. The ETag leaves out the seconds since each session's last event, which the
 page works out from the time of that event, so a status that only grew older is not sent
 again.
@@ -386,6 +389,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._release(body)
         if path == "/api/doctor":
             return self._doctor()
+        if path == "/api/rescan":
+            return self._rescan()
+        if path == "/api/watch":
+            return self._watch(body)
         if path == "/api/demo/next":
             return self._demo_next()
         return 404, _err("no such endpoint")
@@ -467,6 +474,33 @@ class Handler(BaseHTTPRequestHandler):
         problems = sum(1 for c in found if c["kind"] == "fix")
         return 200, {"schema": data.SCHEMA, "checks": found, "problems": problems,
                      "lines": ["No problems found." if not problems else f"{problems} problem(s): each says its fix."]}
+
+    def _rescan(self):
+        """Refresh: the coordinator looks at every worktree again at its next pass (it removes
+        the rescan file), and passed-over sessions get another look at their next step."""
+        state = self.server.state
+        os.makedirs(state.root, exist_ok=True)
+        with open(state.rescan, "w", encoding="utf-8"):
+            pass
+        if self.server.demo is not None:
+            self.server.demo.catch_up()
+        return 200, {"schema": data.SCHEMA, "lines": ["Looking again: new sessions and changes show within seconds."]}
+
+    def _watch(self, body):
+        """{"common_dir": "..."}: watch a repository orch status lists as not watched, as orch
+        watch does. Only one listed there: the page cannot name another folder."""
+        from orchestraty import config, status
+        common_dir = body.get("common_dir")
+        if set(body) != {"common_dir"} or not isinstance(common_dir, str):
+            raise BadRequest('send {"common_dir": "<a repository orch status lists as not watched>"}')
+        listed = {r["common_dir"]: r for r in status.unwatched(self.server.state)}
+        if common_dir not in listed:
+            return 404, _err("no agent session works in that repository now, or it is watched already")
+        added = config.watch(self.server.state, common_dir)
+        name = listed[common_dir]["name"]
+        return 200, {"schema": data.SCHEMA, "watched": common_dir,
+                     "lines": [f"Watching {name}: its sessions show with their next step." if added
+                               else f"Already watching {name}."]}
 
     def _demo_next(self):
         from orchestraty.ui import demo

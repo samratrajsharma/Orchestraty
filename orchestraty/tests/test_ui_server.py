@@ -490,7 +490,7 @@ def test_the_page_makes_no_request_elsewhere():
                                                             "/api/sessions/", "/api/findings/", "/api/notes?",
                                                             "/api/config", "/api/health", "/api/demo/next"} | {
         "/api/status", "/api/sessions", "/api/findings", "/api/notes", "/api/label", "/api/claims", "/api/release",
-        "/api/doctor"}
+        "/api/doctor", "/api/rescan", "/api/watch"}
 
 
 def test_the_mark_and_the_favicon_are_the_brand_s():
@@ -566,3 +566,25 @@ def test_serve_prints_the_link_and_stops_on_ctrl_c(state, monkeypatch):
     assert ui_server.serve(s, browser=False, out=Out()) == 0
     text = "".join(lines)
     assert s.url in text and "works once" in text and "stopped" in text
+
+
+def test_refresh_asks_the_coordinator_to_look_at_every_worktree_again(srv, state):
+    code, out = act(srv, "/api/rescan", {})
+    assert code == 200 and os.path.exists(state.rescan) and out["lines"]
+
+
+def test_the_page_watches_only_a_repository_status_lists_as_not_watched(srv, state, repo, tmp_path):
+    os.makedirs(state.root, exist_ok=True)
+    entry = {"common_dir": str(repo / ".git"), "name": "repo", "folder": str(repo), "sessions": 1}
+    with open(state.unwatched, "w", encoding="utf-8") as fh:
+        json.dump({"schema": 1, "repositories": [entry]}, fh)
+    code, _ = act(srv, "/api/watch", {"common_dir": str(repo / ".git")})
+    assert code == 404                                  # no coordinator runs: nothing is listed
+    open(state.alive, "w").close()
+    code, _ = act(srv, "/api/watch", {"common_dir": str(tmp_path / "elsewhere" / ".git")})
+    assert code == 404 and not config.load(state)["repos"]
+    code, _ = act(srv, "/api/watch", {"common_dir": 3})
+    assert code == 400
+    code, out = act(srv, "/api/watch", {"common_dir": str(repo / ".git")})
+    assert code == 200 and config.is_watched(config.load(state), str(repo / ".git"))
+    assert out["lines"] == ["Watching repo: its sessions show with their next step."]

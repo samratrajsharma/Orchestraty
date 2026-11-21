@@ -35,6 +35,7 @@ const ICONS = {
   merge: 'M6 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM6 22a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM18 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM6 6v12M6 8c0 3 4 4 10 4',
   gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM19.4 13.5l1.6 1.2-2 3.4-1.9-.7a7 7 0 0 1-2.1 1.2L14.5 21h-5l-.5-2.4a7 7 0 0 1-2.1-1.2l-1.9.7-2-3.4 1.6-1.2a7 7 0 0 1 0-3L3 9.3l2-3.4 1.9.7A7 7 0 0 1 9 5.4L9.5 3h5l.5 2.4a7 7 0 0 1 2.1 1.2l1.9-.7 2 3.4-1.6 1.2a7 7 0 0 1 0 3Z',
   search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM20 20l-4-4',
+  refresh: 'M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4',
   help: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM9.5 9.5a2.5 2.5 0 0 1 4.8 1c0 1.7-2.3 2-2.3 3.5M12 17h.01',
   sun: 'M12 3v1.6M12 19.4V21M4.6 4.6l1.1 1.1M18.3 18.3l1.1 1.1M3 12h1.6M19.4 12H21M4.6 19.4l1.1-1.1M18.3 5.7l1.1-1.1M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z',
   moon: 'M20 14.6A8.2 8.2 0 0 1 9.4 4a8.2 8.2 0 1 0 10.6 10.6Z',
@@ -610,9 +611,21 @@ function strengthChip (s) {
   return chip((STRENGTH_WORDS[s] || [s])[0], s, true)
 }
 function noRepos () {
-  return empty('Orchestraty isn’t watching a repository yet',
+  return [...unwatchedCards(), empty('Orchestraty isn’t watching a repository yet',
     'Run orch init in a repository your agents work on: it installs the hooks, after asking, and watches that repository.',
-    command('orch init'))
+    command('orch init'))]
+}
+// Repositories agents work in that Orchestraty does not watch, so their sessions are not compared.
+function unwatchedCards () {
+  const list = (ui.status && ui.status.unwatched) || []
+  return list.map((r) => h('article', { class: 'card need medium', 'data-anim': 'unwatched:' + r.common_dir },
+    h('span', { class: 'bar' }),
+    h('div', { class: 'min0' },
+      h('h3', {}, plural(r.sessions, 'session works', 'sessions work') + ' in ' + r.name + ', which isn’t watched'),
+      h('p', { class: 'meta' }, 'Orchestraty doesn’t compare them with your other sessions until you watch it.')),
+    h('div', { class: 'actions' },
+      h('button', { type: 'button', class: 'btn sm primary', 'data-key': 'watch:' + r.common_dir, onclick: () => watchRepo(r) },
+        'Watch ' + r.name))))
 }
 
 // ------------------------------------------------------------------------------- home
@@ -623,14 +636,14 @@ function greeting () {
 function homeView () {
   learn(sessionsById())
   learn(ui.findings && ui.findings.sessions)
-  if (!allRepos().length) return [pageHead(greeting()), noRepos()]
+  if (!allRepos().length) return [pageHead(greeting()), ...noRepos()]
   const live = liveSessions()
   const needs = needsYou()
   const names = repos().map((r) => r.name).join(', ')
   const lead = (live.length ? plural(live.length, 'agent is', 'agents are') + ' working on ' + names + '. '
     : 'No agent is working on ' + names + ' right now. ') +
     (needs.length === 0 ? 'Nothing needs you.' : needs.length === 1 ? 'One thing needs a look.' : needs.length + ' things need a look.')
-  const left = [h('section', { class: 'section', 'aria-labelledby': 'needs' },
+  const left = [...unwatchedCards(), h('section', { class: 'section', 'aria-labelledby': 'needs' },
     h('div', { class: 'section-head' }, h('h2', { class: 'h2', id: 'needs' }, 'Needs you'), needs.length ? chip(String(needs.length), 'strong') : null),
     needs.length ? needs.map(needCard)
       : h('div', { class: 'card calm', 'data-anim': 'calm' }, icon('done'),
@@ -756,6 +769,7 @@ function sessionsView () {
   const toggle = h('button', { type: 'button', class: 'btn sm quiet', 'data-key': 'show-all', onclick: () => setShowAll(!ui.showAll) },
     ui.showAll ? 'Hide ended sessions' : 'Show ended sessions')
   return [pageHead('Sessions', 'Every agent working on ' + repos().map((r) => r.name).join(', ') + ', each in its own worktree.', toggle),
+    unwatchedCards(),
     all.length ? h('div', { class: 'card rows' }, all.map((s) => h('a', { class: 'row', href: '#/session/' + encodeURIComponent(s.id), 'data-anim': 'srow:' + s.id },
       h('div', { class: 'row-flex min0' }, avatar(s),
         h('div', { class: 'min0' }, h('div', { class: 'row-flex' }, h('span', { class: 'title' }, sname(s)),
@@ -1040,8 +1054,13 @@ function settingsView () {
           line('TypeScript contracts', s.typescript && s.typescript.on, 'Compare the exported API of .ts files too. Its notes say they are heuristic.',
             'orch ts ' + (s.typescript && s.typescript.on ? 'off' : 'on') + ' --repo ' + folder),
           line('Together check', s.together && s.together.on, s.together && s.together.on && s.together.command
-            ? 'Runs “' + s.together.command + '” on two overlapping sessions’ work merged.' : 'Run your tests on two overlapping sessions’ work merged, and tell both if they fail together.',
-          s.together && s.together.on ? 'orch together off --repo ' + folder : 'orch together on "<your test command>" --repo ' + folder),
+            ? 'Runs “' + s.together.command + '” on two overlapping sessions’ work merged.'
+            : s.together && s.together.command
+              ? 'Off. When on, runs “' + s.together.command + '” on two overlapping sessions’ work merged.'
+              : 'Run your tests on two overlapping sessions’ work merged, and tell both if they fail together. Set the command, then run orch together on.',
+          s.together && s.together.on ? 'orch together off --repo ' + folder
+            : s.together && s.together.command ? 'orch together on --repo ' + folder
+              : 'orch together set "<your test command>" --repo ' + folder),
           line('Cloud agents’ branches', s.cloud && s.cloud.on, 'Fetch cloud agents’ branches read-only and compare them. The one use of the network; it asks first.',
             s.cloud && s.cloud.on ? 'orch remote off --repo ' + folder : 'orch remote on --repo ' + folder))
       })))
@@ -1129,6 +1148,16 @@ async function flip (name, on) {
   if (!res) return
   const text = (res.lines || []).concat(res.error ? [res.error] : []).join(' ')
   toast(text || (name + (on ? ' is on.' : ' is off.')), res.error ? null : () => flip(name, !on))
+  refresh()
+}
+async function rescan () {
+  const res = await act('/api/rescan', {})
+  if (res) toast(res.lines.join(' '))
+  refresh()
+}
+async function watchRepo (r) {
+  const res = await act('/api/watch', { common_dir: r.common_dir })
+  if (res) toast(res.lines.join(' '))
   refresh()
 }
 async function runDoctor () {
@@ -1270,6 +1299,7 @@ function paletteItems () {
   items.push({ text: 'New claim…', group: 'Action', icon: 'lock', run: () => { ui.claimOpen = true; go('#/claims') } })
   items.push({ text: 'Release a claim…', group: 'Action', icon: 'lock', run: () => go('#/claims') })
   items.push({ text: 'Run health checks', group: 'Action', icon: 'gear', run: () => { go('#/settings'); runDoctor() } })
+  items.push({ text: 'Refresh: look for new sessions now', group: 'Action', icon: 'refresh', run: rescan })
   items.push({ text: steer ? 'Turn steer off' : 'Turn steer on or off', group: 'Setting', icon: 'steer', run: () => go('#/settings') })
   items.push({ text: darkNow() ? 'Switch to the light theme' : 'Switch to the dark theme', group: 'Setting', icon: darkNow() ? 'sun' : 'moon', run: () => setTheme(darkNow() ? 'light' : 'dark') })
   items.push({ text: ui.showAll ? 'Hide ended sessions' : 'Show ended sessions', group: 'Setting', icon: 'users', run: () => setShowAll(!ui.showAll) })
@@ -1412,6 +1442,7 @@ document.addEventListener('DOMContentLoaded', () => {
   drawThemeButton()
   $('theme-btn').addEventListener('click', () => { setTheme(darkNow() ? 'light' : 'dark'); if (ui.route && ui.route.name === 'settings') render() })
   $('help-btn').addEventListener('click', openHelp)
+  $('refresh-btn').addEventListener('click', rescan)
   $('search-btn').addEventListener('click', openPalette)
   $('pill').addEventListener('click', togglePop)
   $('scrim').addEventListener('click', (e) => { if (e.target === $('scrim')) closeLayers() })
