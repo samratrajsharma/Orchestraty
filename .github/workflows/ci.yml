@@ -310,7 +310,8 @@ jobs:
 
   # The built wheel in a clean virtual environment (scripts/smoke.py): orch --version, orch
   # init --print, two scripted sessions through the installed hook script reaching a note, and
-  # orch doctor. No real agent and no network. macOS joins on manual runs and release tags.
+  # orch doctor; then an ordinary day on it (scripts/real_day.py). No real agent and no network.
+  # macOS joins on manual runs and release tags.
   smoke:
     name: smoke (${{ matrix.os }}, the built wheel)
     needs: package
@@ -342,6 +343,16 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python scripts/smoke.py dist/*.whl
+
+      # An ordinary day on the same wheel (scripts/real_day.py): one orch init from no project,
+      # a repository with many worktrees and a folder without git, sessions shown within seconds,
+      # a caller left behind in the folder, one dashboard address, and an upgrade that restarts
+      # the coordinator by itself.
+      - name: Run an ordinary day on the wheel
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/real_day.py dist/*.whl
 
       # The smoke test works in a temporary folder; dist/ is ignored.
       - name: Check that the smoke test left no files behind
