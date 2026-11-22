@@ -386,7 +386,7 @@ def test_the_api_answers_with_a_schema(srv, state, tmp_path):
         assert code == 200 and headers["content-type"] == "application/json; charset=utf-8", path
         assert out["schema"] == 1, path
     status = json.loads(ask(srv, "GET", "/api/status")[2])
-    assert status["ui"] == {"version": cli.__version__, "demo": False}
+    assert status["ui"] == {"version": cli.__version__, "installed": cli.__version__, "demo": False}
     assert [s["id"] for s in status["repositories"][0]["sessions"]] == ["A", "B"]
     assert json.loads(ask(srv, "GET", "/api/sessions/B")[2])["notes_received"][0]["text"] == "a note"
     assert json.loads(ask(srv, "GET", "/api/findings/O3%7Ca.py%3A%3Acharge%7CA%7CB%7Cc.py")[2])["finding"]["rule"] == "O3"
@@ -593,7 +593,7 @@ def test_the_page_watches_only_a_repository_status_lists_as_not_watched(srv, sta
 def test_a_second_orch_ui_opens_the_running_one_through_a_link_that_works_once(srv, state, capsys):
     os.makedirs(state.root, exist_ok=True)
     with open(os.path.join(state.root, "ui.json"), "w", encoding="utf-8") as fh:
-        json.dump({"pid": os.getpid(), "port": srv.port}, fh)
+        json.dump({"pid": os.getpid(), "port": srv.port, "version": cli.__version__}, fh)
     assert ui_server.running(state) == srv.port
     assert ui_server.main(browser=False) == 0
     out = capsys.readouterr().out
@@ -630,3 +630,20 @@ def test_orch_ui_uses_one_address_and_another_when_that_one_is_taken(state, monk
     finally:
         taken.close()
     assert ui_server.main(browser=False) == 0 and seen[-1] == ui_server.DEFAULT_PORT
+
+
+def test_an_earlier_orch_ui_is_named_and_this_one_starts_beside_it(srv, state, monkeypatch, capsys):
+    os.makedirs(state.root, exist_ok=True)
+    with open(os.path.join(state.root, "ui.json"), "w", encoding="utf-8") as fh:
+        json.dump({"pid": 1, "port": srv.port}, fh)                       # 0.1.3 wrote no version
+    assert ui_server.announced(state) == (srv.port, None) and ui_server.running(state) is None
+    seen = []
+
+    def fake_serve(s, browser=True, out=None):
+        seen.append(s.port)
+        s.server_close()
+        return 0
+    monkeypatch.setattr(ui_server, "serve", fake_serve)
+    assert ui_server.main(browser=False) == 0
+    assert seen and seen[0] != srv.port
+    assert "An earlier orch ui (before 0.1.4) still runs" in capsys.readouterr().out

@@ -13,7 +13,7 @@ import statistics
 import time
 from contextlib import contextmanager
 
-from orchestraty import __version__, config, status
+from orchestraty import __version__, config, installed_version, status
 from orchestraty.coordinator.record import Record, repo_name
 from orchestraty.delivery import slots
 
@@ -162,7 +162,7 @@ def _main_worktree(common_dir):
 def status_payload(state, include_ended=False, demo=False):
     """orch status --json as it is, plus what the page needs to know about the server."""
     data = status.collect(state, include_ended=include_ended)
-    data["ui"] = {"version": __version__, "demo": bool(demo)}
+    data["ui"] = {"version": __version__, "installed": installed_version(), "demo": bool(demo)}
     return data
 
 
@@ -299,7 +299,7 @@ def health_payload(state, demo=False):
     reads them), whether the record exists, and where the state folder is."""
     return {"schema": SCHEMA, "coordinator": status.collect(state)["coordinator"],
             "record": {"exists": os.path.isfile(state.record), "path": state.record}, "state": state.root,
-            "ui": {"version": __version__, "demo": bool(demo)}}
+            "ui": {"version": __version__, "installed": installed_version(), "demo": bool(demo)}}
 
 
 def config_payload(state):
