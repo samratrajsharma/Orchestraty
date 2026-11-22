@@ -16,6 +16,7 @@ Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestr
 
 ### Changed
 
+- Refresh in `orch ui` shows a striped bar under the top bar while the background process looks at everything again. Its message stays meanwhile, then says what the pass found: how many projects and live sessions, and how many new sessions. When the background process isn't running, the message says so.
 - `orch ui`'s buttons have two corners cut on the diagonal, as the arrows in the Orchestraty mark run, instead of rounded corners. Keyboard focus shows as a thicker edge inside the shape.
 
 ## 0.1.3 (22 November 2026)

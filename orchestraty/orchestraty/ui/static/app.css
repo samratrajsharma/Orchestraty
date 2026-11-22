@@ -356,6 +356,20 @@ tr:last-child td { border-bottom: 0; }
   outline: none; --lw: 4px; border-color: var(--focus); box-shadow: inset 0 0 0 1px var(--focus); }
 .btn.primary:focus-visible { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), inset 0 0 0 3px var(--on-accent); }
 
+/* ------------------------------------------------------------------ Refresh
+   A striped bar under the top bar while the coordinator looks at everything again; the stripes
+   run on the same diagonal as the cut corners. */
+.refresh-bar { position: absolute; left: 0; right: 0; top: 100%; height: 8px; overflow: hidden; pointer-events: none; background: var(--sunken);
+  transform-origin: top; animation: bar-in var(--dur-fast) var(--ease-out); transition: opacity var(--dur-base) var(--ease-out); }
+.refresh-bar[hidden] { display: none; }
+.refresh-bar::before { content: ""; position: absolute; top: 0; bottom: 0; left: -24px; right: 0;
+  background: repeating-linear-gradient(-45deg, var(--accent) 0 8px, transparent 8px 16px); animation: stripes 640ms linear infinite; }
+.refresh-bar.is-done { opacity: 0; }
+.icon-btn.is-busy svg { transform-origin: 50% 50%; animation: spin 900ms linear infinite; }
+@keyframes stripes { to { transform: translateX(22.627px); } }
+@keyframes bar-in { from { transform: scaleY(0); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }

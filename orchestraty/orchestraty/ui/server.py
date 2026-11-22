@@ -27,6 +27,7 @@ The API answers in JSON, always with a ``schema`` number:
 | POST /api/claims, POST /api/release          | claim a file, folder or function for a session; end a claim|
 | POST /api/doctor                             | orch doctor's checks, without timing a first index          |
 | POST /api/rescan                             | Refresh: the coordinator looks at every worktree again now |
+| GET /api/rescan?id=                          | whether that Refresh's pass is done, and what it found     |
 | POST /api/watch                              | watch a repository status lists as not watched (orch watch)|
 | GET /api/demo, POST /api/demo/next           | the sandbox's steps; run the next (orch ui --demo only)    |
 
@@ -106,6 +107,21 @@ def _etag(body, weak=False):
 
 class BadRequest(Exception):
     """A request the API cannot answer as asked (400)."""
+
+
+RESCAN_ID = re.compile(r"([0-9]{1,20})-[0-9a-f]{1,16}")
+
+
+def _rescan_time(rid):
+    """When a Refresh id was made (nanoseconds), or None for anything else."""
+    found = RESCAN_ID.fullmatch(rid) if isinstance(rid, str) else None
+    return int(found.group(1)) if found else None
+
+
+def _coordinator_running(state):
+    from orchestraty.coordinator.lock import is_fresh
+    from orchestraty.status import STALE_SECONDS
+    return is_fresh(state.alive, STALE_SECONDS)
 
 
 def _err(message):
@@ -422,6 +438,8 @@ class Handler(BaseHTTPRequestHandler):
             return 200, data.config_payload(state)
         if path == "/api/demo":
             return (200, self.server.demo.payload()) if demo else (404, _err("not a demo: run orch ui --demo"))
+        if path == "/api/rescan":
+            return 200, self._rescanned(arg("id"))
         return 404, _err("no such endpoint")
 
     # ------------------------------------------------------------------ POST
@@ -554,14 +572,37 @@ class Handler(BaseHTTPRequestHandler):
 
     def _rescan(self):
         """Refresh: the coordinator looks at every worktree again at its next pass (it removes
-        the rescan file), and passed-over sessions get another look at their next step."""
+        the rescan file), and passed-over sessions get another look at their next step. The id
+        written into the file comes back once the pass is done (GET /api/rescan?id=)."""
         state = self.server.state
         os.makedirs(state.root, exist_ok=True)
-        with open(state.rescan, "w", encoding="utf-8"):
-            pass
+        rid = f"{time.time_ns()}-{secrets.token_hex(4)}"
+        with open(state.rescan, "w", encoding="utf-8") as fh:
+            fh.write(rid)
         if self.server.demo is not None:
             self.server.demo.catch_up()
-        return 200, {"schema": data.SCHEMA, "lines": ["Looking again: new sessions and changes show within seconds."]}
+        running = self.server.demo is not None or _coordinator_running(state)
+        line = ("Looking again: new sessions and changes show within seconds." if running else
+                "The background process isn’t running: it starts with the next agent event and looks at everything then.")
+        return 200, {"schema": data.SCHEMA, "id": rid, "running": running, "lines": [line]}
+
+    def _rescanned(self, rid):
+        """Whether the pass Refresh `rid` asked for is done: the coordinator answered it or a
+        later Refresh (that pass looked at everything too), with how many sessions it found."""
+        asked = _rescan_time(rid)
+        if asked is None:
+            raise BadRequest("id must be what POST /api/rescan gave")
+        state = self.server.state
+        try:
+            with open(state.rescanned, encoding="utf-8") as fh:
+                answer = json.load(fh)
+        except (OSError, ValueError):
+            answer = {}
+        answered = _rescan_time(answer.get("id")) if isinstance(answer, dict) else None
+        done = answered is not None and answered >= asked
+        found = answer.get("found") if done else 0
+        return {"schema": data.SCHEMA, "done": done, "found": found if isinstance(found, int) and found >= 0 else 0,
+                "running": self.server.demo is not None or _coordinator_running(state)}
 
     def _watch(self, body):
         """{"common_dir": "..."}: watch a repository orch status lists as not watched, as orch

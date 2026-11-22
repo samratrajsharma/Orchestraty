@@ -7,6 +7,7 @@ import os
 import re
 import socket
 import threading
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -571,6 +572,34 @@ def test_serve_prints_the_link_and_stops_on_ctrl_c(state, monkeypatch):
 def test_refresh_asks_the_coordinator_to_look_at_every_worktree_again(srv, state):
     code, out = act(srv, "/api/rescan", {})
     assert code == 200 and os.path.exists(state.rescan) and out["lines"]
+    with open(state.rescan, encoding="utf-8") as fh:
+        assert fh.read() == out["id"]
+    assert out["running"] is False and "isn’t running" in out["lines"][0]      # no coordinator here
+
+
+def rescanned(srv, rid):
+    code, _, body = ask(srv, "GET", "/api/rescan?id=" + rid)
+    assert code == 200
+    return json.loads(body)
+
+
+def test_refresh_says_when_the_coordinator_has_done_the_pass_it_asked_for(srv, state):
+    from orchestraty.coordinator.lock import touch
+    os.makedirs(state.root, exist_ok=True)
+    touch(state.alive)                                              # a coordinator runs
+    _, first = act(srv, "/api/rescan", {})
+    assert first["running"] is True and first["lines"] == ["Looking again: new sessions and changes show within seconds."]
+    assert rescanned(srv, first["id"]) == {"schema": data.SCHEMA, "done": False, "found": 0, "running": True}
+    _, second = act(srv, "/api/rescan", {})                         # a second Refresh before the pass took the first
+    with open(state.rescanned, "w", encoding="utf-8") as fh:        # the coordinator took the second's file
+        json.dump({"schema": 1, "id": second["id"], "found": 2, "at": time.time()}, fh)
+    for rid in (first["id"], second["id"]):                         # the pass answers both
+        assert rescanned(srv, rid)["done"] is True and rescanned(srv, rid)["found"] == 2
+    os.remove(state.alive)
+    later = f"{time.time_ns() + 10**9}-ab"
+    assert rescanned(srv, later) == {"schema": data.SCHEMA, "done": False, "found": 0, "running": False}
+    for bad in ("", "x", "1-xyz", "12345678901234567890123-ab"):
+        assert ask(srv, "GET", "/api/rescan?id=" + bad)[0] == 400, bad
 
 
 def test_the_page_watches_only_a_repository_status_lists_as_not_watched(srv, state, repo, tmp_path):
