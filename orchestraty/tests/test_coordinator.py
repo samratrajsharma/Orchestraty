@@ -599,11 +599,28 @@ def test_the_refresh_file_makes_every_worktree_due(state, watched, git, tmp_path
         c.step()
     assert _tree(c, idle)["every"] > c.cfg["level0_seconds"]
     (idle / "new.py").write_text("x = 1\n", encoding="utf-8")
-    open(state.rescan, "w").close()             # orch ui's Refresh
+    with open(state.rescan, "w", encoding="utf-8") as fh:      # orch ui's Refresh
+        fh.write("1700000000000000000-ab12")
     c.step()
     assert not os.path.exists(state.rescan)
     [plain] = [s for s in c.record.sessions() if s["agent"] == "git"]
     assert same(plain["worktree"], idle)
+    with open(state.rescanned, encoding="utf-8") as fh:        # the pass is done, and what it found
+        answer = json.load(fh)
+    assert answer["id"] == "1700000000000000000-ab12" and answer["found"] == 1
+    with open(state.status, encoding="utf-8") as fh:           # status.json is current before it says so
+        assert any(same(s.get("worktree"), idle) for r in json.load(fh)["repositories"] for s in r["sessions"])
+
+
+def test_a_refresh_with_nothing_new_finds_nothing(state, watched, coordinator):
+    spool_event(state.root, "s1", "SessionStart", watched)
+    c = coordinator()
+    c.step()
+    open(state.rescan, "w").close()             # an id it cannot read still gets an answer
+    c.step()
+    with open(state.rescanned, encoding="utf-8") as fh:
+        answer = json.load(fh)
+    assert answer["id"] == "" and answer["found"] == 0
 
 
 def test_the_installed_version_is_read_from_disk():

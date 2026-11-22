@@ -24,6 +24,8 @@ Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestr
 
 - The record becomes schema 6 when the coordinator opens it. Schema 6 only adds tables, for teammates' work read through git and the task lines you confirm with `orch team task` (only those are written in this version), and every row a 0.1.1 record holds stays as it was. After that, 0.1.x refuses the record with its "newer Orchestraty" message; to go back, move the record aside, with its `-wal` and `-shm` files. `orch events` knows three new kinds for those records: `team_sent`, `team_withheld` and `team_dropped`.
 - The coordinator drops a declaration for a cloud agent's branch, as it already dropped a claim for one: nobody works in that branch here, so there is nothing to declare.
+- Refresh in `orch ui` shows a striped bar under the top bar while the background process looks at everything again. Its message stays meanwhile, then says what the pass found: how many projects and live sessions, and how many new sessions. When the background process isn't running, the message says so.
+- `orch ui`'s buttons have two corners cut on the diagonal, as the arrows in the Orchestraty mark run, instead of rounded corners. Keyboard focus shows as a thicker edge inside the shape.
 
 ### Fixed
 

@@ -104,20 +104,20 @@ h1, h2, h3, p { margin: 0; }
 .repo-pick { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .repo-pick select, .repo-name { height: 40px; max-width: 280px; padding: 0 12px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); background: var(--raised); display: inline-flex; align-items: center; gap: 8px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .top-fill { flex: 1 1 auto; }
-.pill { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; border-radius: var(--radius-pill); border: 1px solid var(--line-strong); background: var(--raised); font-size: 14px; white-space: nowrap; transition: border-color var(--dur-fast) var(--ease-out); }
+.pill { --cut: 10px; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; border: 1px solid var(--line-strong); background: var(--raised); font-size: 14px; white-space: nowrap; transition: border-color var(--dur-fast) var(--ease-out); }
 .pill:hover { border-color: var(--ink); }
 .pill-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--signal-ok); }
 .pill.is-need .pill-dot { background: var(--signal-strong); }
 .pill.is-warn .pill-dot { background: var(--signal-medium); }
 .pill.is-lost .pill-dot { background: var(--signal-weak); }
-.search { display: inline-flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; width: 232px; height: 40px; padding: 0 8px 0 12px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); background: var(--raised); color: var(--muted); font-size: 14px; transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.search { --cut: 10px; display: inline-flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; width: 232px; height: 40px; padding: 0 8px 0 12px; border: 1px solid var(--line-strong); background: var(--raised); color: var(--muted); font-size: 14px; transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
 .search:hover { border-color: var(--ink); color: var(--ink); }
 .search-label { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 kbd, .kbd { font-family: var(--font-brand); }
 .kbd { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); font-size: 12px; color: var(--muted); background: transparent; white-space: nowrap; }
-.icon-btn { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; flex: none; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); background: var(--raised); transition: border-color var(--dur-fast) var(--ease-out); }
+.icon-btn { --cut: 10px; width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; flex: none; border: 1px solid var(--line-strong); background: var(--raised); transition: border-color var(--dur-fast) var(--ease-out); }
 .icon-btn:hover { border-color: var(--ink); }
-.icon-btn.sm { width: 32px; height: 32px; }
+.icon-btn.sm { --cut: 8px; width: 32px; height: 32px; }
 
 /* ------------------------------------------------------------------ the frame */
 .frame { display: flex; align-items: stretch; padding-right: var(--tour-w); padding-bottom: var(--tour-h, 0px); }
@@ -152,14 +152,14 @@ main { flex: 1 1 auto; min-width: 0; padding: 32px 32px 64px; outline: none; con
 .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .grid-home { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 32px; align-items: start; }
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 48px; padding: 0 16px; border-radius: var(--radius-md); border: 1px solid var(--line-strong); background: var(--raised); color: var(--ink); white-space: nowrap; text-decoration: none;
+.btn { --cut: 12px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 48px; padding: 0 16px; border: 1px solid var(--line-strong); background: var(--raised); color: var(--ink); white-space: nowrap; text-decoration: none;
   transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
 .btn:hover { border-color: var(--ink); }
 .btn.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
 .btn.primary:hover { background: var(--accent-hover); border-color: transparent; }
 .btn.quiet { background: transparent; border-color: transparent; color: var(--muted); }
 .btn.quiet:hover { color: var(--ink); background: var(--sunken); border-color: transparent; }
-.btn.sm { height: 36px; padding: 0 12px; font-size: 14px; border-radius: var(--radius-sm); }
+.btn.sm { --cut: 9px; height: 36px; padding: 0 12px; font-size: 14px; }
 .btn[aria-disabled="true"] { opacity: .55; cursor: progress; }
 .btn-arrow { display: none; width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; transition: transform var(--dur-fast) var(--ease-out); }
 .btn.primary .btn-arrow { display: block; }
@@ -176,10 +176,10 @@ main { flex: 1 1 auto; min-width: 0; padding: 32px 32px 64px; outline: none; con
 .av.sm { width: 28px; height: 28px; font-size: 12px; }
 .av.lg { width: 52px; height: 52px; border-radius: var(--radius-md); font-size: 20px; }
 .av.git { background: var(--sunken); color: var(--muted); border: 1px dashed var(--line-strong); }
-.cmd { display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 6px 0 16px; border-radius: var(--radius-pill); background: var(--sunken); border: 1px solid var(--line); max-width: 560px; }
+.cmd { --cut: 12px; display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 6px 0 16px; background: var(--sunken); border: 1px solid var(--line); max-width: 560px; }
 .cmd-prompt { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .cmd code { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; line-height: 1.5; font-weight: 500; }
-.cmd-copy { flex: none; height: 36px; min-width: 72px; padding: 0 12px; border-radius: var(--radius-pill); border: 1px solid var(--line-strong); background: var(--raised); font-size: 14px; transition: border-color var(--dur-fast) var(--ease-out); }
+.cmd-copy { --cut: 9px; flex: none; height: 36px; min-width: 72px; padding: 0 12px; border: 1px solid var(--line-strong); background: var(--raised); font-size: 14px; transition: border-color var(--dur-fast) var(--ease-out); }
 .cmd-copy:hover { border-color: var(--ink); }
 .empty { padding: 32px 24px; text-align: center; color: var(--muted); }
 .empty h3 { color: var(--ink); font-size: 20px; line-height: 1.4; margin-bottom: 4px; }
@@ -223,7 +223,7 @@ a.lane:hover { background: var(--sunken); }
 a.row:hover { background: var(--sunken); }
 .row .side-tags { display: flex; align-items: center; gap: 12px; }
 .filters { display: flex; gap: 8px; flex-wrap: wrap; }
-.filter { height: 36px; padding: 0 12px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); background: transparent; color: var(--muted); font-size: 14px; transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.filter { --cut: 9px; height: 36px; padding: 0 12px; border: 1px solid var(--line-strong); background: transparent; color: var(--muted); font-size: 14px; transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
 .filter:hover { color: var(--ink); border-color: var(--ink); }
 .filter[aria-pressed="true"] { background: var(--inverse); color: var(--on-inverse); border-color: transparent; }
 .flow { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
@@ -245,8 +245,8 @@ a.row:hover { background: var(--sunken); }
 .step .pip { width: 8px; height: 8px; margin-top: 9px; border-radius: 50%; background: var(--line-strong); }
 .step .pip.strong { background: var(--signal-strong); } .step .pip.brand { background: var(--slate); } .step .pip.ok { background: var(--signal-ok); }
 .step time { color: var(--muted); font-family: var(--font-mono); font-size: 13px; }
-.seg { display: inline-flex; gap: 4px; padding: 4px; border-radius: var(--radius-md); background: var(--sunken); border: 1px solid var(--line); }
-.seg button { height: 32px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--muted); font-size: 14px; }
+.seg { --cut: 10px; display: inline-flex; gap: 4px; padding: 4px; background: var(--sunken); border: 1px solid var(--line); }
+.seg button { --cut: 7px; height: 32px; padding: 0 12px; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 14px; }
 .seg button:hover { color: var(--ink); }
 .seg button[aria-pressed="true"] { background: var(--raised); color: var(--ink); border-color: var(--line-strong); }
 .verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 24px; }
@@ -311,7 +311,7 @@ tr:last-child td { border-bottom: 0; }
 .pop .dot.strong { background: var(--signal-strong); } .pop .dot.warn { background: var(--signal-medium); } .pop .dot.off { background: var(--signal-weak); }
 .toast { position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%); z-index: 40; max-width: calc(100% - 32px); display: flex; align-items: center; gap: 16px; padding: 8px 8px 8px 16px; min-height: 48px; border-radius: var(--radius-md); background: var(--inverse); color: var(--on-inverse); box-shadow: var(--shadow-lift); font-size: 14px; line-height: 1.5; }
 .toast[hidden] { display: none; }
-.toast .btn { height: 32px; padding: 0 12px; font-size: 14px; border-radius: var(--radius-sm); background: transparent; color: var(--on-inverse); border-color: var(--on-inverse); }
+.toast .btn { --cut: 8px; height: 32px; padding: 0 12px; font-size: 14px; background: transparent; color: var(--on-inverse); border-color: var(--on-inverse); }
 
 /* ------------------------------------------------------------------ the demo tour */
 .tour { position: fixed; top: var(--top-h); right: 0; bottom: 0; z-index: 8; width: 360px; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--raised); }
@@ -336,6 +336,40 @@ tr:last-child td { border-bottom: 0; }
 .skel.line { height: 32px; width: 40%; }
 .skel.tall { height: 240px; }
 @keyframes breathe { 50% { opacity: .55; } }
+/* ------------------------------------------------------------------ cut corners
+   Buttons have two corners cut on the diagonal, top left and bottom right, as the arrows in the
+   mark run. The clip-path cuts the box; ::before and ::after draw the border across each cut in
+   the button's own border colour (inherited, so hover and pressed states carry over). Focus is a
+   2px edge inside the shape: an outline outside it would be cut off. */
+.btn, .icon-btn, .search, .pill, .cmd, .cmd-copy, .filter, .seg, .seg button {
+  --lw: 2px; position: relative;
+  clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut)); }
+.btn::before, .icon-btn::before, .search::before, .pill::before, .cmd::before, .cmd-copy::before, .filter::before, .seg::before, .seg button::before,
+.btn::after, .icon-btn::after, .search::after, .pill::after, .cmd::after, .cmd-copy::after, .filter::after, .seg::after, .seg button::after {
+  content: ""; position: absolute; width: calc(var(--cut) * 1.4142 + 2px); height: 0; border-top: var(--lw) solid; border-color: inherit;
+  transform: rotate(-45deg); pointer-events: none; }
+.btn::before, .icon-btn::before, .search::before, .pill::before, .cmd::before, .cmd-copy::before, .filter::before, .seg::before, .seg button::before {
+  left: calc(var(--cut) * -.2071 - 2px); top: calc(var(--cut) / 2 - 1px - var(--lw) / 2); }
+.btn::after, .icon-btn::after, .search::after, .pill::after, .cmd::after, .cmd-copy::after, .filter::after, .seg::after, .seg button::after {
+  right: calc(var(--cut) * -.2071 - 2px); bottom: calc(var(--cut) / 2 - 1px - var(--lw) / 2); }
+.btn:focus-visible, .icon-btn:focus-visible, .search:focus-visible, .pill:focus-visible, .cmd-copy:focus-visible, .filter:focus-visible, .seg button:focus-visible {
+  outline: none; --lw: 4px; border-color: var(--focus); box-shadow: inset 0 0 0 1px var(--focus); }
+.btn.primary:focus-visible { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), inset 0 0 0 3px var(--on-accent); }
+
+/* ------------------------------------------------------------------ Refresh
+   A striped bar under the top bar while the coordinator looks at everything again; the stripes
+   run on the same diagonal as the cut corners. */
+.refresh-bar { position: absolute; left: 0; right: 0; top: 100%; height: 8px; overflow: hidden; pointer-events: none; background: var(--sunken);
+  transform-origin: top; animation: bar-in var(--dur-fast) var(--ease-out); transition: opacity var(--dur-base) var(--ease-out); }
+.refresh-bar[hidden] { display: none; }
+.refresh-bar::before { content: ""; position: absolute; top: 0; bottom: 0; left: -24px; right: 0;
+  background: repeating-linear-gradient(-45deg, var(--accent) 0 8px, transparent 8px 16px); animation: stripes 640ms linear infinite; }
+.refresh-bar.is-done { opacity: 0; }
+.icon-btn.is-busy svg { transform-origin: 50% 50%; animation: spin 900ms linear infinite; }
+@keyframes stripes { to { transform: translateX(22.627px); } }
+@keyframes bar-in { from { transform: scaleY(0); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }

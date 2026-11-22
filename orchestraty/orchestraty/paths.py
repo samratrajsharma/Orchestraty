@@ -95,6 +95,12 @@ class State:
         return self._in("coordinator.rescan")
 
     @property
+    def rescanned(self):
+        """Written by the coordinator once the pass a Refresh asked for is done: that Refresh's
+        id and how many sessions the pass found, so orch ui can say what it found."""
+        return self._in("coordinator.rescanned")
+
+    @property
     def unwatched(self):
         """Kept by the coordinator: the repositories, not watched, that agent sessions work in
         now, and how many (no session id, no event), so orch status and orch ui can say so."""

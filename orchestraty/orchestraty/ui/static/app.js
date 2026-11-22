@@ -225,7 +225,7 @@ async function post (url, body) {
 const ui = {
   route: null, status: null, findings: null, notes: null, push: null, detail: null, config: null, health: null, demo: null,
   showAll: stored(ALL_KEY, '0') === '1', repo: stored(REPO_KEY, ''), lastOk: null, lost: false, denied: false, dirty: true,
-  busy: false, labels: {}, doctor: null, doctorBusy: false, claimOpen: false, claimResult: null, demoBusy: false,
+  busy: false, rescanning: false, labels: {}, doctor: null, doctorBusy: false, claimOpen: false, claimResult: null, demoBusy: false,
   demoError: null, tourMin: stored(TOUR_KEY, '0') === '1', ofilter: 'all', showResolved: false, afilter: 'all'
 }
 
@@ -1249,10 +1249,64 @@ async function flip (name, on) {
   toast(text || (name + (on ? ' is on.' : ' is off.')), res.error ? null : () => flip(name, !on))
   refresh()
 }
+// Refresh: the striped bar runs and the message stays while the coordinator looks at everything
+// again; once it says that pass is done, the dashboard reloads and the message says what it found.
+const RESCAN_POLL_MS = 400
+const RESCAN_WAIT_MS = 20000
+const RESCAN_MIN_MS = 900                 // the bar shows long enough to be seen
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+async function rescanned (id) {
+  const res = await fetch('/api/rescan?id=' + encodeURIComponent(id), { cache: 'no-store', credentials: 'same-origin' })
+  if (res.status === 403) throw new AccessError()
+  if (!res.ok) throw new Error('HTTP ' + res.status)
+  return res.json()
+}
+function refreshing (on) {
+  const bar = $('refresh-bar')
+  const btn = $('refresh-btn')
+  btn.classList.toggle('is-busy', on)
+  btn.setAttribute('aria-busy', on ? 'true' : 'false')
+  bar.classList.toggle('is-done', !on)
+  if (on) bar.hidden = false
+  else setTimeout(() => { if (!ui.rescanning) bar.hidden = true }, 320)
+}
+const NOT_RUNNING = 'The background process isn’t running: it starts with the next agent event and looks at everything then.'
+function rescanSummary (answer, running) {
+  if (!running) return NOT_RUNNING
+  if (!answer) return 'Still looking: new sessions show here as they’re found.'
+  const all = allRepos()
+  const live = all.reduce((n, r) => n + r.sessions.filter((s) => s.state === 'live').length, 0)
+  return 'Refreshed: ' + plural(all.length, 'project', 'projects') + ', ' + plural(live, 'live session', 'live sessions') + '. ' +
+    (answer.found ? plural(answer.found, 'new session', 'new sessions') + ' found.' : 'Nothing new found.')
+}
 async function rescan () {
+  if (ui.rescanning) return
   const res = await act('/api/rescan', {})
-  if (res) toast(res.lines.join(' '))
+  if (!res) return
+  ui.rescanning = true
+  const started = Date.now()
+  refreshing(true)
+  toast(res.lines.join(' '), null, true)
   refresh()
+  let answer = null
+  let running = res.running
+  try {
+    while (running && Date.now() - started < RESCAN_WAIT_MS) {
+      await sleep(RESCAN_POLL_MS)
+      const got = await rescanned(res.id)
+      if (got.done) { answer = got; break }
+      running = got.running
+    }
+  } catch (err) {
+    if (err instanceof AccessError) { ui.rescanning = false; refreshing(false); return denied() }
+  }
+  ui.dirty = true
+  await poll()
+  const left = RESCAN_MIN_MS - (Date.now() - started)
+  if (left > 0) await sleep(left)
+  ui.rescanning = false
+  refreshing(false)
+  toast(rescanSummary(answer, running))
 }
 async function watchRepo (r) {
   const res = await act('/api/watch', { common_dir: r.common_dir })
@@ -1357,13 +1411,13 @@ function togglePop () {
 
 // ------------------------------------------------------------------------------- toast
 let toastTimer = null
-function toast (text, undo) {
+function toast (text, undo, stay) {
   const el = $('toast')
   clearTimeout(toastTimer)
   el.replaceChildren(...[h('span', {}, text), undo ? h('button', { type: 'button', class: 'btn sm', onclick: () => { el.hidden = true; undo() } }, 'Undo') : null].filter(Boolean))
   el.hidden = false
   announce(text)
-  toastTimer = setTimeout(() => { el.hidden = true }, undo ? 6000 : 4200)
+  if (!stay) toastTimer = setTimeout(() => { el.hidden = true }, undo ? 6000 : 4200)
 }
 
 // ------------------------------------------------------------------------------- the palette and help

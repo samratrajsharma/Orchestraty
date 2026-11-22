@@ -54,6 +54,7 @@ from orchestraty.livemap.map import LiveMap
 from orchestraty.rules import overlap
 
 SCAN_SECONDS = 0.15
+RESCAN_ID = re.compile(r"[0-9]{1,20}-[0-9a-f]{1,16}")   # what orch ui's Refresh writes: when, and a random part
 HOUSEKEEPING_SECONDS = 10
 FRESH_START_SECONDS = 60          # a SessionStart read later than this gives a guessed base
 TOGETHER_SECONDS = 60             # a pair of sessions is checked together at most once in this
@@ -116,6 +117,7 @@ class Coordinator:
         self._status_dirty = True
         self._status_written = 0.0
         self.upgraded = None               # the version installed since this one started, once seen
+        self._rescan = None                # (id, sessions before) while a pass orch ui's Refresh asked for runs
         self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
         self.cloud = CloudBranches(state, self.log)
         self.team = None                   # team sync's work: made once a repository has it on
@@ -220,8 +222,24 @@ class Coordinator:
         if lines or self.changed:
             self._status_dirty = True
         self.write_unwatched()
-        self.write_status()
+        self.write_status(force=self._rescan is not None)
+        if self._rescan is not None:
+            self.answer_rescan()
         return len(lines)
+
+    def answer_rescan(self):
+        """Say that the pass orch ui's Refresh asked for is done (status.json is current by now),
+        with that Refresh's id and how many live sessions the pass found."""
+        rid, before = self._rescan
+        self._rescan = None
+        found = sum(1 for sid, s in self.sessions.items() if sid not in before and s["state"] == "live")
+        tmp = self.state.rescanned + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"schema": 1, "id": rid, "found": found, "at": time.time()}, fh)
+            os.replace(tmp, self.state.rescanned)
+        except OSError:
+            self.log.exception("the Refresh not answered")
 
     def check_upgrade(self):
         """Note another Orchestraty installed since this coordinator started (an upgrade): run()
@@ -296,6 +314,7 @@ class Coordinator:
         orch ui's Refresh (the rescan file) makes every worktree due now."""
         mono = time.monotonic()
         if os.path.exists(self.state.rescan):
+            self._rescan = (_rescan_id(self.state.rescan), set(self.sessions))
             _remove(self.state.rescan)
             for seen in self._trees.values():
                 seen["every"], seen["next"] = 0, 0
@@ -1380,6 +1399,16 @@ def _write_info(state):
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(info, fh)
     os.replace(tmp, state.info)
+
+
+def _rescan_id(path):
+    """The id orch ui's Refresh wrote into the rescan file ("" when there is none to read)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read(64).strip()
+    except (OSError, ValueError):
+        return ""
+    return text if RESCAN_ID.fullmatch(text) else ""
 
 
 def _remove(path):
