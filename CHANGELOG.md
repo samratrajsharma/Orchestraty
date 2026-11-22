@@ -18,20 +18,32 @@ Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestr
 - `orch team push`, `orch team fetch` and `orch team log`: send this device's record now, read teammates' records now, and list the records this device wrote and what was sent. `orch team off --forget` deletes this device's record ref through the remote's push URL, and `orch uninstall` asks whether to delete it, never anyone else's.
 - `orch status` lists teammates' branches under the team block, each with who, its last commit and what its commits changed, and `--json` gains `team.sessions` and `team.fetch`; the dashboard's team card lists them, the MCP `status` tool gives them cleaned, and the Claude Code mod names teammates' and cloud sessions. `orch doctor` says how a push is seen (git's reflog, or the remote-tracking refs where there is none), where records go, a git too old for merge-tree, another machine writing as this device, the last push and fetch, and records sealed under another policy.
 - `orch status` and the dashboard show a team block where team sync is on, and `orch status --json --with-lines` adds teammates' confirmed task lines (shown otherwise only on a terminal and in the dashboard); the MCP status tool shows the block cleaned, with teammates' handles but never their devices or labels. `orch doctor` checks team sync where it is on, offline.
-- `scripts/real_day.py`: an ordinary day on the built wheel, run in CI and in every release beside the smoke test, on Windows, macOS and Linux.
 
 ### Changed
 
 - The record becomes schema 6 when the coordinator opens it. Schema 6 only adds tables, for teammates' work read through git and the task lines you confirm with `orch team task` (only those are written in this version), and every row a 0.1.1 record holds stays as it was. After that, 0.1.x refuses the record with its "newer Orchestraty" message; to go back, move the record aside, with its `-wal` and `-shm` files. `orch events` knows three new kinds for those records: `team_sent`, `team_withheld` and `team_dropped`.
 - The coordinator drops a declaration for a cloud agent's branch, as it already dropped a claim for one: nobody works in that branch here, so there is nothing to declare.
-- Refresh in `orch ui` shows a striped bar under the top bar while the background process looks at everything again. Its message stays meanwhile, then says what the pass found: how many projects and live sessions, and how many new sessions. When the background process isn't running, the message says so.
-- `orch ui`'s buttons have two corners cut on the diagonal, as the arrows in the Orchestraty mark run, instead of rounded corners. Keyboard focus shows as a thicker edge inside the shape.
+
+## 0.1.4 (22 November 2026)
+
+Upgrades need no extra step from now on: the background process gives way to a newer version by itself, and the dashboard says when anything still runs an earlier one. In `orch ui`, Refresh now says what it found, and the buttons have a new shape. An ordinary-day check now runs before every release.
+
+After upgrading from 0.1.3 or earlier, run `orch init` once: it restarts the earlier background process, which does not know to restart itself. The hook script is unchanged.
 
 ### Fixed
 
 - After an upgrade the background process went on running the earlier version until someone ran `orch coordinator stop`, so the new version's behaviour (a project without git, say) did not show. It now notices another Orchestraty installed and gives way within a minute (the next agent event starts the new one), and `orch init` restarts an earlier one at once and says so.
 - A dashboard left open across an upgrade says so: "Orchestraty X is installed. This dashboard still runs Y", and the same when the background process is still the earlier version. A second `orch ui` beside an earlier dashboard names it and starts the new one on another port.
 - A plain-git session whose worktree folder was deleted stayed live, and the coordinator logged an error for it every few seconds; it now ends ("its worktree is gone").
+
+### Added
+
+- `scripts/real_day.py`: an ordinary day on the built wheel, run in CI and in every release beside the smoke test, on Windows, macOS and Linux.
+
+### Changed
+
+- Refresh in `orch ui` shows a striped bar under the top bar while the background process looks at everything again. Its message stays meanwhile, then says what the pass found: how many projects and live sessions, and how many new sessions. When the background process isn't running, the message says so.
+- `orch ui`'s buttons have two corners cut on the diagonal, as the arrows in the Orchestraty mark run, instead of rounded corners. Keyboard focus shows as a thicker edge inside the shape.
 
 ## 0.1.3 (22 November 2026)
 
