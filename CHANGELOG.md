@@ -2,7 +2,11 @@
 
 Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestraty`.
 
-## Unreleased
+## 0.1.4 (22 November 2026)
+
+Upgrades need no extra step from now on: the background process gives way to a newer version by itself, and the dashboard says when anything still runs an earlier one. In `orch ui`, Refresh now says what it found, and the buttons have a new shape. An ordinary-day check now runs before every release.
+
+After upgrading from 0.1.3 or earlier, run `orch init` once: it restarts the earlier background process, which does not know to restart itself. The hook script is unchanged.
 
 ### Fixed
 
