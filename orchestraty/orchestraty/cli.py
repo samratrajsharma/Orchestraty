@@ -147,6 +147,7 @@ def _init_for_plugin(args, state, path, python, wake, current, plugin_id):
 
 
 def _init_rest(args, state, python):
+    _restart_older_coordinator(state)
     _offer_tracking(state, args.yes)
     code = _watch_here(state, os.getcwd(), quiet_outside=True)
     if code == 0 and not args.no_git_hooks:
@@ -287,6 +288,7 @@ def _init_agent(args):
         _offer_exclude(state, path, args.yes)
     if getattr(args, "nested", False):             # set up from orch init for Claude Code, which did the rest
         return 0
+    _restart_older_coordinator(state)
     _offer_tracking(state, args.yes)
     code = _watch_here(state, os.getcwd(), quiet_outside=True)
     if code == 0 and not args.no_git_hooks:
@@ -1144,26 +1146,61 @@ def _port(text):
 
 def cmd_coordinator(args):
     from orchestraty.coordinator import main as coordinator
-    from orchestraty.coordinator.lock import Lock, touch
     state = State()
     if args.action == "run":
         return coordinator.run(state)
-    # stop: ask, then wait until the lock is free
+    stopped = stop_coordinator(state, args.wait)
+    if stopped is None:
+        print("The coordinator is not running.")
+        return 0
+    if stopped:
+        print("The coordinator stopped.")
+        return 0
+    print("The coordinator did not stop in time.", file=sys.stderr)
+    return 1
+
+
+def stop_coordinator(state, wait=10.0):
+    """Ask the coordinator to stop and wait until it has: True when it stopped, False when it
+    did not in time, None when none was running. The next agent event starts one again."""
+    from orchestraty.coordinator.lock import Lock, touch
     lock = Lock(state.lock)
     if lock.acquire():
         lock.release()
-        print("The coordinator is not running.")
-        return 0
+        return None
     touch(state.stop)
-    deadline = time.monotonic() + args.wait
+    deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
         if lock.acquire():
             lock.release()
-            print("The coordinator stopped.")
-            return 0
+            return True
         time.sleep(0.1)
-    print("The coordinator did not stop in time.", file=sys.stderr)
-    return 1
+    return False
+
+
+def running_version(state):
+    """The version the running coordinator says it is, or None when none runs (or it did not say)."""
+    from orchestraty.coordinator.lock import is_fresh
+    if not is_fresh(state.alive, 10.0, time.time()):
+        return None
+    try:
+        with open(state.info, "r", encoding="utf-8") as fh:
+            version = json.load(fh).get("version")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return version if isinstance(version, str) else None
+
+
+def _restart_older_coordinator(state):
+    """After an upgrade the coordinator that runs is still the earlier version: stop it, so the
+    next agent event starts this one."""
+    older = running_version(state)
+    if older is None or older == __version__:
+        return
+    if stop_coordinator(state):
+        print(f"Restarted Orchestraty's background process: it ran {older}; the next agent event starts {__version__}.")
+    else:
+        print(f"Orchestraty's background process still runs {older}: run orch coordinator stop.", file=sys.stderr)
 
 
 def cmd_restore(args):

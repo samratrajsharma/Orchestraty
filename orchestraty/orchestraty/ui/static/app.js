@@ -346,7 +346,7 @@ function render () {
   for (const a of main.getAnimations()) a.cancel()
   const views = { home: homeView, projects: projectsView, sessions: sessionsView, session: sessionView, overlaps: overlapsView, overlap: overlapView,
     activity: activityView, claims: claimsView, merge: mergeView, settings: settingsView }
-  swap(main, [h('div', { class: 'view' }, (views[ui.route.name] || homeView)())])
+  swap(main, [h('div', { class: 'view' }, versionNotices(), (views[ui.route.name] || homeView)())])
   settle(main)
   drawSide(ui.route)
   drawTour()
@@ -619,6 +619,24 @@ function noRepos () {
   return [...unwatchedCards(), empty('Orchestraty isn’t watching a repository yet',
     'Run orch init in a repository your agents work on: it installs the hooks, after asking, and watches that repository.',
     command('orch init'))]
+}
+// After an upgrade: this dashboard, or the background process, still runs the earlier version.
+function versionNotices () {
+  const u = ui.status && ui.status.ui
+  const c = ui.status && ui.status.coordinator
+  if (!u || u.demo) return []
+  const now = u.installed || u.version
+  if (u.installed && u.installed !== u.version) {
+    return [h('div', { class: 'notice', role: 'status', 'data-anim': 'upgraded-ui' },
+      h('b', {}, 'Orchestraty ' + u.installed + ' is installed. '),
+      'This dashboard still runs ' + u.version + ': press Ctrl+C where orch ui runs, then run orch ui again.')]
+  }
+  if (c && c.running && c.version && c.version !== now) {
+    return [h('div', { class: 'notice', role: 'status', 'data-anim': 'upgraded-coordinator' },
+      h('b', {}, 'The background process still runs ' + c.version + '. '),
+      'It restarts by itself with ' + now + ' within a minute, or now with orch coordinator stop.')]
+  }
+  return []
 }
 // Repositories agents work in that Orchestraty does not watch, so their sessions are not compared.
 function unwatchedCards () {

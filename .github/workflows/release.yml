@@ -4,7 +4,9 @@
 #    and that their version is the tag's;
 # 2. smoke: that wheel in a clean virtual environment on Windows, macOS and Linux
 #    (scripts/smoke.py: orch --version, orch init --print, two scripted sessions through the
-#    installed hook script reaching a note, orch doctor);
+#    installed hook script reaching a note, orch doctor), then an ordinary day on it
+#    (scripts/real_day.py: one init, many worktrees and a folder without git, the dashboard's
+#    one address, an upgrade that restarts the coordinator by itself);
 # 3. draft-release: the files attached to a draft GitHub release, which stays a draft until
 #    someone publishes it by hand.
 #
@@ -105,6 +107,16 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python scripts/smoke.py dist/*.whl
+
+      # An ordinary day on the same wheel (scripts/real_day.py): one orch init from no project,
+      # a repository with many worktrees and a folder without git, sessions shown within seconds,
+      # a caller left behind in the folder, one dashboard address, and an upgrade that restarts
+      # the coordinator by itself.
+      - name: Run an ordinary day on the wheel
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python scripts/real_day.py dist/*.whl
 
   draft-release:
     name: attach the files to a draft release

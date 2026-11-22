@@ -604,3 +604,51 @@ def test_the_refresh_file_makes_every_worktree_due(state, watched, git, tmp_path
     assert not os.path.exists(state.rescan)
     [plain] = [s for s in c.record.sessions() if s["agent"] == "git"]
     assert same(plain["worktree"], idle)
+
+
+def test_the_installed_version_is_read_from_disk():
+    import orchestraty
+    assert orchestraty.installed_version() == orchestraty.__version__
+
+
+def test_the_coordinator_leaves_once_another_orchestraty_is_installed(state, watched, coordinator, monkeypatch):
+    c = coordinator()
+    c.check_upgrade()
+    assert c.upgraded is None
+    monkeypatch.setattr(cmain, "installed_version", lambda: "99.0.0")
+    c.check_upgrade()
+    assert c.upgraded == "99.0.0"
+    assert cmain.run(state, scan_seconds=0.01) == cmain.OK                # leaves at its first pass
+    log = open(os.path.join(state.logs, "coordinator.log"), encoding="utf-8").read()
+    assert "Orchestraty 99.0.0 is installed now" in log
+
+
+def test_a_plain_git_session_ends_when_its_worktree_folder_is_gone(state, watched, git, tmp_path, coordinator):
+    import shutil
+    gone = tmp_path / "gone"
+    git(watched, "worktree", "add", "-q", "-b", "gone", str(gone))
+    (gone / "new.py").write_text("x = 1\n", encoding="utf-8")
+    spool_event(state.root, "s1", "SessionStart", watched)
+    c = coordinator()
+    c._last_scan = None
+    c.step()
+    [plain] = [s for s in c.record.sessions() if s["agent"] == "git"]
+    shutil.rmtree(gone)
+    c._last_scan = None
+    c.step()
+    assert c.record.session(plain["id"])["state"] == "ended"
+    assert c.record.session(plain["id"])["note"] == "its worktree is gone"
+
+
+def test_orch_init_restarts_an_older_coordinator(state, monkeypatch, capsys, tmp_path):
+    os.makedirs(state.root, exist_ok=True)
+    with open(state.info, "w", encoding="utf-8") as fh:
+        json.dump({"pid": 1, "version": "0.0.1"}, fh)
+    touch(state.alive)
+    assert cli.running_version(state) == "0.0.1"
+    asked = []
+    monkeypatch.setattr(cli, "stop_coordinator", lambda s, wait=10.0: asked.append(s.root) or True)
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["init", "--yes"]) == 0
+    assert asked == [state.root]
+    assert "Restarted Orchestraty's background process: it ran 0.0.1" in capsys.readouterr().out

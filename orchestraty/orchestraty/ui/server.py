@@ -57,6 +57,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from orchestraty import __version__
 from orchestraty.paths import State
 from orchestraty.ui import data
 
@@ -142,15 +143,28 @@ def _info(state):
     return os.path.join(state.root, "ui.json")
 
 
-def running(state, timeout=1.0):
-    """The port of the orch ui already serving this state folder (its ui.json), or None."""
+def announced(state, timeout=1.0):
+    """(port, version) of an orch ui serving this state folder now, as its ui.json says (version
+    None for one before 0.1.4, which did not say), or None."""
     try:
         with open(_info(state), "r", encoding="utf-8") as fh:
-            port = json.load(fh).get("port")
-    except (OSError, ValueError, AttributeError):
+            info = json.load(fh)
+    except (OSError, ValueError):
         return None
+    port = info.get("port") if isinstance(info, dict) else None
     if not isinstance(port, int) or isinstance(port, bool) or not 0 < port < 65536:
         return None
+    version = info.get("version") if isinstance(info.get("version"), str) else None
+    return (port, version) if _answers(port, timeout) else None
+
+
+def running(state, timeout=1.0):
+    """The port of the orch ui of this version already serving this state folder, or None."""
+    found = announced(state, timeout)
+    return found[0] if found and found[1] == __version__ else None
+
+
+def _answers(port, timeout):
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
         conn.request("GET", "/", headers={"Host": f"127.0.0.1:{port}"})
@@ -158,8 +172,8 @@ def running(state, timeout=1.0):
         answer.read()
         conn.close()
     except (OSError, http.client.HTTPException):
-        return None
-    return port if (answer.getheader("Server") or "").startswith("orch-ui") else None
+        return False
+    return (answer.getheader("Server") or "").startswith("orch-ui")
 
 
 def new_link(state, port):
@@ -638,7 +652,7 @@ def _announce(server):
         os.makedirs(server.state.root, exist_ok=True)
         tmp = _info(server.state) + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"pid": os.getpid(), "port": server.port, "started": time.time()}, fh)
+            json.dump({"pid": os.getpid(), "port": server.port, "started": time.time(), "version": __version__}, fh)
         os.replace(tmp, _info(server.state))
         return True
     except OSError:
@@ -661,7 +675,12 @@ def main(port=None, browser=True, demo=False):
     one-time link to it, opened instead of starting a second one."""
     if not demo:
         state = State()
-        existing = running(state)
+        found = announced(state)
+        existing = found[0] if found and found[1] == __version__ else None
+        if found and not existing and port in (None, found[0]):
+            print(f"An earlier orch ui ({found[1] or 'before 0.1.4'}) still runs at http://127.0.0.1:{found[0]}: close it "
+                  f"(Ctrl+C where it runs). This one, {__version__}, starts on another port meanwhile.")
+            port = 0 if port is None else port
         if existing and port in (None, existing):
             url = new_link(state, existing)
             print(f"orch ui is already running: {url}")
