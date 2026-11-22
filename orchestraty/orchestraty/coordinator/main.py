@@ -2,7 +2,8 @@
 
 It holds the single-writer lock, touches the heartbeat, reads the spools every
 ``SCAN_SECONDS``, records the events of watched repositories, keeps each session's
-lifecycle, and exits after ``idle_seconds`` with no live session and no new event. Lines in
+lifecycle, and exits after ``idle_seconds`` with no live session and no new event, or once
+another Orchestraty is installed (an upgrade: the next hook starts the new one). Lines in
 ``<spool>/orch/`` are the user's own (``orch label``, ``orch missed``), an agent's declaration
 (the MCP tool ``declare``), or a claim made or released (``orch claim``, ``orch release`` and
 their MCP tools): stored in the record only. Where the together check is on (``together``), the
@@ -40,7 +41,7 @@ import sqlite3
 import sys
 import time
 
-from orchestraty import __version__, claims, config, declarations, feedback, gitio, remote, together
+from orchestraty import __version__, claims, config, declarations, feedback, gitio, installed_version, remote, together
 from orchestraty.coordinator.cloud import CloudBranches, session_id as cloud_session_id
 from orchestraty.coordinator.lock import Heartbeat, Lock, touch
 from orchestraty.coordinator.record import Record, SchemaError, repo_key, repo_name
@@ -113,6 +114,7 @@ class Coordinator:
         self._push_dirty = True
         self._status_dirty = True
         self._status_written = 0.0
+        self.upgraded = None               # the version installed since this one started, once seen
         self._repo_keys = {r["id"]: r["key"] for r in self.record.repos()}
         self.cloud = CloudBranches(state, self.log)
         self.together = together.Worker(state)
@@ -191,6 +193,7 @@ class Coordinator:
         now = self.now_ns()
         if now - self._last_housekeeping >= HOUSEKEEPING_SECONDS * NS:
             self._last_housekeeping = now
+            self.check_upgrade()
             self.expire(now)
             self.expire_unwatched(now)
             self.clean_spool(now)
@@ -207,6 +210,13 @@ class Coordinator:
         self.write_unwatched()
         self.write_status()
         return len(lines)
+
+    def check_upgrade(self):
+        """Note another Orchestraty installed since this coordinator started (an upgrade): run()
+        then leaves, and the next agent event starts the one installed."""
+        found = installed_version()
+        if found and found != __version__:
+            self.upgraded = found
 
     def write_status(self, force=False):
         """Keep <state>/status.json (orch status --json) current for the mod, at most once a second."""
@@ -429,13 +439,19 @@ class Coordinator:
         repository with a live session of any kind, or whose hooked session just ended. Lists
         each repository's worktrees and queues the ones due: every one in a full pass and in a
         forced repository (looked at in this pass), else those whose time has come (see
-        look_at_trees)."""
+        look_at_trees). A plain-git session whose worktree folder is gone ends."""
         live = [s for s in self.sessions.values() if s["state"] == "live" and s["worktree"]]
+        gone = [s for s in live if s["agent"] == LEVEL0_AGENT and not os.path.isdir(s["worktree"])]
+        if gone:
+            with self.record.transaction():
+                for s in gone:
+                    self._end(s, "its worktree is gone")
+            live = [s for s in live if s not in gone]
         hooked = [s for s in live if s["agent"] != LEVEL0_AGENT]
         repos = {}
         for s in live:
-            if not snapshots.is_snapshot(s["base_commit"]):   # a folder project has no worktrees to list
-                repos.setdefault(s["repo_id"], s["worktree"])
+            if not snapshots.is_snapshot(s["base_commit"]) and os.path.isdir(s["worktree"]):
+                repos.setdefault(s["repo_id"], s["worktree"])     # a folder project has no worktrees to list
         for repo_id in forced:
             if repo_id in self._repo_paths:
                 repos.setdefault(repo_id, self._repo_paths[repo_id])
@@ -1191,6 +1207,10 @@ def run(state, scan_seconds=SCAN_SECONDS):
                     return FAILED
                 time.sleep(1)
                 continue
+            if coordinator.upgraded:
+                log.info("Orchestraty %s is installed now (this is %s): leaving, so the next agent event starts it",
+                         coordinator.upgraded, __version__)
+                break
             if (coordinator.live_count(hooked_only=True) == 0
                     and time.monotonic() - last_event > coordinator.cfg["idle_seconds"]):
                 heartbeat.stop(remove=True)   # from here on, a hook starts a new coordinator
