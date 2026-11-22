@@ -14,6 +14,10 @@ Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestr
 
 - `scripts/real_day.py`: an ordinary day on the built wheel, run in CI and in every release beside the smoke test, on Windows, macOS and Linux.
 
+### Changed
+
+- `orch ui`'s buttons have two corners cut on the diagonal, as the arrows in the Orchestraty mark run, instead of rounded corners. Keyboard focus shows as a thicker edge inside the shape.
+
 ## 0.1.3 (22 November 2026)
 
 One `orch init` for the whole computer: every project your agents work in can be followed from then on, with or without git, and the dashboard has one address and a Projects page.
