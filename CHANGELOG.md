@@ -2,6 +2,18 @@
 
 Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestraty`.
 
+## Unreleased
+
+### Fixed
+
+- After an upgrade the background process went on running the earlier version until someone ran `orch coordinator stop`, so the new version's behaviour (a project without git, say) did not show. It now notices another Orchestraty installed and gives way within a minute (the next agent event starts the new one), and `orch init` restarts an earlier one at once and says so.
+- A dashboard left open across an upgrade says so: "Orchestraty X is installed. This dashboard still runs Y", and the same when the background process is still the earlier version. A second `orch ui` beside an earlier dashboard names it and starts the new one on another port.
+- A plain-git session whose worktree folder was deleted stayed live, and the coordinator logged an error for it every few seconds; it now ends ("its worktree is gone").
+
+### Added
+
+- `scripts/real_day.py`: an ordinary day on the built wheel, run in CI and in every release beside the smoke test, on Windows, macOS and Linux.
+
 ## 0.1.3 (22 November 2026)
 
 One `orch init` for the whole computer: every project your agents work in can be followed from then on, with or without git, and the dashboard has one address and a Projects page.

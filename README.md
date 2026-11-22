@@ -196,9 +196,10 @@ To take a newer release:
 
 ```bash
 python -m pip install --upgrade orchestraty    # or: pipx upgrade orchestraty, uv tool upgrade orchestraty
-orch init                   # puts the new hook script in place
-orch coordinator stop       # the next session starts the new version
+orch init                   # puts the new hook script in place, and restarts the background process
 ```
+
+From 0.1.4 on, the background process also restarts by itself within a minute of an upgrade, and `orch ui` says when the dashboard you have open is an earlier version.
 
 To take it all out:
 
