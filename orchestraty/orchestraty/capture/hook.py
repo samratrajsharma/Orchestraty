@@ -113,12 +113,13 @@ PATCH_HEADERS = (b"Update File: ", b"Add File: ", b"Delete File: ", b"Move to: "
 MAX_PATCH_FILES = 32
 # Antigravity: names of its own, and the tool in a toolCall object ({"name": ..., "args": ...}).
 AG_SESSION = b"conversationId"
-AG_CWD = b"workspacePaths"                  # a list: its first folder is the one that counts
+AG_CWD = b"workspacePaths"
+MAX_WORKSPACE_PATHS = 16
 AG_TRANSCRIPT = b"transcriptPath"
 AG_TOOL_EVENTS = (b"PreToolUse", b"PostToolUse")
 AG_EDIT_TOOLS = {b'"write_to_file"': (b"TargetFile",), b'"replace_file_content"': (b"TargetFile",),
-                 b'"multi_replace_file_content"': (b"TargetFile",), b'"write_file"': (b"file_path", b"path"),
-                 b'"edit_file"': (b"file_path", b"path")}
+                 b'"multi_replace_file_content"': (b"TargetFile",), b'"write_file"': (b"Path", b"file_path", b"path"),
+                 b'"edit_file"': (b"Path", b"file_path", b"path")}
 # The note slot each event may take, by agent (one not named takes Claude Code's), and what an
 # agent that waits for an answer gets when there is no note: (by default, {event: answer}).
 SLOTS = {b"claude": {b"PreToolUse": b"edit", b"PostToolUse": b"next", b"PostToolUseFailure": b"next",
@@ -290,11 +291,28 @@ def string_at(raw, i):
     return _string_token(raw, i)
 
 
-def first_string(raw, i):
-    """The first item of the JSON array at raw[i] when it is a string, or None."""
+def array_paths(raw, plain_raw, i):
+    """Read the string items of a workspace array, skipping nested or invalid items."""
     if i is None or raw[i:i + 1] != b"[":
-        return None
-    return string_at(raw, _skip_space(raw, i + 1))
+        return []
+    paths = []
+    i = _skip_space(plain_raw, i + 1)
+    for _ in range(MAX_WORKSPACE_PATHS):
+        if plain_raw[i:i + 1] == b"]":
+            break
+        token = string_at(raw, i)
+        if token:
+            path = uri_path(json_unescape(token))
+            if path and path not in paths:
+                paths.append(path)
+        end = value_end(plain_raw, i)
+        if end < 0:
+            break
+        i = _skip_space(plain_raw, end)
+        if plain_raw[i:i + 1] != b",":
+            break
+        i = _skip_space(plain_raw, i + 1)
+    return paths
 
 
 def flag_at(raw, i):
@@ -459,7 +477,7 @@ def edit_files(raw, agent):
     tool = string_at(raw, top.get(b"tool_name"))
     tool_input = members(s, top.get(b"tool_input"))
     if agent == b"codex" and tool in PATCH_TOOLS:
-        cwd = string_at(raw, top.get(b"cwd"))
+        cwd = string_at(raw, top.get(b"tool_cwd")) or string_at(raw, top.get(b"cwd"))
         return patch_files(raw, s, _patch_at(s, top), json_unescape(cwd) if cwd else "")
     key = EDIT_TOOLS.get(tool)
     token = string_at(raw, tool_input.get(key)) if key else None
@@ -562,6 +580,11 @@ def _fields(raw, agent, event, parts, first):
             elif key == b"cwd":
                 cwd = token
     path_key = EDIT_TOOLS.get(tool) if event in TOOL_EVENTS else None
+    if agent == b"codex" and event in TOOL_EVENTS:
+        tool_cwd = string_at(raw, top.get(b"tool_cwd"))
+        if tool_cwd:
+            parts.append(b',"tool_cwd":' + tool_cwd)
+            cwd = tool_cwd
     if path_key:
         token = string_at(raw, members(s, top.get(b"tool_input")).get(path_key))
         if token is not None:
@@ -604,16 +627,23 @@ def _antigravity_fields(raw, event, parts):
     tool = string_at(raw, call.get(b"name"))         # toolCall's own name, never one in its args
     if tool is not None:
         parts.append(b',"tool_name":%s' % tool)
-    token = first_string(raw, top.get(AG_CWD))
-    if token is not None:
-        parts.append(b',"cwd":%s' % token)
+    roots = array_paths(raw, s, top.get(AG_CWD))
+    if roots:
+        parts.append(b',"cwd":' + json_string(roots[0]))
+    if len(roots) > 1:
+        parts.append(b',"workspace_paths":[' + b",".join(json_string(path) for path in roots) + b"]")
     token = string_at(raw, top.get(AG_TRANSCRIPT))
     if token is not None:
         parts.append(b',"transcript_path":%s' % token)
     keys = AG_EDIT_TOOLS.get(tool)
-    path = _args_path(raw, members(s, call.get(b"args")), keys) if keys else None
+    args = members(s, call.get(b"args"))
+    path = _args_path(raw, args, keys) if keys else None
     if path:
         parts.append(b',"file_path":' + json_string(path))
+    if tool == b'"run_command"':
+        directory = _args_path(raw, args, (b"Cwd", b"cwd"))
+        if directory:
+            parts.append(b',"tool_cwd":' + json_string(directory))
     return session
 
 
