@@ -18,6 +18,10 @@ Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestr
 - Agent connections: `orch init`, `orch doctor`, `orch status` (when no session is live) and the dashboard (Settings, the empty pages, and Home when something needs attention) say for each agent whether its hooks are set up, whether an event from it has reached a project yet, and why one could not be placed: the project isn't watched or is excluded, git failed, or the folder is too large to follow. Codex runs no hook until you review and trust it (`/hooks`), which shows as waiting for a first event. For this the record keeps one receipt per agent: the time of its last event and a reason, never a session id, path or payload.
 - The ordinary-day check before each release also runs the installed Codex and Antigravity hook commands, and checks that a note reaches each in the form it reads.
 
+### Changed
+
+- `orch ui`'s dark theme is black, with the brand's red for accents, instead of wine red.
+
 ## 0.1.4 (22 November 2026)
 
 Upgrades need no extra step from now on: the background process gives way to a newer version by itself, and the dashboard says when anything still runs an earlier one. In `orch ui`, Refresh now says what it found, and the buttons have a new shape. An ordinary-day check now runs before every release.

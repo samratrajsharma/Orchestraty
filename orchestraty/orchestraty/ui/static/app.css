@@ -1,5 +1,5 @@
-/* orch ui, in the Orchestraty design system: Paper by default, Wine when the system asks for it or
-   the user picks it. One typeface in one weight, so size and colour carry the hierarchy. Signal
+/* orch ui, in the Orchestraty design system: Paper by default, Night (black, with the brand's red
+   for accents) when the system asks for it or the user picks it. One typeface in one weight, so size and colour carry the hierarchy. Signal
    colours mean strength or resolved and nothing else. Flat: hairlines divide, only floats lift.
    Doppio One ships with the page; nothing is fetched from anywhere else. */
 @font-face {
@@ -30,32 +30,32 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #38000A; --raised: #4A0B16; --sunken: #2A0007;
-    --line: rgba(255, 243, 240, .16); --line-strong: rgba(255, 243, 240, .34);
-    --ink: #FFF3F0; --muted: #E3B7AF;
-    --accent: #FFA896; --on-accent: #38000A; --accent-hover: #FFF3F0; --focus: #FFA896;
-    --inverse: #FFF3F0; --on-inverse: #38000A; --accent-inverse: #CD1C18;
-    --signal-strong: #FF7272; --signal-medium: #F0B44C; --signal-weak: #A3A9B1;
+    --paper: #0E0E10; --raised: #18181B; --sunken: #08080A;
+    --line: rgba(255, 255, 255, .12); --line-strong: rgba(255, 255, 255, .28);
+    --ink: #F4F4F5; --muted: #A1A1AA;
+    --accent: #D7261F; --on-accent: #FFFFFF; --accent-hover: #B01712; --focus: #FF5A54;
+    --inverse: #F4F4F5; --on-inverse: #0E0E10; --accent-inverse: #CD1C18;
+    --signal-strong: #FF6B6B; --signal-medium: #F0B44C; --signal-weak: #A1A1AA;
     --signal-ok: #55C893; --signal-ok-soft: rgba(85, 200, 147, .14);
-    --terminal: #1F0005;
+    --terminal: #050506; --on-terminal: #F4F4F5; --terminal-dim: #A1A1AA; --terminal-accent: #FF6B66;
     --slate: #A9BCD3;
-    --shadow-lift: 0 20px 60px rgba(0, 0, 0, .55);
-    --scrim: rgba(0, 0, 0, .5);
+    --shadow-lift: 0 20px 60px rgba(0, 0, 0, .7);
+    --scrim: rgba(0, 0, 0, .6);
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --paper: #38000A; --raised: #4A0B16; --sunken: #2A0007;
-  --line: rgba(255, 243, 240, .16); --line-strong: rgba(255, 243, 240, .34);
-  --ink: #FFF3F0; --muted: #E3B7AF;
-  --accent: #FFA896; --on-accent: #38000A; --accent-hover: #FFF3F0; --focus: #FFA896;
-  --inverse: #FFF3F0; --on-inverse: #38000A; --accent-inverse: #CD1C18;
-  --signal-strong: #FF7272; --signal-medium: #F0B44C; --signal-weak: #A3A9B1;
+  --paper: #0E0E10; --raised: #18181B; --sunken: #08080A;
+  --line: rgba(255, 255, 255, .12); --line-strong: rgba(255, 255, 255, .28);
+  --ink: #F4F4F5; --muted: #A1A1AA;
+  --accent: #D7261F; --on-accent: #FFFFFF; --accent-hover: #B01712; --focus: #FF5A54;
+  --inverse: #F4F4F5; --on-inverse: #0E0E10; --accent-inverse: #CD1C18;
+  --signal-strong: #FF6B6B; --signal-medium: #F0B44C; --signal-weak: #A1A1AA;
   --signal-ok: #55C893; --signal-ok-soft: rgba(85, 200, 147, .14);
-  --terminal: #1F0005;
+  --terminal: #050506; --on-terminal: #F4F4F5; --terminal-dim: #A1A1AA; --terminal-accent: #FF6B66;
   --slate: #A9BCD3;
-  --shadow-lift: 0 20px 60px rgba(0, 0, 0, .55);
-  --scrim: rgba(0, 0, 0, .5);
+  --shadow-lift: 0 20px 60px rgba(0, 0, 0, .7);
+  --scrim: rgba(0, 0, 0, .6);
   color-scheme: dark;
 }
 
