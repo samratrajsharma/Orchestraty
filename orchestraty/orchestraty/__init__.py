@@ -5,7 +5,7 @@ chain), the coordinator, the live map, the overlap rules, delivery, the adapters
 agent and the dashboard (ui).
 """
 
-__version__ = "0.1.4"        # the one place the version is kept (pyproject.toml reads it)
+__version__ = "0.1.5"        # the one place the version is kept (pyproject.toml reads it)
 
 
 def installed_version():

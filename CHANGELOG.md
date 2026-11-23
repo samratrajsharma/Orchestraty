@@ -2,7 +2,11 @@
 
 Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestraty`.
 
-## Unreleased
+## 0.1.5 (23 November 2026)
+
+Every agent's sessions land in the project they work in, and you can see whether each agent is connected. A session that starts in a folder holding a git repository moves to that repository at its first edit there, Antigravity's current edits are read, and a git failure is reported instead of hidden. `orch init --agent all` sets up Claude Code, Codex and Antigravity together, and `orch ui`'s dark theme is black with red accents.
+
+After upgrading, run `orch init --agent all` once (or `orch init` for Claude Code alone): the hook script changed. Then, in Codex, review and trust Orchestraty's hooks with `/hooks`; Codex runs none until you do. The background process restarts by itself.
 
 ### Fixed
 
