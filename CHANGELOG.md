@@ -4,19 +4,8 @@ Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestr
 
 ## Unreleased
 
-### Fixed
-
-- A session that started in a plain folder and then edited a git repository below it stayed with the folder, whose snapshot also took in the repository's files, so the repository never showed it. It now moves to that repository at its first edit there, as a session already moved to another worktree of its own repository; its claims and declarations in the folder end. A folder's snapshot leaves out git checkouts inside it.
-- Antigravity's write_file and edit_file name their file as `Path` in its current version, so those edits were missed; `Path` is read beside the earlier fields.
-- With several workspace folders open in Antigravity, the session went to the first. It now goes to the one that is a watched git repository, and a shell command's folder (`Cwd`) helps place it.
-- Codex's apply_patch paths are read against the tool's own folder when the event gives one.
-- When git is missing or fails on a checkout, Orchestraty says so (`orch watch`, `orch doctor`, the dashboard) instead of following the checkout as a plain folder. A folder without git is still followed with no git installed.
-
 ### Added
 
-- `orch init --agent all` sets up Claude Code, Codex and Antigravity together.
-- Agent connections: `orch init`, `orch doctor`, `orch status` (when no session is live) and the dashboard (Settings, the empty pages, and Home when something needs attention) say for each agent whether its hooks are set up, whether an event from it has reached a project yet, and why one could not be placed: the project isn't watched or is excluded, git failed, or the folder is too large to follow. Codex runs no hook until you review and trust it (`/hooks`), which shows as waiting for a first event. For this the record keeps one receipt per agent: the time of its last event and a reason, never a session id, path or payload.
-- The ordinary-day check before each release also runs the installed Codex and Antigravity hook commands, and checks that a note reaches each in the form it reads.
 - `orch team`: team sync's first half, for a repository whose remote has a team policy (`.orchestraty/policy.yml`) and people file (`.orchestraty/people.yml`). `orch team init` prints both to start from and `orch team check` reads them; `orch team on` reads the copy in force on the remote's default branch (asking first, since it is a fetch), shows what would be shared, where and when, and asks; a policy that later allows more waits until you agree again. `orch team preview` shows the exact record this machine would send, and what was withheld from it; `orch team task` gives a session a ticket or a task line you confirm; `whoami`, `device` and `off` do the rest. Off by default: a solo user sees nothing new.
 - Team sync shares through git. Right after your own successful push to the team remote (git's reflog says when, so no hook is needed and a push git refused sends nothing), the coordinator pushes this device's record to `refs/orchestraty/<you>/<device>`, as a commit in its own shadow repository and with a lease, so it replaces only what this device last saw there; a record with nothing new is not sent. Teammates' records are fetched every two minutes while the coordinator runs (and at its start, and after its own push), with the branches they name, and go through the incoming gate. A failed fetch keeps what was read and waits longer each time, up to an hour. A copied state folder is found when both copies push: `orch team device --new` gives one its own device. While team sync is on somewhere, git's pre-push hook line names the remote and starts the coordinator; run `orch init` again to update the installed hook script.
 - With `share.unpushed: true` in the policy, a session whose branch is not on the team remote shares its committed work: the files and Python functions changed from its base to its last commit, read from the commits. What is not committed is never shared. A branch's place on the team remote is where `git push` sends it: a branch made from `origin/main`, which tracks `main`, is not taken as pushed there.
@@ -32,9 +21,32 @@ Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestr
 
 ### Changed
 
-- `orch ui`'s dark theme is black, with the brand's red for accents, instead of wine red.
 - The record becomes schema 6 when the coordinator opens it. Schema 6 only adds tables, for teammates' work read through git and the task lines you confirm with `orch team task` (only those are written in this version), and every row a 0.1.1 record holds stays as it was. After that, 0.1.x refuses the record with its "newer Orchestraty" message; to go back, move the record aside, with its `-wal` and `-shm` files. `orch events` knows three new kinds for those records: `team_sent`, `team_withheld` and `team_dropped`.
 - The coordinator drops a declaration for a cloud agent's branch, as it already dropped a claim for one: nobody works in that branch here, so there is nothing to declare.
+
+## 0.1.5 (23 November 2026)
+
+Every agent's sessions land in the project they work in, and you can see whether each agent is connected. A session that starts in a folder holding a git repository moves to that repository at its first edit there, Antigravity's current edits are read, and a git failure is reported instead of hidden. `orch init --agent all` sets up Claude Code, Codex and Antigravity together, and `orch ui`'s dark theme is black with red accents.
+
+After upgrading, run `orch init --agent all` once (or `orch init` for Claude Code alone): the hook script changed. Then, in Codex, review and trust Orchestraty's hooks with `/hooks`; Codex runs none until you do. The background process restarts by itself.
+
+### Fixed
+
+- A session that started in a plain folder and then edited a git repository below it stayed with the folder, whose snapshot also took in the repository's files, so the repository never showed it. It now moves to that repository at its first edit there, as a session already moved to another worktree of its own repository; its claims and declarations in the folder end. A folder's snapshot leaves out git checkouts inside it.
+- Antigravity's write_file and edit_file name their file as `Path` in its current version, so those edits were missed; `Path` is read beside the earlier fields.
+- With several workspace folders open in Antigravity, the session went to the first. It now goes to the one that is a watched git repository, and a shell command's folder (`Cwd`) helps place it.
+- Codex's apply_patch paths are read against the tool's own folder when the event gives one.
+- When git is missing or fails on a checkout, Orchestraty says so (`orch watch`, `orch doctor`, the dashboard) instead of following the checkout as a plain folder. A folder without git is still followed with no git installed.
+
+### Added
+
+- `orch init --agent all` sets up Claude Code, Codex and Antigravity together.
+- Agent connections: `orch init`, `orch doctor`, `orch status` (when no session is live) and the dashboard (Settings, the empty pages, and Home when something needs attention) say for each agent whether its hooks are set up, whether an event from it has reached a project yet, and why one could not be placed: the project isn't watched or is excluded, git failed, or the folder is too large to follow. Codex runs no hook until you review and trust it (`/hooks`), which shows as waiting for a first event. For this the record keeps one receipt per agent: the time of its last event and a reason, never a session id, path or payload.
+- The ordinary-day check before each release also runs the installed Codex and Antigravity hook commands, and checks that a note reaches each in the form it reads.
+
+### Changed
+
+- `orch ui`'s dark theme is black, with the brand's red for accents, instead of wine red.
 
 ## 0.1.4 (22 November 2026)
 
