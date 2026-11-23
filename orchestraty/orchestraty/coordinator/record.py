@@ -537,6 +537,12 @@ class Record:
                                                  "WHERE expires > ? AND expires <= ? ORDER BY expires, id",
                                                  (after, until))]
 
+    def leave_project(self, session_id, ts):
+        """Expire project-relative declarations and end claims when a session switches repositories."""
+        self.db.execute("UPDATE declarations SET expires = MAX(ts, ?) WHERE session_id = ? AND expires > ?",
+                        (ts, session_id, ts))
+        self._end_claims_of(session_id, ts, why="session changed project")
+
     # what sessions have reserved (schema 4)
     def add_claim(self, repo_id, session_id, kind, target, file, hard, ts, expires):
         """Store a claim; returns its id."""
@@ -556,7 +562,7 @@ class Record:
         self._log(ts, "claim_ended", session_id=row["session_id"], ref=claim_id)
         return True
 
-    def _end_claims_of(self, session_id, ts):
+    def _end_claims_of(self, session_id, ts, why="session ended"):
         """End the claims of a session that ended at `ts`: those that had not expired by then,
         each at `ts` or, for one made after the session's last event, when it was made."""
         if not self.has_table("claims"):
@@ -565,7 +571,7 @@ class Record:
                                "ORDER BY id", (session_id, ts)).fetchall()
         for row in rows:
             when = max(ts, row["ts"])
-            self.db.execute("UPDATE claims SET ended = ?, why = 'session ended' WHERE id = ?", (when, row["id"]))
+            self.db.execute("UPDATE claims SET ended = ?, why = ? WHERE id = ?", (when, why, row["id"]))
             self._log(when, "claim_ended", session_id=session_id, ref=row["id"])
 
     def expire_claims(self, ts):

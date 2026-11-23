@@ -60,7 +60,8 @@ def _object(state_root, blob):
 def _skip_dir(name, path):
     if name in SKIP_DIRS or name.endswith(".egg-info"):
         return True
-    return os.path.exists(os.path.join(path, "pyvenv.cfg"))          # a virtual environment, by any name
+    return (os.path.exists(os.path.join(path, "pyvenv.cfg"))          # a virtual environment, by any name
+            or os.path.lexists(os.path.join(path, ".git")))           # a nested checkout is its own project
 
 
 def walk(folder):
@@ -160,7 +161,19 @@ def changed_files(state_root, folder, base):
     as git's changed_files gives them for a commit."""
     then, now = manifest(state_root, folder, base), current(state_root, folder)
     out = {p: "A" if p not in then else "M" for p, b in now.items() if then.get(p) != b}
-    out.update({p: "D" for p in then if p not in now})
+    nested = {"": False}
+    for path in then.keys() - now.keys():
+        parent = path.rpartition("/")[0]
+        unchecked = []
+        while parent not in nested:
+            unchecked.append(parent)
+            parent = parent.rpartition("/")[0]
+        in_checkout = nested[parent]
+        for parent in reversed(unchecked):
+            in_checkout = in_checkout or os.path.lexists(os.path.join(folder, *parent.split("/"), ".git"))
+            nested[parent] = in_checkout
+        if not in_checkout:
+            out[path] = "D"
     return out
 
 

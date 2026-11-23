@@ -92,7 +92,7 @@ def _worktree(folder):
         folder = parent
     try:
         return gitio.worktree_info(folder)
-    except gitio.UntrustedRepositoryError:
+    except (gitio.GitError, gitio.UntrustedRepositoryError):
         return None
 
 

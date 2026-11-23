@@ -6,7 +6,7 @@ import os
 import pytest
 
 from helpers import spool_event, tree
-from orchestraty import cli, config, status
+from orchestraty import cli, config, connections, gitio, status
 from orchestraty.coordinator import main as cmain
 from orchestraty.livemap import snapshots
 from orchestraty.paths import State
@@ -122,6 +122,108 @@ def test_an_excluded_project_is_not_followed(state, folder, coordinator):
     c = coordinator()
     c.step()
     assert c.record.sessions() == []
+
+
+def test_a_session_leaves_its_plain_parent_when_an_edit_targets_a_nested_repository(state, folder, git, coordinator):
+    project = folder / "checkout"
+    project.mkdir()
+    git(project, "init", "-q")
+    path = project / "code.py"
+    path.write_text(ORIGINAL, encoding="utf-8")
+    git(project, "add", "code.py")
+    git(project, "commit", "-qm", "base")
+    config.set_watch_all(state, True)
+    spool_event(state.root, "move", "SessionStart", folder, agent="codex")
+    c = coordinator()
+    c.step()
+    first = c.record.session("move")
+    assert same(first["worktree"], folder) and first["base_commit"].startswith("snap:")
+    assert "checkout/code.py" not in snapshots.manifest(state.root, str(folder), first["base_commit"])
+    c.record.add_claim(first["repo_id"], "move", "file", "a.py", "a.py", False, 1, 8 * 10**18)
+    c.record.add_declaration("move", ["a.py"], [], "", 1, 8 * 10**18)
+    path.write_text(BROKEN, encoding="utf-8")
+    spool_event(state.root, "move", "PostToolUse", folder, agent="codex", tool_name="apply_patch", file_path=str(path))
+    spool_event(state.root, "move", "Stop", folder, agent="codex")
+    c.step()
+    moved = c.record.session("move")
+    assert moved["repo_id"] != first["repo_id"] and same(moved["worktree"], project)
+    assert moved["branch"] == "main" and moved["base_guessed"] and moved["turn"] == "idle"
+    assert c.record.changes("move")[0] == {"code.py": "M"}
+    assert c.record.claims(repo_id=first["repo_id"])[0]["why"] == "session changed project"
+    assert c.record.declarations(active_at=c.now_ns()) == []
+    assert [r["kind"] for r in status.collect(state)["repositories"]] == ["git"]
+
+
+def test_antigravity_workspace_roots_and_shell_directory_identify_the_right_worktree(state, repo, folder, git,
+                                                                                           tmp_path, coordinator):
+    other = tmp_path / "other worktree"
+    git(repo, "worktree", "add", "-q", "-b", "other", str(other))
+    config.set_watch_all(state, True)
+    roots = [str(folder), str(repo), str(other)]
+    spool_event(state.root, "multi", "SessionStart", folder, agent="antigravity", workspace_paths=roots)
+    c = coordinator()
+    c.step()
+    first = c.record.session("multi")
+    assert same(first["worktree"], repo)
+    spool_event(state.root, "multi", "PostToolUse", folder, agent="antigravity", tool_name="run_command",
+                workspace_paths=roots, tool_cwd=str(other))
+    spool_event(state.root, "multi", "PreInvocation", folder, agent="antigravity", workspace_paths=roots)
+    c.step()
+    moved = c.record.session("multi")
+    assert moved["repo_id"] == first["repo_id"] and same(moved["worktree"], other) and moved["branch"] == "other"
+
+
+def test_a_failed_git_probe_reports_the_received_event_and_recovers_on_the_next_one(state, repo, coordinator,
+                                                                                   monkeypatch, capsys):
+    assert cli.main(["init", "--agent", "codex", "--yes", "--no-git-hooks"]) == 0
+    capsys.readouterr()
+    run = gitio.run
+
+    def failing(*args, **kwargs):
+        raise gitio.GitError("git rev-parse: FileNotFoundError") from FileNotFoundError("git")
+
+    monkeypatch.setattr(gitio, "run", failing)
+    monkeypatch.setattr(gitio, "missing", lambda: False)            # git is installed, and fails
+    assert cli.main(["watch", str(repo)]) == 2
+    assert "Could not inspect Git worktree" in capsys.readouterr().err
+    assert config.load(state)["repos"] == []
+    spool_event(state.root, "retry", "SessionStart", repo, agent="codex")
+    c = coordinator()
+    c.step()
+    assert c.record.session("retry") is None
+    row = next(row for row in connections.summary(state) if row["agent"] == "codex")
+    assert row["status"] == "event_issue" and "Git could not inspect" in row["message"]
+    monkeypatch.setattr(gitio, "run", run)
+    spool_event(state.root, "retry", "UserPromptSubmit", repo, agent="codex")
+    c.step()
+    assert same(c.record.session("retry")["worktree"], repo)
+    row = next(row for row in connections.summary(state) if row["agent"] == "codex")
+    assert row["status"] == "event_received"
+
+
+def test_with_no_git_on_the_path_a_checkout_is_followed_as_a_folder(state, repo, coordinator, monkeypatch, capsys):
+    assert cli.main(["init", "--agent", "codex", "--yes", "--no-git-hooks"]) == 0
+
+    def no_git(*args, **kwargs):
+        raise gitio.GitError("git rev-parse: FileNotFoundError") from FileNotFoundError("git")
+
+    monkeypatch.setattr(gitio, "run", no_git)
+    monkeypatch.setattr(gitio, "missing", lambda: True)             # GitHub Desktop keeps its git off the PATH
+    assert cli.main(["watch", str(repo)]) == 0
+    assert "followed as a folder" in capsys.readouterr().err
+    config.set_watch_all(state, True)
+    spool_event(state.root, "nogit", "SessionStart", repo, agent="codex")
+    c = coordinator()
+    c.step()
+    s = c.record.session("nogit")
+    assert same(s["worktree"], repo) and s["base_commit"].startswith("snap:")
+    (repo / "a.py").write_text(BROKEN, encoding="utf-8")
+    spool_event(state.root, "nogit", "PostToolUse", repo, agent="codex", tool_name="apply_patch",
+                file_path=str(repo / "a.py"))
+    c.step()
+    assert c.record.changes("nogit")[0] == {"a.py": "M"} and same(c.record.session("nogit")["worktree"], repo)
+    row = next(row for row in connections.summary(state) if row["agent"] == "codex")
+    assert row["status"] == "event_received"
 
 
 def test_a_folder_project_has_its_changes_and_callers_left_behind(state, folder, coordinator):

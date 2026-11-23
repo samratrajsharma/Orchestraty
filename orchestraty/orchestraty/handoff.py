@@ -144,7 +144,7 @@ def pick_session(state, ref, cwd):
         return _session_ref(sessions, ref)
     try:
         info = gitio.worktree_info(cwd)
-    except gitio.UntrustedRepositoryError as exc:
+    except (gitio.GitError, gitio.UntrustedRepositoryError) as exc:
         raise Refused(str(exc)) from None
     if info is None:
         raise Refused(f"{cwd} is not inside a git worktree: run it in the session's worktree, or pass --session")

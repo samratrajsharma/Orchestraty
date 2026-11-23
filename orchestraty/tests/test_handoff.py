@@ -3,6 +3,8 @@ agent started on it in a new worktree only after the user agrees."""
 import io
 import json
 import os
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -159,12 +161,13 @@ def test_resume_says_what_will_run_and_does_nothing_without_consent(state, two, 
     packet_id = made_packet(state, capsys, monkeypatch, wa)
     head = git(wa, "rev-parse", "HEAD")
     target = tmp_path / f"wt-a-{packet_id}"
+    shown_target = subprocess.list2cmdline([str(target)]) if os.name == "nt" else shlex.quote(str(target))
     monkeypatch.setattr(resume, "which", lambda name: f"/opt/bin/{name}")
     for agent, shown in (("claude", "/opt/bin/claude <the packet: "), ("codex", "/opt/bin/codex <the packet: "),
                          ("antigravity", "/opt/bin/agy --prompt-interactive <the packet: ")):
         assert cli.main(["resume", packet_id, "--agent", agent, "--dry-run"]) == 0
         out = capsys.readouterr().out
-        assert f"git worktree add -b feat-a-{packet_id} {target} {head}" in out, out
+        assert f"git worktree add -b feat-a-{packet_id} {shown_target} {head}" in out, out
         assert shown in out and "keeps its own permissions and model settings" in out
     assert cli.main(["resume", packet_id, "--agent", "my-agent --fast", "--dry-run"]) == 0
     out = capsys.readouterr().out

@@ -6,14 +6,14 @@ feature at a time. CI and the release workflow run it beside the smoke test, on 
 In a temporary folder, with its own home folder, agents' config folders and state folder:
 
 1. a clean virtual environment, with the wheel installed (no network);
-2. orch init --yes, run from a folder that is no project: one init for the computer, every project
-   followed;
+2. orch init --agent all --yes from a folder outside any project: install the three adapters and
+   follow the projects they work in;
 3. a git repository with many worktrees (as the Claude desktop app keeps them), and a project
    folder without git;
-4. four sessions start: in the repository, in two of its worktrees and in the folder. Each shows
-   in orch status within SHOW_SECONDS;
-5. in the folder, a session breaks a function that another file calls: the caller left behind is
-   found within FIND_SECONDS, and nothing is written into the folder;
+4. four scripted sessions start through the installed commands: Claude Code in the repository and
+   the folder, Codex and Antigravity in separate worktrees;
+5. a breaking edit is detected in the folder, and cross-worktree notes reach the Codex and
+   Antigravity hook responses in the forms those agents consume;
 6. orch ui serves; a second orch ui, from another folder, opens the one already running;
 7. an upgrade while the sessions run: the installed package's version changes, and the running
    coordinator gives way to the new one within UPGRADE_SECONDS, with no command run.
@@ -84,13 +84,38 @@ def read_link(proc, seconds=60.0):
     raise SmokeError("orch ui printed no link")
 
 
+def agent_event(env, agent, sid, cwd, event, **fields):
+    """Invoke the packaged adapter's installed command, with its harness's wire payload."""
+    if agent == "codex":
+        path = os.path.join(env["CODEX_HOME"], "hooks.json")
+        payload = dict(session_id=sid, cwd=cwd, hook_event_name=event, **fields)
+    else:
+        path = os.path.join(env["USERPROFILE"], ".gemini", "config", "hooks.json")
+        payload = dict(conversationId=sid, workspacePaths=[cwd], **fields)
+    with open(path, encoding="utf-8") as fh:
+        block = json.load(fh)["hooks" if agent == "codex" else "orchestraty"][event][0]
+    command = (block.get("hooks", [block])[0])["command"]
+    data = json.dumps(payload).encode("utf-8")
+    if os.name == "nt" and command.startswith("& "):
+        proc = run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command], env,
+                   cwd=cwd, data=data, timeout=30)
+    else:
+        proc = subprocess.run(command, shell=True, cwd=cwd, env=env, input=data, capture_output=True, timeout=30,
+                              creationflags=smoke.NO_WINDOW)
+    if proc.returncode or proc.stderr:
+        raise SmokeError(f"{agent} {event} did not run cleanly: {proc.stderr.decode('utf-8', 'replace')}")
+    return json.loads(proc.stdout) if proc.stdout.strip() else {}
+
+
 def day(orch, python, folder, env, steps):
     desk = os.path.join(folder, "desk")
     os.makedirs(desk)
-    with steps("orch init --yes, from a folder that is no project"):
-        out = run(orch + ["init", "--yes", "--no-git-hooks"], env, cwd=desk).stdout.decode("utf-8")
+    with steps("orch init --agent all --yes, from a folder that is no project"):
+        out = run(orch + ["init", "--agent", "all", "--yes", "--no-git-hooks"], env, cwd=desk).stdout.decode("utf-8")
         if "Following every project" not in out:
             raise SmokeError(f"orch init did not turn on following every project:\n{out}")
+        if out.count("[Waiting for first event]") != 3:
+            raise SmokeError("orch init did not report three installed integrations awaiting a first event")
         commands = hook_commands(os.path.join(env["CLAUDE_CONFIG_DIR"], "settings.json"))
     with steps(f"a git repository with {WORKTREES} worktrees, and a folder without git"):
         repo, wt_a, wt_b = make_repository(folder, env)
@@ -100,8 +125,8 @@ def day(orch, python, folder, env, steps):
         write(os.path.join(notes, "a.py"), A_PY)
         write(os.path.join(notes, "b.py"), B_PY)
         before = listing(notes)
-    people = [Session("day-repo", repo, commands, env), Session("day-a", wt_a, commands, env),
-              Session("day-b", wt_b, commands, env), Session("day-notes", notes, commands, env)]
+    people = [Session("day-repo", repo, commands, env), Session("day-notes", notes, commands, env)]
+    other_agents = [("codex", "day-a", wt_a), ("antigravity", "day-b", wt_b)]
     try:
         with steps(f"four sessions start, each shown within {SHOW_SECONDS:.0f} s"):
             for s in people:
@@ -109,14 +134,20 @@ def day(orch, python, folder, env, steps):
                 s.start()
                 wait(f"session {s.sid} in orch status", SHOW_SECONDS, lambda: s.sid in sessions_shown(status(orch, env)))
                 steps.say(f"     {s.sid} shown after {time.monotonic() - started:.1f} s")
+            for agent, sid, top in other_agents:
+                agent_event(env, agent, sid, top, "SessionStart")
+                def registered():
+                    return any(s["id"] == sid and s["agent"] == agent and s["branch"] == f"smoke-{sid[-1]}"
+                               for r in status(orch, env)["repositories"] for s in r["sessions"])
+                wait(f"{agent} {sid} in its own worktree", SHOW_SECONDS, registered)
             kinds = {name: kind for name, kind in sessions_shown(status(orch, env)).values()}
             if kinds != {"repo": "git", "notes": "folder"}:
                 raise SmokeError(f"the projects shown are {kinds}")
         with steps("the folder's caller left behind is found, and the folder is left as it was"):
             a_py = os.path.join(notes, "a.py")
-            people[3].before_edit(a_py)
+            people[1].before_edit(a_py)
             write(a_py, A_PY_KEYWORD_ONLY)
-            people[3].after_edit(a_py)
+            people[1].after_edit(a_py)
 
             def left_behind():
                 for r in status(orch, env)["repositories"]:
@@ -127,6 +158,31 @@ def day(orch, python, folder, env, steps):
             steps.say("     " + found[0].get("summary", found[0].get("rule", "")))
             if listing(notes) != before:
                 raise SmokeError(f"files were added to the folder: {sorted(set(listing(notes)) - set(before))}")
+        with steps("one Claude Code edit produces notes delivered to Codex and Antigravity"):
+            for agent, sid, top in other_agents:
+                use = os.path.join(top, "use.py")
+                write(use, "from a import charge\n\ndef use():\n    return charge(2, 'USD')\n")
+                if agent == "codex":
+                    agent_event(env, agent, sid, top, "PostToolUse", tool_name="apply_patch",
+                                tool_input={"command": "*** Begin Patch\n*** Add File: use.py\n*** End Patch\n"})
+                else:
+                    agent_event(env, agent, sid, top, "PostToolUse",
+                                toolCall={"name": "write_file", "args": {"Path": use}})
+            a_py = os.path.join(repo, "a.py")
+            people[0].before_edit(a_py)
+            write(a_py, A_PY_KEYWORD_ONLY)
+            people[0].after_edit(a_py)
+            for agent, sid, top in other_agents:
+                note = os.path.join(env["ORCH_HOME"], "notes", sid, "next.json")
+                wait(f"coordination note for {agent}", FIND_SECONDS, lambda: os.path.isfile(note))
+                if agent == "codex":
+                    response = agent_event(env, agent, sid, top, "PostToolUse", tool_name="Bash")
+                    message = response.get("hookSpecificOutput", {}).get("additionalContext", "")
+                else:
+                    response = agent_event(env, agent, sid, top, "PreInvocation")
+                    message = (response.get("injectSteps") or [{}])[0].get("ephemeralMessage", "")
+                if "charge" not in message or "use.py" not in message:
+                    raise SmokeError(f"{agent} did not get the charge contract note for use.py: {response}")
         with steps("orch ui serves, and a second orch ui opens the one running"):
             ui = subprocess.Popen([str(a) for a in orch + ["ui", "--no-browser"]], env=env, cwd=desk,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -156,6 +212,7 @@ def day(orch, python, folder, env, steps):
             steps.say(f"     {old} gave way to {new}")
         for s in people:
             s.end()
+        agent_event(env, "codex", "day-a", wt_a, "SessionEnd")
     finally:
         run(orch + ["coordinator", "stop"], env, check=False, timeout=120)
 

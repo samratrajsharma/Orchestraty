@@ -42,7 +42,7 @@ import tempfile
 import time
 from collections import namedtuple
 
-from orchestraty import __version__, config, plugin
+from orchestraty import __version__, config, connections, plugin
 from orchestraty.adapters import claude
 from orchestraty.capture import hook
 from orchestraty.capture import install as hooks
@@ -232,13 +232,11 @@ def _agents(state, cfg):
         wanted = dict(current)
         wanted["hooks"] = claude.merged_settings(current, python, script, cfg["wake"])["hooks"]
         return wanted
-    return [
-        (claude.TITLE, cfg["settings"] or claude.settings_path(), "orch init", claude, claude_wanted),
-        (codex.TITLE, codex.config_path(), "orch init --agent codex", codex,
-         lambda current: codex.merged(current, python, script)),
-        (antigravity.TITLE, antigravity.config_path(), "orch init --agent antigravity", antigravity,
-         lambda current: antigravity.merged(current, python, script)),
-    ]
+    wanted = {claude.NAME: claude_wanted, codex.NAME: lambda current: codex.merged(current, python, script),
+              antigravity.NAME: lambda current: antigravity.merged(current, python, script)}
+    for adapter, paths, how in connections.targets(cfg):
+        for path in paths:
+            yield adapter.TITLE, path, "orch init" if adapter == claude else how, adapter, wanted[adapter.NAME]
 
 
 def _canonical(value):
@@ -524,7 +522,10 @@ def engine_check():
 def index_check(cwd, say=None):
     """The time the engine takes to index this repository's HEAD from nothing."""
     from orchestraty import gitio
-    info = gitio.worktree_info(cwd)
+    try:
+        info = gitio.worktree_info(cwd)
+    except (gitio.GitError, gitio.UntrustedRepositoryError) as exc:
+        return problem(f"first index: {exc}", "check git status and Git availability in this environment")
     if not info:
         return note("first index: not in a git repository; run orch doctor in one to time its first index")
     if not info["head"]:
@@ -561,6 +562,11 @@ def checks(state, cwd, index=True, say=None):
     yield record_check(state)
     yield hook_script_check(state)
     yield from agent_checks(state, cfg)
+    for row in connections.summary(state, cfg):
+        if row["status"] in ("waiting", "event_issue"):
+            yield note(f"{row['name']}: {connections.LABELS[row['status']]}. {row['message']}")
+        elif row["status"] == "event_received":
+            yield ok(f"{row['name']}: received an event for a watched project at {row['last_event']}")
     yield coordinator_check(state)
     yield git_check()
     hooks_line = git_hooks_check(cwd)
