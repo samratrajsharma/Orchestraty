@@ -2,6 +2,22 @@
 
 Notable changes to Orchestraty. The first release is 0.1.0, on PyPI as `orchestraty`.
 
+## Unreleased
+
+### Fixed
+
+- A session that started in a plain folder and then edited a git repository below it stayed with the folder, whose snapshot also took in the repository's files, so the repository never showed it. It now moves to that repository at its first edit there, as a session already moved to another worktree of its own repository; its claims and declarations in the folder end. A folder's snapshot leaves out git checkouts inside it.
+- Antigravity's write_file and edit_file name their file as `Path` in its current version, so those edits were missed; `Path` is read beside the earlier fields.
+- With several workspace folders open in Antigravity, the session went to the first. It now goes to the one that is a watched git repository, and a shell command's folder (`Cwd`) helps place it.
+- Codex's apply_patch paths are read against the tool's own folder when the event gives one.
+- When git is missing or fails on a checkout, Orchestraty says so (`orch watch`, `orch doctor`, the dashboard) instead of following the checkout as a plain folder. A folder without git is still followed with no git installed.
+
+### Added
+
+- `orch init --agent all` sets up Claude Code, Codex and Antigravity together.
+- Agent connections: `orch init`, `orch doctor`, `orch status` (when no session is live) and the dashboard (Settings, the empty pages, and Home when something needs attention) say for each agent whether its hooks are set up, whether an event from it has reached a project yet, and why one could not be placed: the project isn't watched or is excluded, git failed, or the folder is too large to follow. Codex runs no hook until you review and trust it (`/hooks`), which shows as waiting for a first event. For this the record keeps one receipt per agent: the time of its last event and a reason, never a session id, path or payload.
+- The ordinary-day check before each release also runs the installed Codex and Antigravity hook commands, and checks that a note reaches each in the form it reads.
+
 ## 0.1.4 (22 November 2026)
 
 Upgrades need no extra step from now on: the background process gives way to a newer version by itself, and the dashboard says when anything still runs an earlier one. In `orch ui`, Refresh now says what it found, and the buttons have a new shape. An ordinary-day check now runs before every release.
