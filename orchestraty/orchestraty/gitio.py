@@ -27,11 +27,16 @@ __all__ = ["GitError", "UntrustedRepositoryError", "remove_tree", "run", "worktr
 class GitError(Exception):
     """git failed, could not be started, or took too long."""
 
+    def __init__(self, message, *, stderr=""):
+        super().__init__(message)
+        self.stderr = stderr
+
 
 def _env(env):
     for name in INHERITED:
         env.pop(name, None)
     env["GIT_OPTIONAL_LOCKS"] = "0"             # never refresh the index: the agent may be using it
+    env["LC_ALL"] = "C"                         # classify Git's diagnostics independent of the user's locale
     return env
 
 
@@ -46,23 +51,61 @@ def run(args, cwd, timeout=TIMEOUT, text=True):
     stderr = proc.stderr.decode("utf-8", "replace")
     check_ownership(proc.returncode, stderr, cwd)
     if proc.returncode != 0:
-        raise GitError(f"git {args[0]} exited {proc.returncode}: {stderr.strip()[:300]}")
+        raise GitError(f"git {args[0]} exited {proc.returncode}: {stderr.strip()[:300]}", stderr=stderr)
     return proc.stdout.decode("utf-8", "replace") if text else proc.stdout
+
+
+def missing():
+    """True when no git is on this computer's PATH (GitHub Desktop, for one, keeps its own off it):
+    a checkout is then followed as a folder without git, and orch doctor says git is missing."""
+    return shutil.which("git") is None
+
+
+def _has_git_metadata(cwd):
+    """Find checkout markers in ancestors, including a linked worktree's .git file."""
+    folder = os.path.realpath(cwd)
+    while True:
+        try:
+            os.lstat(os.path.join(folder, ".git"))
+        except FileNotFoundError:
+            pass
+        else:
+            return True
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            return False
+        folder = parent
 
 
 def worktree_info(cwd):
     """{"top", "common_dir", "branch", "head"} for the worktree holding `cwd`, or None when
     `cwd` is not inside one. Paths are absolute and in this system's form; branch is "" when
-    HEAD is detached, head is "" on a branch with no commit yet."""
-    if not cwd or not os.path.isdir(cwd):
+    HEAD is detached, head is "" on a branch with no commit yet. A failed Git probe is
+    distinct from a directory outside Git. Plain folders also work without Git installed."""
+    if not cwd:
         return None
     try:
+        if not stat.S_ISDIR(os.stat(cwd).st_mode):
+            return None
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError as exc:
+        raise GitError(f"Could not access {cwd}: {exc}") from exc
+    try:
         out = run(["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"], cwd)
-    except GitError:
-        return None
+    except GitError as exc:
+        outside = any(line.startswith("fatal: not a git repository (")
+                      for line in exc.stderr.splitlines())
+        if outside or isinstance(exc.__cause__, FileNotFoundError):
+            try:
+                if not _has_git_metadata(cwd):
+                    return None
+            except OSError:
+                pass                          # cannot establish that the directory is outside Git
+        raise GitError(f"Could not inspect Git worktree at {cwd}: {exc}", stderr=exc.stderr) from exc
     lines = out.splitlines()
-    if len(lines) < 2 or not lines[0]:
-        return None
+    if len(lines) != 2 or not all(os.path.isabs(p) for p in lines):
+        raise GitError(f"Could not inspect Git worktree at {cwd}: unexpected git rev-parse output")
     try:
         branch = run(["symbolic-ref", "-q", "--short", "HEAD"], cwd).strip()
     except GitError:

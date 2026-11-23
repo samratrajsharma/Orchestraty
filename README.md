@@ -77,6 +77,8 @@ orch doctor     # checks everything, with a fix for each problem
 
 `orch init` adds Orchestraty's hooks, the status line and the pane to Claude Code's settings (backing the file up first), and offers the same for Codex and Antigravity when they are on the computer. It asks once whether to follow every project your agents work in, from then on: a git repository, or a folder without git, which Orchestraty follows through its own snapshots in its state folder, writing nothing into the project. Nothing needs running per project; `orch unwatch` in a project leaves it out, and `orch config track off` goes back to following only the projects you `orch watch`. Run in a git repository, it also offers the push line there: a git hook that adds one line to `git push` when callers of a function you changed are still on the old form.
 
+Use `orch init --agent all` to set up Claude Code, Codex, and Antigravity together. Review and approve the Codex hooks in its desktop hook settings or CLI `/hooks`. Open a new session in a checkout or project folder in each agent. The dashboard's Agent connections section updates after Orchestraty processes its first event, and shows what to check if the project could not be assigned.
+
 **3. See it before you rely on it.**
 
 ```bash

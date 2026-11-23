@@ -13,7 +13,7 @@ import statistics
 import time
 from contextlib import contextmanager
 
-from orchestraty import __version__, config, installed_version, sessionkinds, status
+from orchestraty import __version__, config, connections, installed_version, sessionkinds, status
 from orchestraty.coordinator.record import Record, repo_name
 from orchestraty.delivery import slots
 
@@ -172,6 +172,9 @@ def status_payload(state, include_ended=False, demo=False):
     """orch status --json as it is, plus what the page needs to know about the server."""
     data = status.collect(state, include_ended=include_ended, with_lines=True)     # the page is for the person
     data["ui"] = {"version": __version__, "installed": installed_version(), "demo": bool(demo)}
+    cfg = config.load(state)
+    data["connections"] = [] if demo else connections.summary(state, cfg)
+    data["tracking"] = {"all": cfg["watch_all"], "excluded": cfg["exclude"]}
     return data
 
 

@@ -22,6 +22,7 @@ changes. A missing or unreadable file means the defaults.
 * ``settings``: the Claude Code settings file ``orch init`` installed the hooks in.
 * ``installed``: every agent config file ``orch init`` wrote, ``{"agent": ..., "path": ...}``,
   so that ``orch uninstall`` finds them all, wherever they are.
+* ``install_updates``: when init last changed each agent's hook definition, for connection checks.
 * ``acted_minutes``: how long after its delivery a note can count as acted on in ``orch stats``
   (a proxy: the session edited a file the note cites, or its finding stopped holding).
 * ``declare_minutes``: how long what an agent declares it is about to change (the MCP tool
@@ -49,12 +50,13 @@ changes. A missing or unreadable file means the defaults.
 """
 import json
 import os
+import time
 
 DEFAULTS = {"repos": [], "idle_seconds": 600, "session_timeout": 1800, "level0_seconds": 5,
             "steer": False, "wake": False, "settings": "", "acted_minutes": 30,
             "declare_minutes": 120, "remote": {}, "remote_fetch_minutes": 5, "claim_minutes": 120, "together": {},
-            "typescript": {}, "installed": [], "team": {}, "team_fetch_minutes": 2, "team_stale_days": 14,
-            "team_idle_seconds": 60, "team_compact_commits": 100, "team_max_sessions": 50,
+            "typescript": {}, "installed": [], "install_updates": {}, "team": {}, "team_fetch_minutes": 2,
+            "team_stale_days": 14, "team_idle_seconds": 60, "team_compact_commits": 100, "team_max_sessions": 50,
             "watch_all": False, "exclude": []}
 
 
@@ -89,14 +91,38 @@ def save(state, cfg):
     os.replace(tmp, state.config)
 
 
-def remember_install(state, agent, path):
-    """Note that orch init wrote an agent's config file at `path` (once)."""
+def installed_paths(cfg, agent, default):
+    """Config targets recorded by init, with the normal user path as a fallback."""
+    paths = [default]
+    for entry in cfg["installed"]:
+        if isinstance(entry, dict) and entry.get("agent") == agent:
+            path = entry.get("path")
+            if isinstance(path, str) and os.path.isabs(path) and not any(_same(path, p) for p in paths):
+                paths.append(path)
+    return paths
+
+
+def remember_install(state, agent, path, changed=False):
+    """Record the target, and require a fresh hook event when the definition changed."""
     cfg = load(state)
     entry = {"agent": agent, "path": os.path.abspath(path)}
-    if any(isinstance(e, dict) and e.get("agent") == agent and isinstance(e.get("path"), str) and _same(e["path"], path)
-           for e in cfg["installed"]):
-        return
-    cfg["installed"] = cfg["installed"] + [entry]
+    installed = list(cfg["installed"])
+    for i, prior in enumerate(installed):
+        if (isinstance(prior, dict) and prior.get("agent") == agent and isinstance(prior.get("path"), str)
+                and _same(prior["path"], path)):
+            if not changed:
+                return
+            installed[i] = entry
+            break
+    else:
+        installed.append(entry)
+    cfg["installed"] = installed
+    updates = dict(cfg["install_updates"])
+    prior_updates = updates.get(agent)
+    latest = dict(prior_updates) if isinstance(prior_updates, dict) else {}
+    latest[os.path.normcase(entry["path"])] = time.time_ns()
+    updates[agent] = latest
+    cfg["install_updates"] = updates
     save(state, cfg)
 
 
@@ -122,16 +148,17 @@ def watched(cfg, known=()):
     return out
 
 
-def watch(state, common_dir):
-    """Watch a project (and take it out of ``exclude``); returns False when it was already
-    listed and not excluded."""
+def watch(state, common_dir, former_folder=None):
+    """Watch a project and remove the folder-only entry if its real Git checkout is now known."""
     cfg = load(state)
     listed = any(_same(r, common_dir) for r in cfg["repos"])
-    if listed and not is_excluded(cfg, common_dir):
+    old = former_folder if former_folder and not _same(former_folder, common_dir) else None
+    repos = [r for r in cfg["repos"] if not old or not _same(r, old)]
+    excluded = [r for r in cfg["exclude"] if not _same(r, common_dir) and (not old or not _same(r, old))]
+    if listed and repos == cfg["repos"] and excluded == cfg["exclude"]:
         return False
-    if not listed:
-        cfg["repos"] = cfg["repos"] + [os.path.normpath(common_dir)]
-    cfg["exclude"] = [r for r in cfg["exclude"] if not _same(r, common_dir)]
+    cfg["repos"] = repos if listed else repos + [os.path.normpath(common_dir)]
+    cfg["exclude"] = excluded
     save(state, cfg)
     return True
 

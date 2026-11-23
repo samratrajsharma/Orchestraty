@@ -388,6 +388,9 @@ def test_the_api_answers_with_a_schema(srv, state, tmp_path):
         assert out["schema"] == 1, path
     status = json.loads(ask(srv, "GET", "/api/status")[2])
     assert status["ui"] == {"version": cli.__version__, "installed": cli.__version__, "demo": False}
+    assert {row["agent"]: row["status"] for row in status["connections"]} == {
+        "claude": "not_configured", "codex": "not_configured", "antigravity": "not_configured"}
+    assert status["tracking"] == {"all": False, "excluded": []}
     assert [s["id"] for s in status["repositories"][0]["sessions"]] == ["A", "B"]
     assert json.loads(ask(srv, "GET", "/api/sessions/B")[2])["notes_received"][0]["text"] == "a note"
     assert json.loads(ask(srv, "GET", "/api/findings/O3%7Ca.py%3A%3Acharge%7CA%7CB%7Cc.py")[2])["finding"]["rule"] == "O3"

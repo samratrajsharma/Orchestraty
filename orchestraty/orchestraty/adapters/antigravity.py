@@ -11,11 +11,12 @@ Antigravity waits for that hook's answer before the tool runs. Not PostInvocatio
 needs it.
 
 What the hook script reads, all camelCase: ``conversationId`` is the session, the first of
-``workspacePaths`` its folder, ``transcriptPath`` its transcript (never read: Antigravity
+``workspacePaths`` its default folder, with the other roots kept for project routing.
+``transcriptPath`` names its transcript (never read: Antigravity
 deletes old ones, so nothing may depend on it). A tool event has ``toolCall`` with ``name`` and
 ``args``. Its edit tools come in two sets, write_to_file, replace_file_content and
 multi_replace_file_content, which name the file as ``TargetFile``, and write_file and edit_file,
-as ``file_path`` (or ``path``); a value may be a ``file://`` URI, which is made a path.
+as ``Path`` (also ``file_path`` or ``path`` for other versions). A ``file://`` URI is converted to a path.
 
 Notes, in the outputs its hooks give: with its next step, PreInvocation's ``injectSteps`` with
 the note as an ``ephemeralMessage`` (the model sees it on that call; it is not kept in the
@@ -53,8 +54,8 @@ CAPTURED = ("SessionStart", "PreInvocation", "PostToolUse", "Stop")
 READS = {"session_id": "conversationId", "cwd": "workspacePaths[0]", "transcript_path": "transcriptPath",
          "tool_name": "toolCall.name", "file_path": "toolCall.args (the edit tool's file field)"}
 EDIT_TOOLS = {"write_to_file": ("TargetFile",), "replace_file_content": ("TargetFile",),
-              "multi_replace_file_content": ("TargetFile",), "write_file": ("file_path", "path"),
-              "edit_file": ("file_path", "path")}
+              "multi_replace_file_content": ("TargetFile",), "write_file": ("Path", "file_path", "path"),
+              "edit_file": ("Path", "file_path", "path")}
 SLOTS = {"PreInvocation": "next", "Stop": "stop"}
 HEARS = ("next", "stop")
 QUIET = ("{}", {"PreToolUse": '{"decision":"allow"}'})      # (by default, {event: answer})

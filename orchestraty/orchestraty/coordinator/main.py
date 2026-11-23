@@ -41,7 +41,8 @@ import sqlite3
 import sys
 import time
 
-from orchestraty import __version__, claims, config, declarations, feedback, gitio, installed_version, remote, sessionkinds, together
+from orchestraty import (__version__, claims, config, connections, declarations, feedback, gitio, installed_version, remote,
+                         sessionkinds, together)
 from orchestraty.coordinator.cloud import CloudBranches, session_id as cloud_session_id
 from orchestraty.coordinator.lock import Heartbeat, Lock, touch
 from orchestraty.coordinator.record import Record, SchemaError, repo_key, repo_name
@@ -104,7 +105,6 @@ class Coordinator:
         self._tree_queue = []              # worktrees queued to be looked at (see look_at_trees)
         self._bases = {}                   # (worktree, head, main head) -> the merge base a new one starts from
         self._repo_paths = {}              # repository id -> a worktree of it, to list the others
-        self._stayed = set()               # (session id, folder): an edit there that is no move
         self.changed = set()               # sessions whose live map changed in the last step
         self.new_findings = []             # findings first seen in the last step
         self._dirty_repos = set()          # repositories whose findings must be worked out again
@@ -921,19 +921,24 @@ class Coordinator:
         if "shim_error" in line:
             self.record.add_event({"ts": ts, "agent": agent, "event": "shim_error"},
                                   {"error": str(line["shim_error"])[:64]})
+            connections.record_event(self.record, agent, ts, "hook_error")
             return
         sid = line.get("session_id")
         event = line.get("event") or line.get("hook_event_name") or ""
         if not isinstance(sid, str) or not sid or not isinstance(event, str):
+            connections.record_event(self.record, agent, ts, "invalid_event")
             return
         if not SESSION_ID.fullmatch(sid):           # an id is a name: as the hook names the session's spool file
             self.bad_lines += 1
+            connections.record_event(self.record, agent, ts, "invalid_event")
             return
-        session = self.session_for(sid, agent, line, event, ts)
+        session, issue = self.session_for(sid, agent, line, event, ts)
         if session is None:
+            connections.record_event(self.record, agent, ts, issue)
             return
-        if event == "PostToolUse" and session["state"] == "live":
-            self._follow(session, line)
+        if event != "SessionEnd":
+            issue = self._follow(session, line, event, ts)
+        connections.record_event(self.record, agent, ts, issue)
         row = {c: line.get(c) if isinstance(line.get(c), str) else None
                for c in ("session_id", "tool_name", "tool_use_id", "cwd", "file_path")}
         row.update(ts=ts, agent=agent, event=event)
@@ -1042,40 +1047,45 @@ class Coordinator:
         self._dirty_repos.add(repo_id)
         self._status_dirty = True
 
-    def _follow(self, session, line):
-        """A hooked session's edit landed in another worktree of its repository: the agent
-        works there now, so the session moves with it (new worktree, branch and base: that
-        worktree's HEAD, counted as guessed) and no longer counts in the folder it left. Its
-        waiting notes are taken back, and the worktree it left is looked at at once (with
-        changes and no hooked session, it is followed as plain git). Returns True on a move."""
-        path = line.get("file_path")
-        if session["agent"] == LEVEL0_AGENT or not isinstance(path, str) or not path:
-            return False
-        cwd = line.get("cwd") if isinstance(line.get("cwd"), str) else ""
-        path = os.path.normpath(os.path.join(cwd or session["worktree"], path))
-        folder = os.path.dirname(path)
-        if _inside(path, session["worktree"]) and not _nested(folder, session["worktree"]):
-            return False
-        if (session["id"], folder) in self._stayed:
-            return False
-        try:
-            info = gitio.worktree_info(folder)
-        except (gitio.GitError, gitio.UntrustedRepositoryError):
-            info = None
-        if (info is None or repo_key(info["common_dir"]) != self._repo_keys.get(session["repo_id"])
-                or not info["top"] or _same(info["top"], session["worktree"])):
-            self._stayed.add((session["id"], folder))
-            return False
+    def _follow(self, session, line, event, ts):
+        """Move to a watched worktree named by an edit, tool directory or changed session directory."""
+        if session["agent"] == LEVEL0_AGENT:
+            return None
+        cwd = _absolute(line.get("cwd"))
+        worktree = session["worktree"]
+        is_folder = snapshots.is_snapshot(session["base_commit"])
+        targets = _tool_folders(line, cwd) if event == "PostToolUse" else []
+        if cwd and (not _same(cwd, session["cwd"]) or event == "SessionStart" and is_folder):
+            targets.append(cwd)
+        issue = None
+        for folder in targets:
+            if (_inside(folder, worktree) and not _nested(folder, worktree)
+                    and not (is_folder and os.path.lexists(os.path.join(worktree, ".git")) and not gitio.missing())):
+                return None
+            why, _, info = self._judge(folder)
+            if info is not None:
+                self._move(session, info, cwd, ts)
+                return None
+            if why in ("git_error", "untrusted", "excluded", "not watched"):
+                issue = issue or why
+        return issue
+
+    def _move(self, session, info, cwd, ts):
+        """Retire the old view and notes before the current event is attributed to its target worktree."""
         self.log.info("session %s moved from %s to %s", session["id"][:8], session["worktree"], info["top"])
         self._ended_hooked(session)
         self.livemap.forget(session["id"])
-        self.record.put_changes(session["id"], {}, [], [])   # its old folder's files are not its own in the new one
         self.deliverer.forget_session(session["id"])
-        self._dirty_repos.add(session["repo_id"])
+        old_repo = session["repo_id"]
+        rid = self.record.repo_id(info["common_dir"])
+        self.record.put_changes(session["id"], {}, [], [])
+        if rid != old_repo:
+            self.record.leave_project(session["id"], ts)
+        self._repo_keys[rid] = repo_key(info["common_dir"])
+        self._dirty_repos.add(old_repo)
         self._push_dirty = True
-        session.update(cwd=cwd or info["top"], worktree=info["top"], branch=info["branch"], base_commit=info["head"],
-                       base_guessed=1)
-        return True
+        session.update(repo_id=rid, cwd=cwd or info["top"], worktree=info["top"], branch=info["branch"],
+                       base_commit=info["head"], base_guessed=1)
 
     def session_for(self, sid, agent, line, event, ts):
         """The session a line belongs to, made from its first line in a watched worktree. A
@@ -1087,35 +1097,43 @@ class Coordinator:
             session = self.sessions.get(sid) or self.record.session(sid)
             if session is not None:
                 self.sessions[sid] = session
-                return session
-        cwd = line.get("cwd") if isinstance(line.get("cwd"), str) else ""
+                return session, None
+        cwd = _absolute(line.get("cwd"))
         passed = self.ignored.setdefault(sid, {})      # folder -> (why, common dir or None)
-        info, unwatched_in = None, None
-        for folder in _folders(line, cwd) or [""]:
-            if folder not in passed:
-                if len(passed) >= MAX_FOLDERS_LOOKED_AT:
-                    continue
-                passed[folder] = self._judge(folder, from_cwd=bool(cwd) and _same(folder, cwd))
-                found = passed[folder]
-                if found[0] is None:
-                    info = found[2]
+        info, fallback, unwatched_in, issue = None, None, None, None
+        workspaces = _workspace_folders(line, cwd)
+        candidates = dict.fromkeys(_tool_folders(line, cwd) + workspaces)
+        for folder in candidates:
+            if folder not in passed or passed[folder][0] in ("git_error", "untrusted"):
+                if folder not in passed and len(passed) >= MAX_FOLDERS_LOOKED_AT:
+                    del passed[next(iter(passed))]
+                passed[folder] = self._judge(folder, from_cwd=folder in workspaces)
+                if passed[folder][0] is not None:
+                    self.log.info("%s session project lookup: %s", agent, passed[folder][0])
+            why, common_dir, found = passed[folder]
+            if found is not None:
+                if not found.get("folder"):
+                    info = found
                     break
-                self.log.info("ignoring a %s session: %s", agent, found[0])
-            why, common_dir = passed[folder][:2]
-            if why == "not watched" and unwatched_in is None:
+                fallback = fallback or found
+            elif why in ("not watched", "excluded") and unwatched_in is None:
                 unwatched_in = (common_dir, folder)
+                issue = why
+            elif why in ("git_error", "untrusted"):
+                issue = why
+        info = info or fallback
         if info is None:
             self._count_unwatched(sid, unwatched_in, ts, ended=event == "SessionEnd")
             if event == "SessionEnd":
                 del self.ignored[sid]
-            return None
+            return None, issue or "no_workspace"
         if info.get("folder"):                         # a folder project: its base is a snapshot taken now
             try:
                 info = dict(info, head=snapshots.take(self.state.root, info["top"]))
             except (snapshots.TooLarge, OSError) as exc:
                 passed[info["top"]] = (f"too large to follow without git ({exc})", None, None)
                 self.log.info("ignoring a %s session: %s", agent, passed[info["top"]][0])
-                return None
+                return None, "snapshot_error"
         del self.ignored[sid]
         self._count_unwatched(sid, None, ts, ended=True)
         fresh = event == "SessionStart" and self.now_ns() - ts < FRESH_START_SECONDS * NS
@@ -1130,7 +1148,7 @@ class Coordinator:
         self.sessions[sid] = session
         self.log.info("session %s (%s) in %s, base %s%s", sid[:8], agent, info["top"], info["head"][:12] or "-",
                       "" if fresh else " (guessed)")
-        return session
+        return session, None
 
     def _judge(self, folder, from_cwd=False):
         """(why a session there is passed over or None, its project's key or None, the
@@ -1140,19 +1158,23 @@ class Coordinator:
             return "not a git worktree", None, None
         try:
             info = gitio.worktree_info(folder)
-        except gitio.UntrustedRepositoryError:
+        except gitio.UntrustedRepositoryError as exc:
+            self.log.warning("Git ownership check at %s: %s", folder, exc)
             return "untrusted", None, None
-        except gitio.GitError:
+        except gitio.GitError as exc:
+            if not (from_cwd and gitio.missing()):
+                self.log.warning("%s", exc)
+                return "git_error", None, None
+            self.log.warning("git is not on the PATH: %s is followed as a folder without git", folder)
             info = None
         if info is None:
             ok = from_cwd and snapshots.can_follow(folder, self.state.root)[0]
             if not ok:
                 return "not a git worktree", None, None
-            if not config.is_watched(self.cfg, folder):
-                return "not watched", folder, None
-            return None, folder, {"top": folder, "common_dir": folder, "branch": "", "head": "", "folder": True}
+            info = {"top": folder, "common_dir": folder, "branch": "", "head": "", "folder": True}
         if not config.is_watched(self.cfg, info["common_dir"]):
-            return "not watched", info["common_dir"], None
+            why = "excluded" if config.is_excluded(self.cfg, info["common_dir"]) else "not watched"
+            return why, info["common_dir"], None
         return None, info["common_dir"], info
 
     def _count_unwatched(self, sid, where, ts, ended=False):
@@ -1347,18 +1369,35 @@ def _size_and_time(path):
     return st.st_size, st.st_mtime_ns
 
 
-def _folders(line, cwd):
-    """The folders a spool line places its session in: its cwd, then the folder of the file it
-    names (an agent started in a parent folder edits files of a repository below it)."""
-    out = [os.path.normpath(cwd)] if cwd and os.path.isabs(cwd) else []
-    path = line.get("file_path")
-    if isinstance(path, str) and path:
-        if not os.path.isabs(path):
-            path = os.path.join(cwd, path) if out else ""
-        folder = os.path.dirname(os.path.normpath(path)) if path else ""
-        if folder and not any(_same(folder, f) for f in out):
-            out.append(folder)
-    return out
+def _absolute(path):
+    return os.path.normpath(path) if isinstance(path, str) and "\0" not in path and os.path.isabs(path) else ""
+
+
+def _workspace_folders(line, cwd):
+    roots = line.get("workspace_paths")
+    roots = roots[:MAX_FOLDERS_LOOKED_AT] if isinstance(roots, list) else []
+    return list(dict.fromkeys(folder for folder in [cwd, *map(_absolute, roots)] if folder))
+
+
+def _tool_folders(line, cwd):
+    tool_cwd = _absolute(line.get("tool_cwd"))
+    paths = line.get("other_files")
+    paths = paths[:MAX_FOLDERS_LOOKED_AT] if isinstance(paths, list) else []
+    folders = []
+    for path in [line.get("file_path"), *paths]:
+        if not isinstance(path, str) or not path:
+            continue
+        folder = os.path.dirname(_absolute(os.path.join(tool_cwd or cwd, path)))
+        while folder and not os.path.isdir(folder):
+            parent = os.path.dirname(folder)
+            if parent == folder:
+                break
+            folder = parent
+        if folder:
+            folders.append(folder)
+    if tool_cwd:
+        folders.append(tool_cwd)
+    return list(dict.fromkeys(folders))
 
 
 def _inside(path, top):

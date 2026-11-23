@@ -142,6 +142,8 @@ def test_two_codex_sessions_in_one_shared_process_each_land_on_their_own(hook_sc
     ("multi_replace_file_content", {"Instruction": SECRET, "TargetFile": "/w/b.py"}, "/w/b.py"),
     ("write_file", {"file_path": "/w/c.py", "content": SECRET}, "/w/c.py"),
     ("edit_file", {"path": "/w/d.py", "old": SECRET, "new": SECRET}, "/w/d.py"),
+    ("write_file", {"Path": "/w/e.py", "Content": SECRET, "Overwrite": True}, "/w/e.py"),
+    ("edit_file", {"Path": "/w/f.py", "Target": SECRET, "Replacement": SECRET}, "/w/f.py"),
 ])
 @pytest.mark.parametrize("args_first", [False, True])
 def test_both_sets_of_antigravity_edit_tools_give_the_file(hook_script, spool, name, args, path, args_first):
@@ -158,7 +160,27 @@ def test_a_tool_that_edits_nothing_gives_no_file(hook_script, spool):
     raw = ag_tool("PostToolUse", "c1", "/w", "run_command", {"CommandLine": 'echo "TargetFile"', "Cwd": "/w"})
     run_hook(hook_script, ["antigravity", "PostToolUse"], raw)
     _, line = one_line(spool)
-    assert line["tool_name"] == "run_command" and "file_path" not in line
+    assert line["tool_name"] == "run_command" and line["tool_cwd"] == "/w" and "file_path" not in line
+
+
+def test_all_antigravity_workspace_roots_are_retained_without_tool_content(hook_script, spool):
+    payload = json.loads(ag("SessionStart", "multi-root", []))
+    payload["workspacePaths"] = ["file:///C:/parent%20folder", {"nested": SECRET}, "/other", "/other"]
+    run_hook(hook_script, ["antigravity", "SessionStart"], json.dumps(payload).encode("utf-8"))
+    _, line = one_line(spool)
+    assert line["cwd"] == "C:/parent folder"
+    assert line["workspace_paths"] == ["C:/parent folder", "/other"]
+    assert SECRET not in json.dumps(line)
+
+
+def test_codex_resolves_patch_paths_in_the_tool_working_directory(hook_script, spool, tmp_path):
+    target = tmp_path / "worktree"
+    raw = codex("PostToolUse", "tool-root", tmp_path, tool_name="apply_patch", tool_cwd=str(target),
+                tool_input={"command": "*** Begin Patch\n*** Update File: a.py\n*** End Patch\n"})
+    run_hook(hook_script, ["codex", "PostToolUse"], raw)
+    _, line = one_line(spool)
+    assert line["cwd"] == str(tmp_path) and line["tool_cwd"] == str(target)
+    assert line["file_path"] == str(target / "a.py")
 
 
 def test_a_windows_file_uri_is_made_a_path():

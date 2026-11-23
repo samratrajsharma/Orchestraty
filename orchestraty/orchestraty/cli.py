@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -46,6 +47,8 @@ def _refuse(command, exc):
 
 def cmd_init(args):
     from orchestraty import config
+    if args.agent == "all":
+        return _init_all(args)
     wrong = _wrong_target(args)
     if wrong:
         return _refuse("init", wrong)
@@ -87,7 +90,7 @@ def cmd_init(args):
         changed, saved = hooks.install(state, path, python, wake, mod)
     except hooks.Refused as exc:
         return _refuse("init", exc)
-    _remember_settings(state, path)
+    _remember_settings(state, path, changed)
     if not changed:
         print(f"Already installed in {path}; nothing changed.")
     else:
@@ -98,13 +101,13 @@ def cmd_init(args):
     return _init_rest(args, state, python)
 
 
-def _remember_settings(state, path):
+def _remember_settings(state, path, changed):
     from orchestraty import config
     cfg = config.load(state)
     if cfg["settings"] != path:
         cfg["settings"] = path
         config.save(state, cfg)
-    config.remember_install(state, "claude", path)
+    config.remember_install(state, "claude", path, changed=changed)
 
 
 def _init_for_plugin(args, state, path, python, wake, current, plugin_id):
@@ -136,7 +139,7 @@ def _init_for_plugin(args, state, path, python, wake, current, plugin_id):
         changed, saved = hooks.install_for_plugin(state, path, python, wake)
     except hooks.Refused as exc:
         return _refuse("init", exc)
-    _remember_settings(state, path)
+    _remember_settings(state, path, changed)
     if not changed:
         print("The plugin's hooks are already on; nothing changed.")
     else:
@@ -147,14 +150,53 @@ def _init_for_plugin(args, state, path, python, wake, current, plugin_id):
 
 
 def _init_rest(args, state, python):
+    if getattr(args, "nested", False):
+        return 0
     _restart_older_coordinator(state)
     _offer_tracking(state, args.yes)
     code = _watch_here(state, os.getcwd(), quiet_outside=True)
     if code == 0 and not args.no_git_hooks:
         _git_chain_here(state, python, args.yes)
     if args.agent == "claude" and not args.project:
-        _offer_other_agents(args)
+        code = max(code, _offer_other_agents(args))
+    _show_connections(state, args.agent)
     return code
+
+
+def _init_all(args):
+    from orchestraty import config, connections
+    from orchestraty.adapters import antigravity, codex
+    if args.project or any(getattr(args, option) for option in _ONLY_FOR):
+        return _refuse("init", "--agent all uses each agent's user config; use --agent NAME to select a custom target")
+    state = State()
+    python = hooks.hook_python() if args.python is None else args.python
+    if args.print:
+        print(json.dumps({"claude": {"hooks": hooks.hook_block(python, state.hook_script, config.load(state)["wake"])},
+                          "codex": codex.hook_block(python, state.hook_script),
+                          "antigravity": antigravity.hook_block(python, state.hook_script)}, indent=2))
+        return 0
+    print("Set up Orchestraty in the user config for Claude Code, Codex, and Antigravity:")
+    print(f"  Claude Code: {_settings_target(args)}\n  Codex: {codex.config_path()}\n"
+          f"  Antigravity: {antigravity.config_path()}")
+    if not confirm("Install all three integrations?", args.yes):
+        print("Nothing changed.")
+        return 1
+    results = [cmd_init(argparse.Namespace(**dict(vars(args), agent=agent, nested=True, yes=True)))
+               for agent in connections.AGENTS]
+    if all(results):
+        _show_connections(state, "all")
+        return max(results)
+    return max(*results, _init_rest(args, state, python))
+
+
+def _show_connections(state, agent):
+    from orchestraty import connections
+    print("\nAgent setup:")
+    for row in connections.summary(state):
+        if agent in ("all", "claude", row["agent"]):
+            print(f"  {row['name']} [{connections.LABELS[row['status']]}] {', '.join(row['paths'])}")
+            command = f" {row['command']}" if row["status"] in ("not_configured", "config_error") else ""
+            print(f"    {row['message']}{command}")
 
 
 def _offer_tracking(state, assume_yes):
@@ -176,9 +218,10 @@ def _agents_here():
     """The other agents found on this computer, by the folders they keep: [(agent, title)]."""
     from orchestraty.adapters import antigravity, codex
     found = []
-    if os.path.isdir(os.path.dirname(codex.config_path())):
+    if os.path.isdir(os.path.dirname(codex.config_path())) or shutil.which("codex"):
         found.append(("codex", "Codex"))
-    if os.path.isdir(os.path.dirname(os.path.dirname(antigravity.config_path()))):
+    if os.path.isdir(os.path.dirname(os.path.dirname(antigravity.config_path()))) or any(
+            shutil.which(name) for name in ("agy", "antigravity")):
         found.append(("antigravity", "Antigravity"))
     return found
 
@@ -187,8 +230,10 @@ def _offer_other_agents(args):
     """Offer to set up each other agent found here that orch init has not set up yet. --yes
     answers only for what orch init itself does: it names them, and changes no other agent's
     files unasked."""
-    from orchestraty import config
-    done = {e.get("agent") for e in config.load(State())["installed"] if isinstance(e, dict)}
+    from orchestraty import connections
+    done = {row["agent"] for row in connections.summary(State())
+            if row["status"] not in ("not_configured", "config_error")}
+    code = 0
     for agent, title in _agents_here():
         if agent in done:
             continue
@@ -201,7 +246,8 @@ def _offer_other_agents(args):
             continue
         nested = argparse.Namespace(**dict(vars(args), agent=agent, project=False, claude_config=None,
                                            codex_home=None, antigravity_config=None, nested=True))
-        _init_agent(nested)
+        code = max(code, _init_agent(nested))
+    return code
 
 
 _ONLY_FOR = {"claude_config": "claude", "codex_home": "codex", "antigravity_config": "antigravity"}
@@ -275,25 +321,18 @@ def _init_agent(args):
     except hooks.Refused as exc:
         return _refuse("init", exc)
     from orchestraty import config
-    config.remember_install(state, args.agent, path)
+    config.remember_install(state, args.agent, path, changed=changed)
     if not changed:
         print(f"Already installed in {path}; nothing changed.")
     else:
         print(f"Installed in {path}." + (f" Backup: {saved}" if saved else ""))
     if args.agent == "codex":
-        print("Now open Codex and run /hooks: review Orchestraty's hooks and trust them. Codex runs none until you do.")
+        print("Review and trust Orchestraty's hooks in Codex desktop's Hooks settings or with /hooks in the CLI.")
     else:
         print("Conversations started from now on are seen.")
     if args.project:
         _offer_exclude(state, path, args.yes)
-    if getattr(args, "nested", False):             # set up from orch init for Claude Code, which did the rest
-        return 0
-    _restart_older_coordinator(state)
-    _offer_tracking(state, args.yes)
-    code = _watch_here(state, os.getcwd(), quiet_outside=True)
-    if code == 0 and not args.no_git_hooks:
-        _git_chain_here(state, python, args.yes)
-    return code
+    return _init_rest(args, state, python)
 
 
 def _offer_exclude(state, path, assume_yes):
@@ -406,6 +445,13 @@ def _watch_here(state, path, quiet_outside=False):
     from orchestraty import config, gitio
     try:
         info = gitio.worktree_info(path)
+    except gitio.GitError as exc:
+        if not gitio.missing():
+            print(f"Not watched: {exc}", file=sys.stderr)
+            return 2
+        print("git is not on the PATH, so this checkout is followed as a folder without git; install git "
+              "(or put it on the PATH) to follow it as a repository.", file=sys.stderr)
+        info, quiet_outside = None, False
     except gitio.UntrustedRepositoryError as exc:
         print(f"Not watched: {exc}", file=sys.stderr)
         return 2
@@ -423,7 +469,7 @@ def _watch_here(state, path, quiet_outside=False):
         print(f"Watching {name}, a folder without git: Orchestraty follows it through its own snapshots, in its "
               "state folder; nothing is written into it." if added else f"Already watching {name}.")
         return 0
-    added = config.watch(state, info["common_dir"])
+    added = config.watch(state, info["common_dir"], former_folder=info["top"])
     name = os.path.basename(info["top"])
     print(f"Watching {name} ({info['common_dir']})." if added else f"Already watching {name}.")
     return 0
@@ -439,8 +485,8 @@ def cmd_unwatch(args):
     path = os.path.abspath(args.path or os.getcwd())
     try:
         info = gitio.worktree_info(path)
-    except gitio.UntrustedRepositoryError:
-        info = None
+    except (gitio.GitError, gitio.UntrustedRepositoryError) as exc:
+        return _refuse("unwatch", exc)
     common_dir = info["common_dir"] if info else path
     if config.unwatch(state, common_dir):
         print(f"No longer watching {common_dir}.")
@@ -527,6 +573,8 @@ def cmd_status(args):
         print(json.dumps(data, indent=2))
     else:
         sys.stdout.write(status.render(data, wake=config.load(state)["wake"], tty=tty))
+        if not any(s["state"] == "live" for repo in data["repositories"] for s in repo["sessions"]):
+            _show_connections(state, "all")
     return 0
 
 
@@ -637,7 +685,7 @@ def _claim_session(state, ref):
     if not ref:
         try:
             info = gitio.worktree_info(cwd)
-        except gitio.UntrustedRepositoryError as exc:
+        except (gitio.GitError, gitio.UntrustedRepositoryError) as exc:
             raise ValueError(str(exc)) from None
         if info is None:
             raise ValueError(f"{cwd} is not inside a git worktree: run it in the session's worktree, or pass --session")
@@ -744,7 +792,7 @@ def cmd_release(args):
     else:
         try:
             info = gitio.worktree_info(os.getcwd())
-        except gitio.UntrustedRepositoryError as exc:
+        except (gitio.GitError, gitio.UntrustedRepositoryError) as exc:
             return _refuse("release", exc)
         if info is None:
             return _refuse("release", f"{os.getcwd()} is not inside a git worktree: release by number (orch claims)")
@@ -940,7 +988,7 @@ def _remote_repo(state, args):
     path = os.path.abspath(getattr(args, "repo", None) or os.getcwd())
     try:
         info = gitio.worktree_info(path)
-    except gitio.UntrustedRepositoryError as exc:
+    except (gitio.GitError, gitio.UntrustedRepositoryError) as exc:
         raise ValueError(str(exc)) from None
     if info is None:
         raise ValueError(f"{path} is not inside a git worktree")
@@ -1307,9 +1355,9 @@ def _restore_agent(args):
     return 0
 
 
-def _add_target_options(parser):
-    parser.add_argument("--agent", choices=["claude", "codex", "antigravity"], default="claude",
-                        help="the agent: claude (Claude Code, the default), codex or antigravity")
+def _add_target_options(parser, all_agents=False):
+    choices = ["claude", "codex", "antigravity"] + (["all"] if all_agents else [])
+    parser.add_argument("--agent", choices=choices, default="claude", help="the agent to configure (default: claude)")
     where = parser.add_mutually_exclusive_group()
     where.add_argument("--claude-config", metavar="DIR",
                        help="a Claude Code config folder (default: CLAUDE_CONFIG_DIR, else ~/.claude)")
@@ -1332,7 +1380,7 @@ def build_parser():
 
     init = commands.add_parser("init", help="install the hooks into an agent (Claude Code unless --agent)",
                                description="Install the hook script and an agent's hook entries.")
-    _add_target_options(init)
+    _add_target_options(init, all_agents=True)
     init.add_argument("--python", metavar="PATH", help="the absolute path of a Python 3.10 or later for the hooks (default: this one's base); "
                                                          "orch init runs it once to check")
     init.add_argument("--print", action="store_true", help="only print the hook entries to add by hand")

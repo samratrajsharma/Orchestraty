@@ -36,8 +36,18 @@ def long_path(path):
         return path
     import ctypes
     buf = ctypes.create_unicode_buffer(32768)
-    n = ctypes.windll.kernel32.GetLongPathNameW(path, buf, len(buf))
-    return buf.value if 0 < n < len(buf) else path
+    # The hook or state folder may have been removed since a backup was written.
+    prefix, suffix = path, []
+    while prefix:
+        n = ctypes.windll.kernel32.GetLongPathNameW(prefix, buf, len(buf))
+        if 0 < n < len(buf):
+            return os.path.join(buf.value, *reversed(suffix))
+        parent, name = os.path.split(prefix)
+        if not name or parent == prefix:
+            break
+        suffix.append(name)
+        prefix = parent
+    return path
 
 
 def _plain(arg):

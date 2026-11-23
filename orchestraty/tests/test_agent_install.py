@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestraty import cli
+from orchestraty import cli, config, connections
 from orchestraty.adapters import antigravity, codex, shell
 from orchestraty.paths import State
 
@@ -32,6 +32,34 @@ def read(path):
 def run_command(command, data, cwd=None):
     """Run a hook's command line through the shell, as the agent does."""
     return subprocess.run(command, shell=True, input=data, capture_output=True, timeout=60, cwd=cwd)
+
+
+def test_init_all_installs_each_integration_and_reports_the_missing_first_events(state, capsys):
+    path = Path(os.environ["CODEX_HOME"]) / "config.toml"
+    path.parent.mkdir()
+    path.write_text(TRUST, encoding="utf-8")
+    args = ["init", "--agent", "all", "--yes", "--no-git-hooks", "--no-mod"]
+    assert cli.main(args) == 0
+    out = capsys.readouterr().out
+    assert out.count("[Waiting for first event]") == 3 and "[Connected]" not in out
+    targets = config.load(state)["installed"]
+    assert {entry["agent"] for entry in targets} == {"claude", "codex", "antigravity"}
+    assert {row["status"] for row in connections.summary(state)} == {"waiting"}
+    assert path.read_text(encoding="utf-8") == TRUST
+    assert cli.main(args) == 0
+    assert config.load(state)["installed"] == targets                 # repeat setup preserves existing receipts
+
+
+def test_init_all_reports_a_bad_config_and_still_installs_the_other_two(state, capsys):
+    home = Path(os.environ["CODEX_HOME"])
+    home.mkdir()
+    invalid = home / "hooks.json"
+    invalid.write_text("invalid", encoding="utf-8")
+    assert cli.main(["init", "--agent", "all", "--yes", "--no-git-hooks", "--no-mod"]) == 2
+    out, err = capsys.readouterr()
+    assert "Codex [Configuration needs attention]" in out and str(invalid) in err
+    assert {e["agent"] for e in config.load(state)["installed"]} == {"claude", "antigravity"}
+    assert invalid.read_text(encoding="utf-8") == "invalid"
 
 
 # --------------------------------------------------------------------------------------- #

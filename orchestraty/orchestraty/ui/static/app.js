@@ -616,9 +616,32 @@ function strengthChip (s) {
   return chip((STRENGTH_WORDS[s] || [s])[0], s, true)
 }
 function noRepos () {
-  return [...unwatchedCards(), empty('Orchestraty isn’t watching a repository yet',
-    'Run orch init in a repository your agents work on: it installs the hooks, after asking, and watches that repository.',
-    command('orch init'))]
+  const all = ui.status && ui.status.tracking && ui.status.tracking.all
+  return [...unwatchedCards(), all
+    ? empty('No projects yet', 'Orchestraty follows every project your agents work in. A project shows here after the first event from an agent working in it.')
+    : empty('No projects yet', 'Run orch init and let it follow every project your agents work in, or run orch watch in a project.', command('orch init')),
+  connectionPanel()]
+}
+// Each agent's hooks: whether they are set up, and whether an event from that agent has reached
+// a project yet. `only` keeps the rows in those states (null when none is).
+const CONNECTION = { not_configured: ['Not set up', ''], waiting: ['Waiting for first event', 'medium'],
+  event_received: ['Connected', 'ok'], event_issue: ['Event needs attention', 'strong'], config_error: ['Configuration needs attention', 'strong'] }
+function connectionPanel (only) {
+  const rows = ((ui.status && !demoOn() && ui.status.connections) || []).filter((row) => !only || only.includes(row.status))
+  if (!rows.length) return null
+  const c = ui.status.coordinator
+  return h('section', { class: 'section', 'aria-labelledby': 'agents-head' },
+    h('div', { class: 'section-head' }, h('h2', { class: 'h2', id: 'agents-head' }, 'Agent connections')),
+    h('div', { class: 'card' }, rows.map((row) => {
+      const [label, cls] = CONNECTION[row.status] || [row.status, '']
+      return h('div', { class: 'setting', 'data-anim': 'agent:' + row.agent },
+        h('div', { class: 'min0' }, h('b', {}, row.name), h('p', { class: 'meta' }, row.message),
+          row.last_event ? h('p', { class: 'meta' }, 'Last event ', since(row.last_event)) : null,
+          (row.paths || []).map((path) => h('p', { class: 'meta mono', title: path }, middle(path, 70))),
+          row.status === 'not_configured' || row.status === 'config_error' ? command(row.command) : null),
+        chip(label, cls, true))
+    })),
+    c && !c.running ? h('p', { class: 'meta' }, 'The background process isn’t running: the next agent event starts it. If an agent’s turn brings no event, run orch doctor.') : null)
 }
 // After an upgrade: this dashboard, or the background process, still runs the earlier version.
 function versionNotices () {
@@ -666,7 +689,7 @@ function homeView () {
   const lead = (live.length ? plural(live.length, 'agent is', 'agents are') + ' working on ' + names + '. '
     : 'No agent is working on ' + names + ' right now. ') +
     (needs.length === 0 ? 'Nothing needs you.' : needs.length === 1 ? 'One thing needs a look.' : needs.length + ' things need a look.')
-  const left = [...unwatchedCards(), h('section', { class: 'section', 'aria-labelledby': 'needs' },
+  const left = [...unwatchedCards(), connectionPanel(['event_issue', 'config_error']), h('section', { class: 'section', 'aria-labelledby': 'needs' },
     h('div', { class: 'section-head' }, h('h2', { class: 'h2', id: 'needs' }, 'Needs you'), needs.length ? chip(String(needs.length), 'strong') : null),
     needs.length ? needs.map(needCard)
       : h('div', { class: 'card calm', 'data-anim': 'calm' }, icon('done'),
@@ -860,10 +883,10 @@ function projectRow (r) {
 // ------------------------------------------------------------------------------- sessions
 function sessionsView () {
   learn(sessionsById())
-  if (!allRepos().length) return [pageHead('Sessions'), noRepos()]
-  const all = repos().flatMap((r) => r.sessions)
   const toggle = h('button', { type: 'button', class: 'btn sm quiet', 'data-key': 'show-all', onclick: () => setShowAll(!ui.showAll) },
     ui.showAll ? 'Hide ended sessions' : 'Show ended sessions')
+  if (!allRepos().length) return [pageHead('Sessions', null, toggle), noRepos()]
+  const all = repos().flatMap((r) => r.sessions)
   return [pageHead('Sessions', 'Every agent working on ' + repos().map((r) => r.name).join(', ') + ', each in its own worktree.', toggle),
     unwatchedCards(),
     all.length ? h('div', { class: 'card rows' }, all.map((s) => h('a', { class: 'row', href: '#/session/' + encodeURIComponent(s.id), 'data-anim': 'srow:' + s.id },
@@ -871,7 +894,8 @@ function sessionsView () {
         h('div', { class: 'min0' }, h('div', { class: 'row-flex' }, h('span', { class: 'title' }, sname(s)),
           h('span', { class: 'meta' }, agentName(s.agent) + (s.branch ? ' · ' + s.branch : ''))), h('div', { class: 'meta' }, doing(s)))),
       h('div', { class: 'side-tags' }, stateChip(s), h('span', { class: 'faint nowrap' }, since(s.last_event)), icon('next')))))
-      : empty('No sessions', 'A session shows here as soon as an agent with the hooks starts, or a worktree of a watched repository changes.')]
+      : [empty('No sessions', 'A session shows here as soon as an agent with the hooks starts in a watched project, or a worktree of a watched repository changes.' +
+        (ui.showAll ? '' : ' Ended sessions are hidden: Show ended sessions lists them.')), connectionPanel()]]
 }
 function sessionView () {
   const d = ui.detail
@@ -1125,7 +1149,7 @@ function mergeView () {
 function settingsView () {
   const cfg = ui.config
   const health = ui.health
-  const out = [pageHead('Settings', 'How Orchestraty behaves on this computer.')]
+  const out = [pageHead('Settings', 'How Orchestraty behaves on this computer.'), connectionPanel()]
   if (!cfg) return out
   const sw = (name, title, text) => {
     const on = !!cfg[name]
